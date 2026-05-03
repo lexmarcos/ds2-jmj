@@ -36,6 +36,17 @@ public:
     // If we should use seperate saves from the retail ones.
     bool EnableSeperateSaveFiles = true;
 
+    // DS2-only diagnostic hook: logs outgoing session-leave protobufs and callstacks.
+    bool DS2TraceLeaveSession = false;
+
+    // DS2-only diagnostic breakpoint probes before leave-session send points.
+    bool DS2TraceStateProbe = false;
+
+    // DS2-only experimental timer leave prevention. Disabled by default.
+    bool DS2PreventPvpTimerLeave = false;
+    double DS2PvpTimerMinSeconds = 700.0;
+    double DS2PvpTimerMaxSeconds = 820.0;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

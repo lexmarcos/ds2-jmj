@@ -41,6 +41,7 @@ public:
 
     const RuntimeConfig& GetConfig()    { return Config; }
     GameType GetGameType()              { return CurrentGameType; }
+    const std::filesystem::path& GetDllPath() const { return DllPath; }
 
     intptr_t GetBaseAddress();
     
