@@ -28,6 +28,11 @@ namespace Loader
         public string ServerGameType        { get; set; }
         public int ServerPort               { get; set; }
         public bool EnableSeperateSaveFiles { get; set; }
+        public bool DS2TraceLeaveSession    { get; set; }
+        public bool DS2TraceStateProbe      { get; set; }
+        public bool DS2PreventPvpTimerLeave { get; set; }
+        public double DS2PvpTimerMinSeconds { get; set; } = 700.0;
+        public double DS2PvpTimerMaxSeconds { get; set; } = 820.0;
 
         public string ToJson()
         {

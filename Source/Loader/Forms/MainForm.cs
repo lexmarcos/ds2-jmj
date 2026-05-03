@@ -19,9 +19,10 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 namespace Loader
@@ -53,12 +54,82 @@ namespace Loader
         public MainForm()
         {
             InitializeComponent();
+            UpdateVersionInfo();
 
             ImportedServerListView.Items.Clear();
             ImportedServerListView.ListViewItemSorter = new ServerListSorter();
 
             MachinePrivateIp = NetUtils.GetMachineIPv4(false);
             MachinePublicIp = NetUtils.GetMachineIPv4(true);
+        }
+
+        private void UpdateVersionInfo()
+        {
+            string LoaderPath = Application.ExecutablePath;
+            string InjectorPath = FindInjectorDllPath();
+
+            string LoaderText = FormatBuildIdentity("Loader", LoaderPath);
+            string InjectorText = InjectorPath != null ? FormatBuildIdentity("Injector", InjectorPath) : "Injector missing";
+
+            VersionInfoLabel.Text = LoaderText + " | " + InjectorText;
+            Text = "Dark Souls - Open Server Loader - " + LoaderText + " | " + InjectorText;
+        }
+
+        private string FindInjectorDllPath()
+        {
+            string DirectoryPath = Path.GetDirectoryName(Application.ExecutablePath);
+            while (!string.IsNullOrEmpty(DirectoryPath))
+            {
+                string InjectorPath = Path.Combine(DirectoryPath, "Injector.dll");
+                if (File.Exists(InjectorPath))
+                {
+                    return InjectorPath;
+                }
+
+                DirectoryPath = Path.GetDirectoryName(DirectoryPath);
+            }
+
+            return null;
+        }
+
+        private string FormatBuildIdentity(string Name, string FilePath)
+        {
+            string Version = GetFileVersionOrTimestamp(FilePath);
+            string Hash = GetShortFileHash(FilePath);
+            return Name + " " + Version + " #" + Hash;
+        }
+
+        private string GetFileVersionOrTimestamp(string FilePath)
+        {
+            try
+            {
+                FileVersionInfo VersionInfo = FileVersionInfo.GetVersionInfo(FilePath);
+                if (!string.IsNullOrWhiteSpace(VersionInfo.FileVersion))
+                {
+                    return VersionInfo.FileVersion;
+                }
+
+                return "file-" + File.GetLastWriteTimeUtc(FilePath).ToString("yyyyMMdd.HHmmss", CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        private string GetShortFileHash(string FilePath)
+        {
+            try
+            {
+                using FileStream Stream = File.OpenRead(FilePath);
+                using SHA256 Sha = SHA256.Create();
+                byte[] Hash = Sha.ComputeHash(Stream);
+                return BitConverter.ToString(Hash, 0, 4).Replace("-", "").ToLowerInvariant();
+            }
+            catch
+            {
+                return "unknown";
+            }
         }
 
         private void SaveConfig()
@@ -148,14 +219,14 @@ namespace Loader
 
         private bool ShouldShowServer(ServerConfig Config)
         {
-            if (Config.ManualImport)
-            {
-                return true;
-            }            
-            
             if (Config.GameType != CurrentGameType.ToString())
             {
                 return false;
+            }
+
+            if (Config.ManualImport)
+            {
+                return true;
             }
 
             string filter = filterBox.Text.ToLower();
@@ -352,6 +423,63 @@ namespace Loader
             if (Dialog.ShowDialog() != DialogResult.OK)
             {
                 return;
+            }
+        }
+
+        private void OnImportServer(object sender, EventArgs e)
+        {
+            using (Forms.ImportServerDialog Dialog = new Forms.ImportServerDialog(CurrentGameType))
+            {
+                if (Dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                ServerConfig ImportedConfig = Dialog.ImportedServer;
+                ServerConfig ExistingConfig = null;
+
+                foreach (ServerConfig Config in ServerList.Servers)
+                {
+                    if (Config.ManualImport &&
+                        string.Equals(Config.Hostname, ImportedConfig.Hostname, StringComparison.OrdinalIgnoreCase) &&
+                        Config.Port == ImportedConfig.Port &&
+                        string.Equals(Config.GameType, ImportedConfig.GameType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ExistingConfig = Config;
+                        break;
+                    }
+                }
+
+                if (ExistingConfig != null)
+                {
+                    ImportedConfig.Id = ExistingConfig.Id;
+                    ServerList.Servers.Remove(ExistingConfig);
+                }
+
+                ServerList.Servers.Insert(0, ImportedConfig);
+
+                SaveConfig();
+                BuildServerList();
+                SelectServerById(ImportedConfig.Id);
+                ValidateUI();
+            }
+        }
+
+        private void SelectServerById(string Id)
+        {
+            ImportedServerListView.SelectedItems.Clear();
+
+            foreach (ListViewItem Item in ImportedServerListView.Items)
+            {
+                ServerConfig Config = Item.Tag as ServerConfig;
+                if (Config != null && Config.Id == Id)
+                {
+                    Item.Selected = true;
+                    Item.Focused = true;
+                    Item.EnsureVisible();
+                    CurrentServerConfig = Config;
+                    break;
+                }
             }
         }
 
@@ -685,6 +813,17 @@ namespace Loader
                 injectConfig.ServerPort = Config.Port;
                 injectConfig.ServerGameType = Config.GameType;
                 injectConfig.EnableSeperateSaveFiles = ProgramSettings.Default.use_seperate_saves;
+                injectConfig.DS2TraceLeaveSession = Config.GameType == GameType.DarkSouls2.ToString();
+                string TraceStateProbeEnv = Environment.GetEnvironmentVariable("DS2_TRACE_STATE_PROBE");
+                injectConfig.DS2TraceStateProbe =
+                    Config.GameType == GameType.DarkSouls2.ToString() &&
+                    (TraceStateProbeEnv == "1" || string.Equals(TraceStateProbeEnv, "true", StringComparison.OrdinalIgnoreCase));
+                string PreventTimerLeaveEnv = Environment.GetEnvironmentVariable("DS2_PREVENT_PVP_TIMER_LEAVE");
+                injectConfig.DS2PreventPvpTimerLeave =
+                    Config.GameType == GameType.DarkSouls2.ToString() &&
+                    (PreventTimerLeaveEnv == "1" || string.Equals(PreventTimerLeaveEnv, "true", StringComparison.OrdinalIgnoreCase));
+                injectConfig.DS2PvpTimerMinSeconds = 700.0;
+                injectConfig.DS2PvpTimerMaxSeconds = 820.0;
 
                 string json = injectConfig.ToJson();
                 File.WriteAllText(InjectorConfigPath, json);
