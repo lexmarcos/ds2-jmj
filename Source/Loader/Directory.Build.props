@@ -1,6 +1,12 @@
-﻿<Project>
+<Project>
   <PropertyGroup>
-    <BaseIntermediateOutputPath>$(SolutionDir)\..\..\Intermediate\$(Platform)_$(Configuration)\</BaseIntermediateOutputPath>
-    <BaseOutputPath>$(SolutionDir)\..\..\Bin\$(Platform)_$(Configuration)\</BaseOutputPath>
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</RepoRoot>
+    <NormalizedConfiguration>$([System.String]::Copy('$(Configuration)').ToLowerInvariant())</NormalizedConfiguration>
+    <NormalizedPlatform Condition="'$(Platform)' == ''">x64</NormalizedPlatform>
+    <NormalizedPlatform Condition="'$(Platform)' != ''">$(Platform)</NormalizedPlatform>
+    <BaseIntermediateOutputPath>$(RepoRoot)\intermediate\loader\$(NormalizedPlatform)_$(Configuration)\</BaseIntermediateOutputPath>
+    <OutputPath>$(RepoRoot)\bin\$(NormalizedPlatform)_$(NormalizedConfiguration)\loader\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 </Project>
