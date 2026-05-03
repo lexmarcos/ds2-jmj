@@ -22,6 +22,7 @@
 
 #include "Config/BuildConfig.h"
 #include "Server/GameService/Utils/DS2_NRSSRSanitizer.h"
+#include "Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/File.h"
@@ -39,6 +40,9 @@ DS2_SignManager::DS2_SignManager(Server* InServerInstance, GameService* InGameSe
 
 void DS2_SignManager::OnLostPlayer(GameClient* Client)
 {
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "SessionCleanup",
+        "cleanup=summon_signs active_sign_count=%u", (uint32_t)Client->ActiveSummonSigns.size());
+
     // Remove all the players signs from the cache.
     for (std::shared_ptr<SummonSign> Sign : Client->ActiveSummonSigns)
     {
@@ -50,6 +54,17 @@ void DS2_SignManager::OnLostPlayer(GameClient* Client)
 void DS2_SignManager::RemoveSignAndNotifyAware(const std::shared_ptr<SummonSign>& Sign)
 {
     DS2_CellAndAreaId LocationId = { Sign->CellId, (DS2_OnlineAreaId)Sign->OnlineAreaId };
+
+    DS2PvpDebug::LogEvent(ServerInstance, nullptr, "SummonSignCleanup",
+        "sign_id=%u sign_type=%s red_soapstone=%u owner_profile_id=%u owner_steam_id_masked=%s request_area_id=%u cell_id=%llu aware_player_count=%u",
+        Sign->SignId,
+        DS2PvpDebug::SignTypeName(Sign->Type),
+        Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+        Sign->PlayerId,
+        DS2PvpDebug::MaskIdentifier(Sign->PlayerSteamId).c_str(),
+        Sign->OnlineAreaId,
+        (unsigned long long)Sign->CellId,
+        (uint32_t)Sign->AwarePlayerIds.size());
 
     LiveCache.Remove(LocationId, Sign->SignId);
 
@@ -155,6 +170,8 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
     DS2_Frpg2RequestMessage::RequestGetSignListResponse Response;
 
     int RemainingSignCount = (int)Request->max_signs();
+    int ResultSignCount = 0;
+    int RedSoapstoneCount = 0;
 
     // Grab as many recent signs as we can from the cache that match our matching criteria.
     for (int i = 0; i < Request->search_areas_size() && RemainingSignCount > 0; i++)
@@ -206,6 +223,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
             // Make sure user is marked as aware of the sign so we can clear up when the sign is removed.
             Sign->AwarePlayerIds.insert(Player.GetPlayerId());
 
+            ResultSignCount++;
+            if (Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone)
+            {
+                RedSoapstoneCount++;
+            }
+
             RemainingSignCount--;
             if (RemainingSignCount <= 0)
             {
@@ -213,6 +236,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
             }
         }
     }
+
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "ListSummonSigns",
+        "request_area_id=%u search_area_count=%d max_signs=%u response_sign_count=%d red_soapstone_count=%d soul_memory=%u name_engraved_ring=%u",
+        Request->online_area_id(),
+        Request->search_areas_size(),
+        Request->max_signs(),
+        ResultSignCount,
+        RedSoapstoneCount,
+        Request->matching_parameter().soul_memory(),
+        Request->matching_parameter().name_engraved_ring());
 
     if (!Client->MessageStream->Send(&Response, &Message))
     {
@@ -258,6 +291,17 @@ MessageHandleResult DS2_SignManager::Handle_RequestCreateSign(GameClient* Client
 
     LiveCache.Add(LocationId, Sign->SignId, Sign);
     Client->ActiveSummonSigns.push_back(Sign);
+
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "CreateSummonSign",
+        "sign_id=%u sign_type=%s red_soapstone=%u request_area_id=%u cell_id=%llu soul_memory=%u name_engraved_ring=%u player_struct_size=%u",
+        Sign->SignId,
+        DS2PvpDebug::SignTypeName(Sign->Type),
+        Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+        Sign->OnlineAreaId,
+        (unsigned long long)Sign->CellId,
+        Request->matching_parameter().soul_memory(),
+        Request->matching_parameter().name_engraved_ring(),
+        (uint32_t)Sign->PlayerStruct.size());
 
     DS2_Frpg2RequestMessage::RequestCreateSignResponse Response;
     Response.set_sign_id(Sign->SignId);
@@ -364,6 +408,13 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
 
     bool bSuccess = true;
 
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonAttempt",
+        "sign_id=%u request_area_id=%lld cell_id=%llu player_struct_size=%u",
+        Request->sign_info().sign_id(),
+        (long long)Request->online_area_id(),
+        (unsigned long long)Request->cell_id(),
+        (uint32_t)Request->player_struct().size());
+
     // Make sure the NRSSR data contained within this message is valid (if the CVE-2022-24126 fix is enabled)
     if (BuildConfig::NRSSR_SANITY_CHECKS)
     {
@@ -419,6 +470,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
         else
         {
             Sign->BeingSummonedByPlayerId = Player.GetPlayerId();
+
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonAccepted",
+                "sign_id=%u sign_type=%s red_soapstone=%u owner_profile_id=%u owner_steam_id_masked=%s request_area_id=%u cell_id=%llu",
+                Sign->SignId,
+                DS2PvpDebug::SignTypeName(Sign->Type),
+                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+                Sign->PlayerId,
+                DS2PvpDebug::MaskIdentifier(Sign->PlayerSteamId).c_str(),
+                Sign->OnlineAreaId,
+                (unsigned long long)Sign->CellId);
         }
     }
 
@@ -434,6 +495,15 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     // If failure then send a reject message.
     if (!bSuccess)
     {
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRejected",
+            "sign_id=%u sign_type=%s red_soapstone=%u error=%d request_area_id=%lld cell_id=%llu",
+            Request->sign_info().sign_id(),
+            Sign ? DS2PvpDebug::SignTypeName(Sign->Type) : "Unknown",
+            Sign && Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+            (int)SummonError,
+            (long long)Request->online_area_id(),
+            (unsigned long long)Request->cell_id());
+
         DS2_Frpg2RequestMessage::PushRequestRejectSign PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectSign);
         PushMessage.set_error(SummonError);
@@ -471,6 +541,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client
     if (!Sign)
     {
         WarningS(Client->GetName().c_str(), "Client attempted to reject summoning for invalid sign (or sign cancelled), %i.", Request->sign_id());
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
+            "sign_id=%lld sign_type=Unknown red_soapstone=0 error=%d request_area_id=%lld cell_id=%llu result=missing_sign",
+            (long long)Request->sign_id(),
+            (int)Request->error(),
+            (long long)Request->online_area_id(),
+            (unsigned long long)Request->cell_id());
         return MessageHandleResult::Handled;
     }
 
@@ -493,10 +569,30 @@ MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client
                 WarningS(Client->GetName().c_str(), "Failed to send PushRequestRejectSign to summoner.");
                 return MessageHandleResult::Error;
             }
+
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
+                "sign_id=%u sign_type=%s red_soapstone=%u error=%d summoner_profile_id=%u summoner_steam_id_masked=%s request_area_id=%u cell_id=%llu",
+                Sign->SignId,
+                DS2PvpDebug::SignTypeName(Sign->Type),
+                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+                (int)Request->error(),
+                OtherClient->GetPlayerState().GetPlayerId(),
+                DS2PvpDebug::MaskIdentifier(OtherClient->GetPlayerState().GetSteamId()).c_str(),
+                Sign->OnlineAreaId,
+                (unsigned long long)Sign->CellId);
         }
         else
         {
             WarningS(Client->GetName().c_str(), "PlayerId summoning sign no longer exists, nothing to reject.");
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
+                "sign_id=%u sign_type=%s red_soapstone=%u error=%d summoner_profile_id=%u request_area_id=%u cell_id=%llu result=missing_summoner",
+                Sign->SignId,
+                DS2PvpDebug::SignTypeName(Sign->Type),
+                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
+                (int)Request->error(),
+                Sign->BeingSummonedByPlayerId,
+                Sign->OnlineAreaId,
+                (unsigned long long)Sign->CellId);
         }        
 
         Sign->BeingSummonedByPlayerId = 0;

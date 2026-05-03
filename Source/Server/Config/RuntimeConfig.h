@@ -311,6 +311,10 @@ public:
     // that is supplied by the client.
     bool IgnoreInvasionAreaFilter = false;
 
+    // If enabled DS2 PvP flow events are logged with enough context to debug
+    // summon, invasion, quick match and disconnect/session lifecycle issues.
+    bool DS2PvpDebugLogging = false;
+
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
     float PlayerStatusUploadInterval = 15.0f;

@@ -19,6 +19,8 @@
 #include "Config/RuntimeConfig.h"
 #include "Server/Server.h"
 
+#include "Server/GameService/Utils/DS2_PvpDebug.h"
+
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DiffTracker.h"
@@ -133,6 +135,16 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
         return CanMatchWith(Request->matching_parameter(), OtherClient, Request->type()); 
     });
 
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "ListInvasionTargets",
+        "invasion_type=%s request_area_id=%u cell_id=%u max_targets=%u matched_target_count=%u soul_memory=%u ignore_area_filter=%u",
+        DS2PvpDebug::BreakInTypeName(Request->type()),
+        Request->online_area_id(),
+        Request->cell_id(),
+        Request->max_targets(),
+        (uint32_t)PotentialTargets.size(),
+        Request->matching_parameter().soul_memory(),
+        Config.IgnoreInvasionAreaFilter ? 1 : 0);
+
     DS2_Frpg2RequestMessage::RequestGetBreakInTargetListResponse Response;
     Response.set_cell_id(Request->cell_id());
     Response.set_online_area_id(Request->online_area_id());
@@ -165,6 +177,13 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
 
     bool bSuccess = true;
 
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRequest",
+        "invasion_type=%s target_profile_id=%u request_area_id=%u cell_id=%u",
+        DS2PvpDebug::BreakInTypeName(Request->type()),
+        Request->player_id(),
+        Request->online_area_id(),
+        Request->cell_id());
+
     // Check client still exists.
     std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());
     if (!TargetClient)
@@ -189,6 +208,18 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
             WarningS(Client->GetName().c_str(), "Failed to send PushRequestBreakInTarget to target of invasion.");
             bSuccess = false;
         }
+        else
+        {
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRequestForwarded",
+                "invasion_type=%s target_profile_id=%u target_steam_id_masked=%s target_character_id=%d target_area_id=%u request_area_id=%u cell_id=%u",
+                DS2PvpDebug::BreakInTypeName(Request->type()),
+                TargetClient->GetPlayerState().GetPlayerId(),
+                DS2PvpDebug::MaskIdentifier(TargetClient->GetPlayerState().GetSteamId()).c_str(),
+                TargetClient->GetPlayerState().GetCharacterId(),
+                TargetClient->GetPlayerState().GetCurrentAreaId(),
+                Request->online_area_id(),
+                Request->cell_id());
+        }
 
         std::string TypeStatisticKey = StringFormat("BreakIn/TotalInvasionsRequested");
         Database.AddGlobalStatistic(TypeStatisticKey, 1);
@@ -207,6 +238,14 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
     // Otherwise send rejection to client.
     if (!bSuccess)
     {
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejected",
+            "invasion_type=%s target_profile_id=%u target_found=%u request_area_id=%u cell_id=%u",
+            DS2PvpDebug::BreakInTypeName(Request->type()),
+            Request->player_id(),
+            TargetClient ? 1 : 0,
+            Request->online_area_id(),
+            Request->cell_id());
+
         DS2_Frpg2RequestMessage::PushRequestRejectBreakInTarget PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectBreakInTarget);
         PushMessage.set_player_id(Player.GetPlayerId());
@@ -240,6 +279,12 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameCl
     if (!InvaderClient)
     {
         WarningS(Client->GetName().c_str(), "Client rejected breakin from unknown (or disconnected) client %i.", Request->player_id());
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejectRequest",
+            "invader_profile_id=%lld result=missing_invader request_area_id=%lld cell_id=%lld reason=%lld",
+            (long long)Request->player_id(),
+            (long long)Request->online_area_id(),
+            (long long)Request->cell_id(),
+            (long long)Request->unknown_2());
         return MessageHandleResult::Handled;
     }
 
@@ -254,6 +299,17 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameCl
     if (!InvaderClient->MessageStream->Send(&PushMessage))
     {
         WarningS(Client->GetName().c_str(), "Failed to send PushRequestRejectBreakInTarget to invader client %s.", InvaderClient->GetName().c_str());
+    }
+    else
+    {
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejectRequest",
+            "invader_profile_id=%u invader_steam_id_masked=%s invader_character_id=%d request_area_id=%lld cell_id=%lld reason=%lld",
+            InvaderClient->GetPlayerState().GetPlayerId(),
+            DS2PvpDebug::MaskIdentifier(InvaderClient->GetPlayerState().GetSteamId()).c_str(),
+            InvaderClient->GetPlayerState().GetCharacterId(),
+            (long long)Request->online_area_id(),
+            (long long)Request->cell_id(),
+            (long long)Request->unknown_2());
     }
 
     // Empty response, not sure what purpose this serves really other than saying message-recieved. Client

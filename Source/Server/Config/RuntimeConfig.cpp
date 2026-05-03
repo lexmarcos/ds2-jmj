@@ -320,6 +320,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(DisableInvasionAutoSummon);
     SERIALIZE_VAR(DisableCoopAutoSummon);
     SERIALIZE_VAR(IgnoreInvasionAreaFilter);
+    SERIALIZE_VAR(DS2PvpDebugLogging);
     SERIALIZE_VAR(PlayerStatusUploadInterval);
     SERIALIZE_VAR(PlayerCharacterUpdateSendDelay);
     SERIALIZE_VAR(PlayerStatusUploadSendDelay);
