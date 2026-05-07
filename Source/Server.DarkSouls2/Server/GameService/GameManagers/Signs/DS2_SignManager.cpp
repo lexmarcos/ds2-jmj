@@ -626,6 +626,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
     int MaxAreaPopulation = 1;
 
     int SoulMemory = Client->GetPlayerState().GetSoulMemory();
+    DS2_OnlineAreaId CurrentArea = Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentArea();
 
     for (std::shared_ptr<GameClient>& OtherClient : GameServiceInstance->GetClients())
     {
@@ -656,6 +657,17 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
         }
     }
 
+    bool IncludedCurrentArea = false;
+    if (Config.DS2IncludeCurrentAreaInRightMatchingArea && CurrentArea != DS2_OnlineAreaId::None)
+    {
+        auto [Iter, Inserted] = PotentialAreas.emplace(CurrentArea, 1);
+        if (!Inserted && Iter->second < 1)
+        {
+            Iter->second = 1;
+        }
+        IncludedCurrentArea = Inserted;
+    }
+
     // Normalize the values to the 0-5 range the client expects and return them.
     for (auto Pair : PotentialAreas)
     {
@@ -663,6 +675,14 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
         Info.set_online_area_id((uint32_t)Pair.first);
         Info.set_population((int)Pair.second);
     }
+
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "RightMatchingArea",
+        "current_area=%u include_current_area=%u injected_current_area=%u response_area_count=%d soul_memory=%d",
+        (uint32_t)CurrentArea,
+        Config.DS2IncludeCurrentAreaInRightMatchingArea ? 1 : 0,
+        IncludedCurrentArea ? 1 : 0,
+        Response.area_info_size(),
+        SoulMemory);
 
     if (!Client->MessageStream->Send(&Response, &Message))
     {
