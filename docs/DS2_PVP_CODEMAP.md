@@ -1,526 +1,226 @@
 # DS2 PvP Codemap
 
-Analise estatica do clone local `ds2-jmj`, feita para orientar um MVP privado de Dark Souls II: Scholar of the First Sin usando DSOS como base.
+This document maps the project areas involved in Dark Souls II PvP behavior and records the current understanding of summon signs, invasions, sessions, and the phantom timer.
 
-Escopo aplicado:
+## Scope
 
-- Nao implementar patch neste passo.
-- Nao adicionar codigo para servidores oficiais.
-- Nao usar offsets magicos.
-- Nao modificar saves retail.
-- Manter o objetivo de servidor privado, sem matchmaking publico, sem Steam emulator e sem mistura intencional de jogadores vanilla com modded.
+This codemap is for the private DS2 server and injector workflow.
 
-## Estado local observado
+Out of scope:
 
-O worktree ja tinha alteracoes locais antes deste relatorio, principalmente na build/layout e no Loader:
+- official FromSoftware servers
+- retail save modifications
+- unstable magic-offset patches without validation
+- bypassing the private server architecture
 
-- `Source/CMakeLists.txt`
-- `Source/Injector/CMakeLists.txt`
-- `Source/Loader/CMakeLists.txt`
-- `Source/Loader/Directory.Build.props`
-- `Source/Loader/Forms/MainForm.Designer.cs`
-- `Source/Loader/Forms/MainForm.cs`
-- `Source/Loader/Loader.csproj`
-- `Source/Server/CMakeLists.txt`
-- `Source/ThirdParty/steam/CMakeLists.txt`
-- `Tools/generate_package_windows.bat`
-- `Source/Loader/Forms/ImportServerDialog.Designer.cs`
-- `Source/Loader/Forms/ImportServerDialog.cs`
-- `global.json`
+## Build overview
 
-Este documento e a unica escrita feita por esta etapa.
+The project uses the generated Visual Studio 2022 build tree.
 
-## Como compilar
+Common generation path:
 
-O README indica Visual Studio 2022, C++17, CMake e os scripts em `Tools/`. O CMake raiz inclui `Source/`, e `Tools/generate_vs2022.bat` gera a solucao em `intermediate/vs2022`.
-
-Comandos exatos, a partir do repo:
-
-```powershell
-cd C:\Users\suel\projects\ds2-jmj
-.\Tools\generate_vs2022.bat
-.\Tools\Build\cmake\windows\bin\cmake.exe --build .\intermediate\vs2022 --config Release --target ALL_BUILD
+```bat
+Tools\generate_vs2022.bat
 ```
 
-Para targets separados:
+Common build targets:
 
-```powershell
-cd C:\Users\suel\projects\ds2-jmj
-.\Tools\generate_vs2022.bat
-.\Tools\Build\cmake\windows\bin\cmake.exe --build .\intermediate\vs2022 --config Release --target Server
-.\Tools\Build\cmake\windows\bin\cmake.exe --build .\intermediate\vs2022 --config Release --target Loader
+```bat
+cmake --build intermediate\vs2022 --config Debug --target Injector
+cmake --build intermediate\vs2022 --config Release --target Injector
+cmake --build intermediate\vs2022 --config Debug --target Loader
+cmake --build intermediate\vs2022 --config Release --target Loader
 ```
 
-Prerequisitos observados no estado atual:
+Expected runtime output directories include:
 
-- Visual Studio 2022 com toolchain C++.
-- .NET SDK `10.0.100` ou compativel, por causa de `global.json` e `Source/Loader/Loader.csproj`.
-- O Loader usa Windows Forms e `net10.0-windows`.
-- O projeto usa o CMake vendorizado em `Tools/Build/cmake/windows/bin/cmake.exe`.
+- `bin\x64_debug\loader`
+- `bin\x64_release\loader`
 
-Saidas esperadas no estado atual do checkout:
+## Repository structure
 
-- `bin\x64_release\server\Server.exe`
-- `bin\x64_release\server\WebUI\...`
-- `bin\x64_release\loader\Loader.exe`
-- `bin\x64_release\loader\Injector.dll`
-- `bin\x64_release\loader\Injector.config`
+Important project areas:
 
-Scripts relevantes:
+- `Source/Server`: shared server infrastructure.
+- `Source/Server.DarkSouls2`: DS2-specific server logic.
+- `Source/Injector`: injected client-side hooks.
+- `Source/Loader`: loader and generated config.
+- `Source/Shared`: shared utilities and protocol helpers.
+- `Source/MasterServer`: master server entry points.
+- `Protobuf`: protocol definitions and generated protobuf code.
+- `Tools`: local utility scripts and build helpers.
+- `docs`: project documentation.
 
-- `Tools/generate_vs2022.bat`: gera projeto Visual Studio 2022.
-- `Tools/generate_protobufs.bat`: regenera protobuf C++ para DS2, DS3 e Shared.
-- `Tools/generate_package_windows.bat`: empacota `server` e `loader` a partir de `bin\x64_release`.
+## DS2 game selection
 
-## Mapa de estrutura
+The loader and injector select DS2-specific logic based on the detected game.
 
-### `Source/Server`
+DS2-specific hooks and config should remain gated to Dark Souls II so they do not affect other supported games.
 
-Servidor principal e servicos comuns:
+## Summon signs
 
-- `Entry.cpp`: entrada do processo.
-- `Config/RuntimeConfig.h` e `Config/RuntimeConfig.cpp`: config JSON, defaults e parametros de matching.
-- `Config/BuildConfig.h`: constantes de build/runtime como app versions, timeouts e flags.
-- `Server/Server.cpp`: inicializa config, database, Steam Game Server API, game implementation DS2/DS3, WebUI, login/auth/game services e advertisement.
-- `Server/LoginService/*`: direciona cliente para auth service.
-- `Server/AuthService/*`: autentica versao/app, Steam ticket, chave CWC e entrega token do game service.
-- `Server/GameService/*`: aceita conexoes do jogo, cria `GameClient`, registra managers e despacha mensagens.
-- `Server/Streams/*`: framing FRPG2/reliable UDP, fragments, heartbeat e serializacao de protobufs.
-- `Server/Database/*`: persistencia de player, character, stats, messages e records.
-- `Server/WebUIService/*`: WebUI e endpoints administrativos.
+Relevant systems:
 
-### `Source/Server.DarkSouls2`
+- `DS2_SignManager`
+- Red Soapstone matching parameters
+- White Soapstone matching parameters
+- Dragon Soapstone matching parameters
 
-Implementacao especifica DS2:
+Important Red Soapstone path:
 
-- `Server/DS2_Game.cpp`: registra todos os game managers DS2.
-- `Server/GameService/DS2_PlayerState.h`: estado por player DS2, incluindo `CurrentArea`, `CurrentOnlineActivityArea`, `VisitorPool`, `PlayerStatus` e `GetSoulMemory()`.
-- `Server/GameService/GameManagers/Boot`: login inicial e push de upload config.
-- `Server/GameService/GameManagers/PlayerData`: profile/session state enviado pelo jogo.
-- `Server/GameService/GameManagers/Signs`: summon signs e soapstones.
-- `Server/GameService/GameManagers/BreakIn`: invasoes por orbs.
-- `Server/GameService/GameManagers/Visitor`: auto-summon / covenant visits.
-- `Server/GameService/GameManagers/QuickMatch`: arena/quick match.
-- `Server/GameService/GameManagers/Logging`: notificacoes de sessao, mortes e eventos.
-- `Server/GameService/GameManagers/Misc`: `RequestSendMessageToPlayers`, total deaths e validacoes.
-- `Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc`: mapa de message ids DS2 para tipos protobuf.
-- `Protobuf/Generated`: codigo gerado. Nao editar manualmente.
+- sign creation request
+- sign list request
+- server-side matching
+- response sign count
+- join session request
 
-### `Source/Injector`
+Soul Memory filtering is enforced in the sign manager matching path unless disabled by config.
 
-DLL injetada no processo do jogo:
+## Invasions and break-in
 
-- `Injector/Injector.cpp`: carrega `Injector.config`, detecta `DarkSoulsII.exe` ou `DarkSoulsIII.exe`, instala hooks.
-- `Config/RuntimeConfig.h/.cpp`: config consumida pela DLL, incluindo `ServerPublicKey`.
-- `Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.cpp`: patch de hostname e public key para DS2.
-- `Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp`: hook de logging/decoding de protobufs para investigacao.
-- `Hooks/Shared/ReplaceServerPortHook.cpp`: patch de porta por game type.
-- `Hooks/Shared/ChangeSaveGameFilenameHook.cpp`: muda nome do save usado pelo DSOS.
+Relevant system:
 
-### `Source/Loader`
+- `DS2_BreakInManager`
 
-WinForms launcher:
-
-- `Forms/MainForm.cs`: lista servidores, detecta exe, seleciona DS2/DS3, escreve `Injector.config`, injeta `Injector.dll` ou patcha memoria conforme config.
-- `Forms/ImportServerDialog.cs`: import manual de servidor no estado atual do checkout; normaliza public key com `\n`.
-- `Config/ServerConfig.cs`: modelo de servidor exibido/importado.
-- `Config/InjectionConfig.cs`: modelo escrito para `Injector.config`.
-- `Config/BuildConfig.cs`: versoes suportadas dos EXEs, flags de injector e dados de patch.
-- `Api/MasterServerApi.cs`: chamadas ao master server para listar servidores e buscar public key.
-- `Utils/PatchingUtils.cs`: payload criptografado com hostname/public key para caminhos que nao usam injector.
-
-### `Source/Shared`
-
-Tipos e utilitarios compartilhados:
-
-- `Game/GameType.h` e `Game/GameType.cpp`: enum `GameType` e parser textual.
-- `Crypto/*`: RSA, CWC, TEA, hash.
-- `Net/*`: sockets, HTTP, conexoes.
-- `Platform/*`: filesystem/process/threading.
-- `Utils/*`: logging, JSON, random, strings, time.
+This handles invasion-style matchmaking and has separate matching parameters from soapstone signs.
 
-### `Source/MasterServer`
+Do not assume that changing Red Soapstone matching also changes invasions.
 
-Master server NodeJS:
+## Visitor and covenant flows
 
-- `src/index.js`: app.
-- `src/routes/api/v1/servers.js`: register/list/get public key.
-- Usado quando `Advertise=true`; para MVP privado, `Advertise=false` evita depender dele.
+Relevant system:
 
-### `Protobuf`
+- `DS2_VisitorManager`
 
-Contratos protobuf originais:
+This path covers visitor and covenant-style auto-summon behavior.
 
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto`: mensagens DS2 de login, status, summon, invasion, visitor, quick match, logging.
-- `Protobuf/DarkSouls2/DS2_Frpg2PlayerData.proto`: dados de player/status DS2, incluindo `phantom_leave_at` e `soul_memory`.
-- `Protobuf/DarkSouls3/*`: DS3.
-- `Protobuf/Shared/*`: mensagens compartilhadas.
-
-### `Tools`
-
-- `generate_vs2022.bat`: geracao CMake/VS.
-- `generate_protobufs.bat`: protoc para DS2/DS3/shared.
-- `generate_package_windows.bat`: pacote final Windows.
-- `Build/build/*.cmake`: output dirs, flags C++ e configuracao VS.
-- `Utilities/*`: scripts auxiliares de protobuf/Cheat Engine/logging.
-
-## Pontos Dark Souls 2
-
-Selecao de jogo:
-
-- `Source/Shared/Game/GameType.h:16`: `GameType::DarkSouls2`.
-- `Source/Shared/Game/GameType.h:24`: string `"DarkSouls2"`.
-- `Source/Shared/Game/GameType.cpp:15`: `ParseGameType`.
-- `Source/Server/Server/Server.cpp:125`: parse de `Config.GameType`.
-- `Source/Server/Server/Server.cpp:153`: cria `DS2_Game`.
-- `Source/Injector/Injector/Injector.cpp:113`: detecta modulo `DarkSoulsII.exe`.
-- `Source/Loader/Forms/MainForm.cs:32`: enum WinForms inclui `DarkSouls2`.
-- `Source/Loader/Forms/MainForm.cs:278`: caminho Steam previsto para `Dark Souls II Scholar of the First Sin`.
-
-SOTFS:
-
-- `README.md:9`: DSOS declara suporte a Dark Souls 2 SOTFS e 3.
-- `README.md:41`: tabela de features DS2 SOTFS.
-- `Source/Loader/Forms/MainForm.cs:278`: nome Steam `Dark Souls II Scholar of the First Sin`.
-- `Source/Loader/Config/BuildConfig.cs:98` e `:111`: versoes DS2 Steam suportadas.
-
-Soapstones e summon:
-
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:576`: `SignType_WhiteSoapstone`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:577`: `SignType_SmallWhiteSoapstone`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:578`: `SignType_RedSoapstone`.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp:116`: matching por tipo de sign.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp:150`: lista signs.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp:226`: cria sign.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp:358`: request para summonar sign.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp:463`: rejeicao de summon.
-
-Invasion / BreakIn:
-
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:694`: enum `BreakInType`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:695`: `BreakInType_RedEyeOrb`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:696`: `BreakInType_BlueEyeOrb`.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/BreakIn/DS2_BreakInManager.cpp:54`: matching de invasion target.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/BreakIn/DS2_BreakInManager.cpp:95`: lista targets de invasao.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/BreakIn/DS2_BreakInManager.cpp:159`: request de invasao.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/BreakIn/DS2_BreakInManager.cpp:232`: rejeicao de invasao.
-
-Visitor / auto-summon:
-
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:804`: enum `VisitorType`.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Visitor/DS2_VisitorManager.cpp:51`: matching de visitor.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Visitor/DS2_VisitorManager.cpp:89`: lista visitors.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Visitor/DS2_VisitorManager.cpp:130`: request visit.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Visitor/DS2_VisitorManager.cpp:242`: rejeicao visit.
-
-QuickMatch / arena:
-
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:987`: enum `QuickMatchGameMode`.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/QuickMatch/DS2_QuickMatchManager.cpp:86`: matching de arena.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/QuickMatch/DS2_QuickMatchManager.cpp:150`: busca matches.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/QuickMatch/DS2_QuickMatchManager.cpp:185`: registra match.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/QuickMatch/DS2_QuickMatchManager.cpp:277`: join quick match.
-- `Source/Server.DarkSouls2/Server/GameService/GameManagers/QuickMatch/DS2_QuickMatchManager.cpp:344`: reject quick match.
-
-Soul Memory e MatchingParameters:
-
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:451`: `MatchingParameter`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:466`: `soul_memory`.
-- `Protobuf/DarkSouls2/DS2_Frpg2PlayerData.proto:143`: `PlayerStatus.soul_memory`.
-- `Source/Server.DarkSouls2/Server/GameService/DS2_PlayerState.h`: `GetSoulMemory()`.
-- `Source/Server/Config/RuntimeConfig.h:59`: `RuntimeConfigSoulMemoryMatchingParameters`.
-- `Source/Server/Config/RuntimeConfig.cpp:185`: calcula tier de soul memory.
-- `Source/Server/Config/RuntimeConfig.cpp:203`: valida match por tier.
-- `Source/Server/Config/RuntimeConfig.h:398` ate `:480`: parametros DS2 por modo.
-
-## RuntimeConfig
-
-Arquivos:
-
-- `Source/Server/Config/RuntimeConfig.h`
-- `Source/Server/Config/RuntimeConfig.cpp`
-
-Serializacao JSON:
-
-- `RuntimeConfig::Save`: `Source/Server/Config/RuntimeConfig.cpp:15`.
-- `RuntimeConfig::Load`: `Source/Server/Config/RuntimeConfig.cpp:29`.
-- `RuntimeConfig::Serialize`: `Source/Server/Config/RuntimeConfig.cpp:268`.
-- Macros `SERIALIZE_VAR` e `SERIALIZE_STRUCT_VAR` controlam defaults e leitura/escrita.
-
-Defaults e campos globais relevantes:
-
-- `GameType = "DarkSouls3"` em `RuntimeConfig.h:139`.
-- `ServerHostname` em `RuntimeConfig.h:152`.
-- `MasterServerIp` e `MasterServerPort` em `RuntimeConfig.h:160` e `:163`.
-- `Advertise = true` em `RuntimeConfig.h:170`.
-- `AdvertiseHearbeatTime = 30.0f` em `RuntimeConfig.h:174`.
-- `Password` em `RuntimeConfig.h:183`.
-- `ModsWhitelist`, `ModsBlacklist`, `ModsRequiredList` em `RuntimeConfig.h:187`, `:191`, `:195`.
-- `WebUIServerPort`, `WebUIServerUsername`, `WebUIServerPassword` em `RuntimeConfig.h:207`, `:213`, `:216`.
-- `DisableInvasions`, `DisableCoop`, `DisableInvasionAutoSummon`, `DisableCoopAutoSummon` em `RuntimeConfig.h:290`, `:293`, `:305`, `:308`.
-- `PlayerStatusUploadInterval`, `PlayerStatusUploadSendDelay` em `RuntimeConfig.h:316`, `:322`.
-
-Parametros DS2 especificos:
-
-- `DS2_WhiteSoapstoneMatchingParameters`
-- `DS2_SmallWhiteSoapstoneMatchingParameters`
-- `DS2_RedSoapstoneMatchingParameters`
-- `DS2_MirrorKnightMatchingParameters`
-- `DS2_DragonEyeMatchingParameters`
-- `DS2_RedEyeOrbMatchingParameters`
-- `DS2_BlueEyeOrbMatchingParameters`
-- `DS2_BellKeeperMatchingParameters`
-- `DS2_RatMatchingParameters`
-- `DS2_BlueSentinelMatchingParameters`
-- `DS2_ArenaMatchingParameters`
-- `DS2_MatchingAreaMatchingParameters`
-
-Esses campos sao serializados em `RuntimeConfig.cpp:333` ate `:344`.
-
-Nao encontrei campo de config com semantica clara de duracao de phantom, PvP session timeout ou red phantom lifetime. Os timeouts encontrados sao de conexao/autenticacao/processo, nao de duracao de phantom.
-
-## Servicos e handlers de rede
-
-### Login/Auth/Game services
-
-Fluxo comum:
-
-1. Loader inicia o jogo com `Injector.dll` e `Injector.config`.
-2. Injector troca hostname, porta e public key usados pelo jogo.
-3. O jogo conecta no `LoginService`.
-4. `LoginService` devolve endereco do `AuthService`.
-5. `AuthService` valida versao/app, Steam ticket e gera token.
-6. `GameService` aceita conexao autenticada.
-7. `GameClient::HandleMessage` despacha cada protobuf para os managers DS2 registrados por `DS2_Game`.
-
-Arquivos e pontos:
-
-- `Source/Server/Server/LoginService/LoginClient.cpp:36`: timeout do login client.
-- `Source/Server/Server/AuthService/AuthClient.cpp:44`: poll/auth timeout.
-- `Source/Server/Server/GameService/GameService.cpp:42`: init e registro de managers.
-- `Source/Server/Server/GameService/GameService.cpp:98`: poll de managers e clients.
-- `Source/Server/Server/GameService/GameService.cpp:226`: cria auth token.
-- `Source/Server/Server/GameService/GameService.cpp:237`: refresh auth token.
-- `Source/Server/Server/GameService/GameClient.cpp:41`: poll do cliente de jogo.
-- `Source/Server/Server/GameService/GameClient.cpp:95`: `CLIENT_TIMEOUT`.
-- `Source/Server/Server/GameService/GameClient.cpp:107`: dispatch para managers.
-- `Source/Server/Config/BuildConfig.h:71`: `CLIENT_TIMEOUT = 120.0`.
-- `Source/Server/Config/BuildConfig.h:74`: `AUTH_TICKET_TIMEOUT = 30.0`.
-
-### Heartbeat
-
-- Reliable UDP heartbeat: `Source/Server/Server/Streams/Frpg2ReliableUdpPacketStream.h:59`, `Source/Server/Server/Streams/Frpg2ReliableUdpPacketStream.cpp:781`, `:807`.
-- Master server heartbeat/ad: `Source/Server/Server/Server.cpp:416` e `:446`, usando `AdvertiseHearbeatTime`.
-- Keepalive de atividade do servidor local: `Source/Server/Server/Server.cpp:510` ate `:530`.
-- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:1142` tem `ServerPing`, mas nao encontrei handler DS2 mapeado para isso em `DS2_Frpg2ReliableUdpMessageTypes.inc`.
-
-### Profile/session state
-
-- `DS2_BootManager::Handle_RequestWaitForUserLogin`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Boot/DS2_BootManager.cpp:46`.
-- `PlayerInfoUploadConfigPushMessage`: configurado pelo Boot manager, com delays vindos do RuntimeConfig.
-- `DS2_PlayerDataManager::Handle_RequestUpdatePlayerStatus`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/PlayerData/DS2_PlayerDataManager.cpp:125`.
-- `RequestUpdatePlayerStatus`: `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:132`.
-- `PlayerStatus.phantom_leave_at`: `Protobuf/DarkSouls2/DS2_Frpg2PlayerData.proto:132`.
-- `PlayerStatus.soul_memory`: `Protobuf/DarkSouls2/DS2_Frpg2PlayerData.proto:143`.
-
-`DS2_PlayerDataManager` guarda status enviado pelo cliente e deriva area atual, online activity area, invadable state, soul level, soul memory e visitor pool. Isso e dado de estado para matching, nao parece controlar a duracao da sessao multiplayer.
-
-### Summon sign
-
-- Mapeamento de mensagens: `Source/Server.DarkSouls2/Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc:62` ate `:73`.
-- `DS2_SignManager::Handle_RequestGetSignList`: filtra signs por area e matching.
-- `DS2_SignManager::Handle_RequestCreateSign`: cria cache de sign.
-- `DS2_SignManager::Handle_RequestSummonSign`: envia `PushRequestSummonSign` ao dono do sign e marca `BeingSummonedByPlayerId`.
-- `DS2_SignManager::Handle_RequestRejectSign`: notifica rejeicao e libera estado.
-- `DS2_SignManager::RemoveSignAndNotifyAware`: remove sign e notifica clientes que estavam aware.
-
-### Invasion request
-
-- Mapeamento de mensagens: `Source/Server.DarkSouls2/Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc:123` ate `:131`.
-- `DS2_BreakInManager::Handle_RequestGetBreakInTargetList`: lista targets.
-- `DS2_BreakInManager::CanMatchWith`: aplica `DisableInvasions`, `IsInvadable`, sinner points para BlueEyeOrb e Soul Memory matching.
-- `DS2_BreakInManager::Handle_RequestBreakInTarget`: envia `PushRequestBreakInTarget` ao host.
-- `DS2_BreakInManager::Handle_RequestRejectBreakInTarget`: repassa rejeicao ao invader.
-
-### Visitor / covenant request
-
-- Mapeamento de mensagens: `Source/Server.DarkSouls2/Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc:136` ate `:142`.
-- `DS2_VisitorManager::CanMatchWith`: usa `DisableInvasionAutoSummon`, `DisableCoopAutoSummon`, visitor pool e Soul Memory matching.
-- `DS2_VisitorManager::Handle_RequestVisit`: envia `PushRequestVisit`.
-- `DS2_VisitorManager::Handle_RequestRejectVisit`: repassa rejeicao.
-
-### Quick match / arena
-
-- Mapeamento de mensagens: `Source/Server.DarkSouls2/Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc:163` ate `:173`.
-- `DS2_QuickMatchManager::Handle_RequestRegisterQuickMatch`: host registra arena.
-- `DS2_QuickMatchManager::Handle_RequestSearchQuickMatch`: cliente busca arena.
-- `DS2_QuickMatchManager::Handle_RequestJoinQuickMatch`: envia `PushRequestJoinQuickMatch` ao host.
-- `DS2_QuickMatchManager::Handle_RequestRejectQuickMatch`: repassa rejeicao.
-
-### Disconnect e session lifecycle
-
-- Mensagens protobuf: `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto:345` ate `:421`.
-- Mapeamento DS2: `Source/Server.DarkSouls2/Server/Streams/DS2_Frpg2ReliableUdpMessageTypes.inc:87` ate `:93`.
-- `DS2_LoggingManager::Handle_RequestNotifyDisconnectSession`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Logging/DS2_LoggingManager.cpp:129`.
-- `DS2_LoggingManager::Handle_RequestNotifyJoinSession`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Logging/DS2_LoggingManager.cpp:161`.
-- `DS2_LoggingManager::Handle_RequestNotifyKillPlayer`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Logging/DS2_LoggingManager.cpp:210`.
-- `DS2_LoggingManager::Handle_RequestNotifyLeaveGuestPlayer`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Logging/DS2_LoggingManager.cpp:226`.
-- `DS2_LoggingManager::Handle_RequestNotifyLeaveSession`: `Source/Server.DarkSouls2/Server/GameService/GameManagers/Logging/DS2_LoggingManager.cpp:242`.
-
-Esses handlers hoje respondem vazio e registram estatisticas/logs pontuais. Eles parecem bons pontos para observar ciclo de vida, mas nao vi logica que force ou prorrogue tempo de phantom.
-
-## Call graph aproximado
-
-```text
-Loader MainForm
-  -> seleciona ServerConfig
-  -> escreve Injector.config
-  -> inicia DarkSoulsII.exe suspenso
-  -> injeta Injector.dll
-
-Injector.dll
-  -> Injector::Init
-  -> ParseGameType(ServerGameType)
-  -> DS2_ReplaceServerAddressHook::Install
-      -> PatchHostname
-      -> PatchKey
-  -> ReplaceServerPortHook::Install
-  -> ChangeSaveGameFilenameHook::Install
-
-DarkSoulsII.exe
-  -> conecta LoginService
-  -> conecta AuthService
-  -> conecta GameService
-
-Server::Init
-  -> RuntimeConfig::Load/Save
-  -> ParseGameType(Config.GameType)
-  -> DS2_Game()
-  -> LoginService::Init
-  -> AuthService::Init
-  -> GameService::Init
-      -> DS2_Game::RegisterGameManagers
-          -> DS2_BootManager
-          -> DS2_PlayerDataManager
-          -> DS2_GhostManager
-          -> DS2_BloodMessageManager
-          -> DS2_BloodstainManager
-          -> DS2_BreakInManager
-          -> DS2_LoggingManager
-          -> DS2_MiscManager
-          -> DS2_VisitorManager
-          -> DS2_RankingManager
-          -> DS2_MirrorKnightManager
-          -> DS2_SignManager
-          -> DS2_QuickMatchManager
-
-GameService::Poll
-  -> each manager Poll
-  -> accept NetConnection
-  -> GameClient::Poll
-      -> MessageStream::Poll
-      -> GameClient::HandleMessage
-          -> manager.OnMessageRecieved
-              -> DS2_*Manager::Handle_*
-```
-
-Fluxos PvP principais:
-
-```text
-Coop/red sign:
-RequestCreateSign -> DS2_SignManager cache
-RequestGetSignList -> DS2_SignManager filters by area + soul memory
-RequestSummonSign -> PushRequestSummonSign to sign owner
-RequestRejectSign / RequestRemoveSign -> cleanup or reject push
-
-Orb invasion:
-RequestGetBreakInTargetList -> DS2_BreakInManager filters targets
-RequestBreakInTarget -> PushRequestBreakInTarget to host
-RequestRejectBreakInTarget -> reject push to invader
-
-Covenant/auto summon:
-RequestGetVisitorList -> DS2_VisitorManager filters visitors
-RequestVisit -> PushRequestVisit to target
-RequestRejectVisit -> reject push to initiator
-
-Arena:
-RequestRegisterQuickMatch -> DS2_QuickMatchManager live cache
-RequestSearchQuickMatch -> filtered quick matches
-RequestJoinQuickMatch -> PushRequestJoinQuickMatch to host
-RequestRejectQuickMatch -> reject push to joiner
-
-Lifecycle:
-RequestNotifyJoinSession / JoinGuestPlayer / KillPlayer / LeaveGuestPlayer / LeaveSession / DisconnectSession
-  -> DS2_LoggingManager
-  -> empty response + limited statistics
-```
-
-## Hipoteses sobre timer de red phantom
-
-1. Nao parece existir configuracao server-side direta para duracao de red phantom.
-   - `RuntimeConfig` tem matching, upload intervals e flags de disable, mas nao duracao de phantom.
-   - `BuildConfig::CLIENT_TIMEOUT` e timeout de inatividade de conexao, nao timer de PvP.
-
-2. `phantom_leave_at` provavelmente e dado client-side reportado ao servidor.
-   - Campo em `DS2_Frpg2PlayerData.proto:132`.
-   - O servidor recebe `RequestUpdatePlayerStatus` e guarda/mescla `PlayerStatus`.
-   - Nao encontrei uso server-side desse campo para expulsar ou manter phantom.
-
-3. O servidor atua principalmente como broker de matching e rendezvous.
-   - Sign, BreakIn, Visitor e QuickMatch enviam push para conectar jogadores.
-   - Depois do aceite/entrada no mundo, a duracao parece ser governada pelo cliente/jogo.
-
-4. `DS2_LoggingManager` e o melhor ponto inicial de observacao.
-   - Ele ve `JoinSession`, `JoinGuestPlayer`, `KillPlayer`, `LeaveGuestPlayer`, `LeaveSession` e `DisconnectSession`.
-   - Antes de qualquer patch de comportamento, vale logar os campos e correlacionar com red soapstone, red eye orb, dragon eye e arena.
-
-5. Evitar kick durante PvP provavelmente exigiria primeiro derivar um estado "em PvP".
-   - Candidatos: eventos brokered (`RequestSummonSign`, `RequestBreakInTarget`, `RequestVisit`, `RequestJoinQuickMatch`) + lifecycle (`JoinSession`, `KillPlayer`, `LeaveSession`).
-   - Sem essa correlacao, qualquer mudanca de timeout pode afetar desconexoes legitimas ou deixar sessoes presas.
-
-## Server-side versus client-side
-
-Provavelmente server-side neste codigo:
-
-- Autenticacao Steam ticket.
-- Escolha de game type DS2/DS3.
-- Chave publica do servidor e endpoint que o cliente usa.
-- Lista de servidores via master, quando `Advertise=true`.
-- Matching por area, online activity area, password e Soul Memory.
-- Cache de summon signs, break-in targets, visitors e quick matches.
-- Persistencia de profiles, characters, messages, stats e records.
-- WebUI/admin.
-
-Provavelmente client-side ou dependente do binario do jogo:
-
-- Duracao real da presenca do phantom no mundo.
-- Timer visual/estado interno de red phantom.
-- Regras finais de desconexao do phantom depois que a sessao multiplayer ja foi estabelecida.
-- Interpretacao completa de `phantom_leave_at`.
-- UI/gameplay de summon, invasion e arena.
-- Formato retail de save; DSOS so troca nome do save via hook e nao deve editar save retail.
-
-## Riscos
-
-- DS2 esta marcado no README como experimental; varias mensagens/protobufs tem comentarios de "guessing" ou "needs validation".
-- Nao ha evidencia de uma config server-side simples para tempo de phantom.
-- Mexer em timer de phantom pode exigir instrumentacao client-side; isso deve ser feito sem offsets magicos e com validacao por logs/protobufs.
-- `ModsWhitelist`, `ModsBlacklist` e `ModsRequiredList` sao serializados/anunciados, mas a analise estatica nao encontrou enforcement forte no fluxo de conexao DS2. Para impedir vanilla com modded, sera necessario validar politica de mods no Loader/server antes do launch/conexao.
-- `Advertise=true` e default no `RuntimeConfig`; para o MVP privado deve ficar `false`.
-- `AUTH_ENABLED=true` em `BuildConfig`, coerente com nao usar Steam emulator.
-- `DISCONNECT_ON_UNHANDLED_MESSAGE=false`; mensagens desconhecidas podem ser ignoradas, o que ajuda compatibilidade mas mascara lacunas de protocolo.
-- O Injector e o Loader podem ser sinalizados por antivirus por injecao DLL, mesmo sem comportamento malicioso.
-- O estado local atual ja contem alteracoes de build para `bin\x64_release\server` e `bin\x64_release\loader`, alem do Import Server.
-- Em `Source/Server.DarkSouls2/Server/DS2_Game.cpp` ha um include com token extra observado no checkout: `DS2_SignManager.h"0`; vale revisar em etapa de higiene se a build reclamar.
-
-## Proximos experimentos
-
-1. Rodar local/ZeroTier com `Advertise=false`, `GameType=DarkSouls2`, porta de login `50050`, auth `50000`, game `50010`.
-2. Capturar logs para quatro fluxos: red soapstone, red eye orb, dragon eye e arena.
-3. Adicionar somente logging observacional em `DS2_LoggingManager` e nos handlers de request/push PvP, sem mudar comportamento.
-4. Confirmar se `phantom_leave_at` muda em `RequestUpdatePlayerStatus` antes, durante e depois do PvP.
-5. Correlacionar `RequestNotifyJoinSession`, `RequestNotifyJoinGuestPlayer`, `RequestNotifyKillPlayer`, `RequestNotifyLeaveGuestPlayer`, `RequestNotifyLeaveSession` e `RequestNotifyDisconnectSession`.
-6. Definir um estado server-side minimo `InPvpSession` somente depois da correlacao de logs.
-7. Se o objetivo for "nao kickar durante PvP", testar primeiro uma regra de deferral baseada em estado observado, nao em offsets.
-8. Validar politica anti-mix vanilla/modded: manifest/hash no Loader, config de mods no server ou handshake proprio privado.
-9. Manter qualquer experimento restrito ao endpoint privado/importado e nao adicionar caminho para servidor oficial.
+It should be treated separately from direct Red Soapstone summon signs.
+
+## Quick match and arena
+
+Relevant system:
+
+- `DS2_QuickMatchManager`
+
+Arena and quick match behavior have their own matching logic and should not be mixed with summon-sign debugging unless the change is intentionally global.
+
+## Soul Memory and matching parameters
+
+DS2 matchmaking uses runtime config parameter blocks.
+
+Important fields:
+
+- `DisableSoulMemoryMatching`
+- `Tiers`
+- `TiersBelow`
+- `TiersAbove`
+- password-specific tier settings
+
+Relevant parameter groups include:
+
+- Red Soapstone
+- White Soapstone
+- Small White Soapstone
+- Dragon Soapstone
+- invasion / break-in
+- visitor / covenant
+- quick match / arena
+
+For targeted changes, prefer editing one parameter group at a time.
+
+## Network services and handlers
+
+Important server flows:
+
+- login / auth
+- game server handshake
+- heartbeat
+- profile state
+- session state
+- summon sign creation and listing
+- invasion request
+- visitor request
+- quick match request
+- disconnect and leave-session cleanup
+
+PvP state is distributed across profile state, session state, and request-specific managers.
+
+## Approximate loader / injector flow
+
+Approximate runtime flow:
+
+1. Loader starts the game process.
+2. Loader injects `Injector.dll`.
+3. Injector loads config.
+4. Injector detects the game.
+5. DS2 hooks install when enabled.
+6. Hook logs and patches are emitted to the loader output directory.
+
+Config should have safe defaults. Experimental hooks should remain opt-in unless they are known stable patches.
+
+## Approximate server PvP flow
+
+Approximate Red Soapstone flow:
+
+1. Player creates a sign.
+2. Server stores sign metadata.
+3. Other player requests area sign list.
+4. Server filters signs using matching parameters.
+5. Client receives visible signs.
+6. Player requests summon / join session.
+7. Server creates or joins a PvP session.
+8. Session state updates continue until leave, death, disconnect, or timeout.
+
+## Phantom timer hypotheses
+
+Current understanding:
+
+1. There is no known direct server-side config that controls the client phantom timer.
+2. `phantom_leave_at` is likely a client-observed or client-driven behavior rather than a server timer.
+3. The server mostly brokers matching and session lifecycle.
+4. `DS2_LoggingManager` and protobuf logging were useful initial observation points.
+5. A correct patch needs session state before it touches timer behavior.
+
+## Server-side versus client-side split
+
+Server-side changes are appropriate for:
+
+- matchmaking rules
+- Soul Memory filtering
+- sign visibility
+- session diagnostics
+- cleanup classification
+
+Client-side injector changes are appropriate for:
+
+- observing raw messages
+- tracing call paths
+- patching client-only timers
+- identifying client-side UI or item-use restrictions
+
+The phantom timer ended up requiring a client-side patch because the final leave message was indistinguishable from valid leave cleanup.
+
+## Known risks
+
+- Heavy protobuf tracing can cause lag and large logs.
+- Callstack capture must remain opt-in.
+- Blocking final leave messages can break kill cleanup.
+- Broad Soul Memory bypasses can affect more PvP systems than intended.
+- Offsets and signatures can change between builds or game variants.
+
+## Recommended debugging approach
+
+Use the least invasive tool that answers the current question:
+
+1. Prefer server config for matchmaking scope tests.
+2. Prefer lightweight injector state for runtime client decisions.
+3. Use heavy tracing only for short discovery windows.
+4. Avoid per-frame probes unless absolutely necessary.
+5. Once a patch is understood, keep only the stable patch and remove discovery probes.
+
+## Related docs
+
+- `docs/DS2_SOUL_MEMORY_MATCHMAKING.md`
+- `docs/DS2_PVP_LEAVE_SESSIONS.md`
+- `docs/DS2_LEAVE_SESSION_BY_KILL.md`
+- `docs/DS2_PHANTOM_TIMER_PATCH.md`

@@ -1,250 +1,163 @@
 # DS2 Phantom Timer Patch
 
-Este documento registra como o patch de tempo de sessao do phantom foi descoberto e implementado no injector.
+This document describes the current fix for the Dark Souls II PvP phantom timer.
 
-## Objetivo
+## Version
 
-Evitar a saida automatica do phantom por tempo em Dark Souls II: Scholar of the First Sin, sem bloquear `RequestNotifyLeaveSession` e sem alterar o fluxo normal de saida por morte, boss, desconexao ou saida manual.
-
-O patch final nao remove a mensagem de leave. Ele impede que o contador ativo de tempo chegue a zero.
-
-## Resultado Final
-
-A versao funcional validada foi:
+Visible injector version:
 
 ```text
 ds2-jmj injector pvp-timer v2026-05-07.1
 ```
 
-O timer ativo fica em:
+## Goal
+
+Prevent the client-side phantom timer from ending a PvP session after roughly 12 minutes.
+
+The active timer is stored at:
 
 ```text
 R14 + 0xCFC
 ```
 
-O hook escreve o valor configurado, por padrao:
+The default patched value is:
 
 ```text
 4000.0f
 ```
 
-No console, a confirmacao esperada e:
+## Expected logs
+
+When the patch applies, the injector should emit logs similar to:
 
 ```text
-[DS2TimerParamPatch] patched active session timer old=... target=4000.000 trace_file=DS2_TimerParamPatch.log
-```
-
-No log `DS2_TimerParamPatch.log`, a confirmacao esperada e:
-
-```text
+[DS2TimerParamPatch] patched active session timer old=<value> new=4000.000 source=r14_plus_0xcfc
 event=DS2ActiveTimerPatch result=patched source=r14_plus_0xcfc
 ```
 
-## Configuracao
+The main log file is:
 
-O patch e controlado por estas entradas em `Injector.config`:
-
-```json
-"DS2TraceLeaveSession": false,
-"DS2PreventPvpTimerLeave": false,
-"DS2PatchPhantomTimers": true,
-"DS2PhantomTimerSeconds": 4000
+```text
+DS2_TimerParamPatch.log
 ```
 
-Tambem ha suporte a env vars:
+`DS2_LeaveSessionTrace.log` is written only when `DS2TraceLeaveSession=true`.
+
+## Config
+
+Recommended config:
+
+```json
+{
+  "DS2TraceLeaveSession": false,
+  "DS2PreventPvpTimerLeave": false,
+  "DS2PatchPhantomTimers": true,
+  "DS2PhantomTimerSeconds": 4000
+}
+```
+
+Environment variables:
 
 ```text
 DS2_PATCH_PHANTOM_TIMERS=1
 DS2_PHANTOM_TIMER_SECONDS=4000
 ```
 
-`DS2PreventPvpTimerLeave` deve ficar desligado quando `DS2PatchPhantomTimers` estiver ligado. O patch correto e no timer ativo; bloquear leave direto foi mantido apenas como experimento antigo e nao deve ser usado para esta solucao.
+`DS2PreventPvpTimerLeave` should remain disabled when `DS2PatchPhantomTimers` is enabled.
 
-## Arquivos Principais
+## Trace decoupling
 
-Implementacao:
+`DS2PatchPhantomTimers=true` requires lightweight session state updates from the protobuf hook.
 
-```text
-Source/Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp
-Source/Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h
-```
+It does not require expensive leave-session tracing.
 
-Instalacao do hook:
+With the current implementation:
 
-```text
-Source/Injector/Injector/Injector.cpp
-```
+- `DS2TraceLeaveSession=true` captures callstacks and writes `DS2_LeaveSessionTrace.log`.
+- `DS2PatchPhantomTimers=true` updates lightweight session state without callstack capture and without writing the leave-session trace file.
 
-Config runtime:
+This avoids enabling heavy tracing in normal use while still giving the timer patch enough state to operate.
 
-```text
-Source/Injector/Config/RuntimeConfig.h
-Source/Injector/Config/RuntimeConfig.cpp
-Source/Loader/Config/InjectionConfig.cs
-Source/Loader/Forms/MainForm.cs
-```
+## Main files
 
-Logs auxiliares:
+- `Source/Injector/Injector/GameConfig.cpp`
+- `Source/Injector/Injector/GameConfig.h`
+- `Source/Injector/Injector/Injector.cpp`
+- `Source/Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp`
+- `Source/Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp`
+- `Source/Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h`
+- `Source/Injector/Hooks/DarkSouls2/DS2_SessionTraceState.cpp`
+- `Source/Injector/Hooks/DarkSouls2/DS2_SessionTraceState.h`
+- `Source/Loader/Loader/GameConfig.cpp`
 
-```text
-DS2_TimerParamPatch.log
-DS2_LeaveSessionTrace.log
-```
+## Discovery summary
 
-## Como Foi Descoberto
+The client sends the timer-based leave after roughly 763 to 766 seconds in the observed PvP sessions.
 
-1. O trace de protobufs mostrou que a saida por tempo gera `RequestNotifyLeaveSession` depois de aproximadamente 763-766 segundos.
-
-2. A callstack do leave por tempo sempre passava pelos mesmos pontos do jogo:
+The final leave message looked the same as a legitimate kill leave:
 
 ```text
-game_rel=0x2c3c19
-game_rel=0x2c36d7
-game_rel=0x2c9844
+raw_hex=08 01 10 05 18 00 20 00
 ```
 
-3. Tentamos primeiro encontrar e patchar o param bruto de multiplayer, mas esse caminho foi descartado porque o bloco esperado nao apareceu no formato observado em memoria.
+Because kill leave and timer leave share the same final message path, blocking `RequestNotifyLeaveSession` directly is unsafe.
 
-4. O mod/pesquisa externa confirmou que o timer existe como float, mas o bloco de param bruto nao apareceu no formato esperado em memoria.
-
-5. Usamos Cheat Engine no processo `DarkSoulsII.exe`, ja dentro do mundo do host:
-
-```text
-Value Type: Float
-Scan Type: Unknown initial value
-Filtro repetido: Decreased value
-Filtro final: faixa plausivel de 100 a 4000
-```
-
-O endereco encontrado foi:
+Cheat Engine confirmed a live float timer address:
 
 ```text
 7FF447B49A9C
 ```
 
-Esse valor diminuia de forma estavel, chegou a zero, disparou a saida da sessao e depois ficou `-1` no mundo local. Isso confirmou que era o contador ativo real.
-
-6. No mesmo run, o log do injector no breakpoint `0x2c9844` tinha:
+Observed register base:
 
 ```text
 R14 = 0x00007ff447b48da0
 ```
 
-Somando o offset:
+`R14 + 0xCFC` matched the live timer address.
 
-```text
-0x00007ff447b48da0 + 0xCFC = 0x00007ff447b49a9c
-```
+## Hook mechanics
 
-Esse resultado bate exatamente com o endereco do Cheat Engine:
-
-```text
-7FF447B49A9C
-```
-
-Portanto, o offset funcional do timer ativo nesse hot path e:
-
-```text
-R14 + 0xCFC
-```
-
-## Como o Hook Funciona
-
-O hook instala um breakpoint de software (`0xCC`) no offset:
+The hook uses a software breakpoint at:
 
 ```text
 DarkSoulsII.exe + 0x2c9844
 ```
 
-Antes de instalar, valida a assinatura esperada da instrucao. Se a assinatura nao bater, falha fechado e registra erro, sem patch parcial.
+The handler:
 
-Quando o breakpoint dispara:
+1. Validates the expected instruction signature.
+2. Restores the original byte.
+3. Reads the current register context.
+4. Computes `R14 + 0xCFC`.
+5. Reads the current float timer.
+6. Writes `DS2PhantomTimerSeconds` when needed.
+7. Sets the trap flag.
+8. Reinstalls the breakpoint after single-step.
 
-1. Restaura o byte original.
-2. Usa o contexto de registradores do thread atual.
-3. Calcula:
+## Why not block leave
 
-```text
-timer_address = R14 + 0xCFC
-```
+The same final leave path is used by:
 
-4. Le o `float` em `timer_address`.
-5. Valida que o valor e plausivel:
+- legitimate kill cleanup
+- the client-side phantom timer
 
-```text
-finite
-> 0.0
-<= 100000.0
-```
+Blocking the leave message directly risks breaking normal PvP session cleanup.
 
-6. Se o timer estiver abaixo do alvo, escreve o alvo configurado:
+The safer patch is to keep the timer from reaching the leave path.
 
-```text
-DS2PhantomTimerSeconds
-```
+## Validation steps
 
-7. Ativa trap flag para executar a instrucao original uma vez.
-8. No `EXCEPTION_SINGLE_STEP`, reinstala o breakpoint.
+1. Start the loader and injector with `DS2PatchPhantomTimers=true`.
+2. Enter a PvP session.
+3. Confirm `DS2_TimerParamPatch.log` shows `result=patched`.
+4. Stay in the session past the old timer window.
+5. Confirm the session does not end at the old timer time.
+6. Confirm normal kill-based leave still works.
 
-Isso faz o contador ser resetado repetidamente para perto de `4000.0`, sem bloquear o envio final de leave quando ele for legitimo por outro motivo.
+## Safety notes
 
-## Por Que Nao Bloquear Leave
-
-Bloquear `RequestNotifyLeaveSession` ou `RequestNotifyLeaveGuestPlayer` diretamente causou instabilidade ou encerramento da sessao em testes anteriores. O jogo espera que a maquina de estado de rede avance. A solucao atual evita que o motivo "timer chegou a zero" aconteca, mas deixa o leave natural continuar quando houver morte, desconexao, saida manual ou outro evento legitimo.
-
-## Como Validar
-
-1. Compile Release:
-
-```powershell
-.\Tools\Build\cmake\windows\bin\cmake.exe --build intermediate\vs2022 --config Release --target Injector
-```
-
-2. Abra o Loader Release e inicie o jogo.
-
-3. Confirme no console:
-
-```text
-Injector Version: ds2-jmj injector pvp-timer v2026-05-07.1 build=Release
-```
-
-4. Entre no mundo do host.
-
-5. Confirme no console:
-
-```text
-[DS2TimerParamPatch] active timer patch installed offset=0x2c9844 target=4000.000 source=r14_plus_0xcfc
-[DS2TimerParamPatch] patched active session timer old=... target=4000.000 trace_file=DS2_TimerParamPatch.log
-```
-
-6. Aguarde passar do limite antigo, cerca de:
-
-```text
-763-766 segundos
-```
-
-Se o phantom nao sair por tempo, o patch esta funcionando.
-
-## Logs Esperados
-
-`DS2_TimerParamPatch.log` deve conter linhas como:
-
-```text
-event=DS2ActiveTimerPatch result=installed source=r14_plus_0xcfc
-event=DS2ActiveTimerPatch result=patched source=r14_plus_0xcfc old_seconds=... new_seconds=4000.000
-```
-
-`DS2_LeaveSessionTrace.log` ainda pode registrar leaves legitimos. O caso que o patch deve eliminar e:
-
-```text
-client_leave_reason_hint=timer_candidate
-client_session_duration=~764
-```
-
-## Notas de Seguranca
-
-- O patch fica desligado por padrao no runtime base e precisa de `DS2PatchPhantomTimers=true` ou `DS2_PATCH_PHANTOM_TIMERS=1`.
-- O hook valida bytes antes de instalar.
-- O state probe antigo foi removido; `DS2PatchPhantomTimers` e o unico hook de breakpoint mantido para essa pesquisa.
-- O valor configurado precisa ser finito e maior que zero; o timer observado em memoria tambem precisa estar em uma faixa plausivel antes da escrita.
-- O scanner antigo de param bruto foi removido do hook final. A solucao funcional validada e somente o contador ativo `R14+0xCFC`.
+- The hook only installs for DS2.
+- The hook validates the target signature before patching.
+- The patch writes one float value at the observed active timer slot.
+- Heavy leave-session tracing remains opt-in.
