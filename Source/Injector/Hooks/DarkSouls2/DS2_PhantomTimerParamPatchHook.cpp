@@ -382,11 +382,6 @@ namespace
         {
             double Now = GetSeconds();
             DS2_SessionTraceState::ClientTraceContext Snapshot = DS2_SessionTraceState::GetCurrentSnapshot(Now);
-            if (!Snapshot.ClientTraceFound || Snapshot.ClientSessionRole == "none")
-            {
-                return;
-            }
-
             size_t TimerAddress = (size_t)Context.R14 + kActiveTimerDirectOffset;
             float CurrentSeconds = 0.0f;
             if (!TryReadFloat(TimerAddress, CurrentSeconds) || !IsValidTimerValue(CurrentSeconds))
