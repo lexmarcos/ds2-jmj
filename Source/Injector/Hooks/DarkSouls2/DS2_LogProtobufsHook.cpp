@@ -44,6 +44,7 @@ namespace
     std::atomic_size_t s_trace_sequence{0};
     bool s_log_all_protobufs = false;
     bool s_trace_leave_session = false;
+    bool s_update_session_state = false;
     bool s_prevent_pvp_timer_leave = false;
     double s_pvp_timer_min_seconds = 700.0;
     double s_pvp_timer_max_seconds = 820.0;
@@ -705,6 +706,22 @@ namespace
         AppendTraceLog(Trace);
     }
 
+    void UpdateSessionStateOnly(const std::string& ClassName, const uint8_t* Data, size_t Length)
+    {
+        const double Now = GetSeconds();
+        const size_t SequenceId = s_trace_sequence.fetch_add(1) + 1;
+        const uint32_t ThreadId = GetCurrentTraceThreadId();
+        const DecodedTraceFields Fields = DecodeTraceFields(Data, Length);
+
+        DS2_SessionTraceState::RememberTraceEventAndBuildContext(
+            Now,
+            SequenceId,
+            ThreadId,
+            ClassName,
+            "state_only",
+            ToSessionTraceFields(Fields));
+    }
+
     uint8_t* SerializeWithCachedSizesToArrayHook(void* this_ptr, uint8_t* target)
     {
         std::string RttiName = GetRttiNameFromObject(this_ptr);
@@ -748,9 +765,16 @@ namespace
             }
         }        
 
-        if (s_trace_leave_session && IsSessionTraceMessage(ClassName))
+        if (IsSessionTraceMessage(ClassName))
         {
-            TraceSessionMessage(RttiName, ClassName, target, end - target);
+            if (s_trace_leave_session)
+            {
+                TraceSessionMessage(RttiName, ClassName, target, end - target);
+            }
+            else if (s_update_session_state)
+            {
+                UpdateSessionStateOnly(ClassName, target, end - target);
+            }
         }
 
         return end;
@@ -907,7 +931,8 @@ bool DS2_LogProtobufsHook::Install(Injector& injector)
         }
     }
 
-    s_trace_leave_session = Config.DS2TraceLeaveSession || s_prevent_pvp_timer_leave || PatchPhantomTimers;
+    s_trace_leave_session = Config.DS2TraceLeaveSession;
+    s_update_session_state = s_trace_leave_session || s_prevent_pvp_timer_leave || PatchPhantomTimers;
 
     DS2_SessionTraceState::Config SessionTraceConfig;
     SessionTraceConfig.PreventPvpTimerLeave = s_prevent_pvp_timer_leave;
@@ -915,8 +940,9 @@ bool DS2_LogProtobufsHook::Install(Injector& injector)
     SessionTraceConfig.PvpTimerMaxSeconds = s_pvp_timer_max_seconds;
     DS2_SessionTraceState::Configure(SessionTraceConfig);
 
-    Log("[DS2LeaveTrace] trace=%u prevent_timer=%u timer_min=%.3f timer_max=%.3f",
+    Log("[DS2LeaveTrace] trace=%u session_state=%u prevent_timer=%u timer_min=%.3f timer_max=%.3f",
         s_trace_leave_session ? 1 : 0,
+        s_update_session_state ? 1 : 0,
         s_prevent_pvp_timer_leave ? 1 : 0,
         s_pvp_timer_min_seconds,
         s_pvp_timer_max_seconds);
