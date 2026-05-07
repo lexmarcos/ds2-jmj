@@ -11,7 +11,7 @@
 
 #include "Injector/Hooks/Hook.h"
 
-class DS2_StateProbeHook : public Hook
+class DS2_PhantomTimerParamPatchHook : public Hook
 {
 public:
     virtual bool Install(Injector& injector) override;

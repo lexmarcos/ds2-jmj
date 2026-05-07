@@ -28,8 +28,10 @@
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <system_error>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -148,6 +150,18 @@ namespace
             Ch = (char)std::tolower((unsigned char)Ch);
         }
         return Result;
+    }
+
+    bool IsTruthyEnvVar(const char* Name)
+    {
+        const char* Value = std::getenv(Name);
+        if (Value == nullptr)
+        {
+            return false;
+        }
+
+        const std::string Text = ToLowerAscii(Value);
+        return Text == "1" || Text == "true" || Text == "yes" || Text == "on";
     }
 
     bool IsDarkSoulsIIFrame(const Callstack::Frame& Frame)
@@ -492,9 +506,14 @@ namespace
 #endif
     }
 
-    bool TryReadProcessBytes(size_t Address, size_t Length, std::string& OutHex)
+    bool IsReadableProcessRange(size_t Address, size_t Length)
     {
 #ifdef _WIN32
+        if (Address == 0 || Length == 0 || Address + Length < Address)
+        {
+            return false;
+        }
+
         size_t Offset = 0;
         while (Offset < Length)
         {
@@ -516,6 +535,20 @@ namespace
             }
 
             Offset = std::min(Length, RegionEnd - Address);
+        }
+
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool TryReadProcessBytes(size_t Address, size_t Length, std::string& OutHex)
+    {
+#ifdef _WIN32
+        if (!IsReadableProcessRange(Address, Length))
+        {
+            return false;
         }
 
         OutHex = BytesToHex((const uint8_t*)Address, Length);
@@ -840,13 +873,10 @@ bool DS2_LogProtobufsHook::Install_ParseFromArray(Injector& injector)
 
 bool DS2_LogProtobufsHook::Install(Injector& injector)
 {
-#ifdef _DEBUG
-    s_log_all_protobufs = true;
-#else
     s_log_all_protobufs = false;
-#endif
     const RuntimeConfig& Config = injector.GetConfig();
     s_prevent_pvp_timer_leave = Config.DS2PreventPvpTimerLeave;
+    bool PatchPhantomTimers = Config.DS2PatchPhantomTimers;
     s_pvp_timer_min_seconds = Config.DS2PvpTimerMinSeconds > 0.0 ? Config.DS2PvpTimerMinSeconds : 700.0;
     s_pvp_timer_max_seconds = Config.DS2PvpTimerMaxSeconds > 0.0 ? Config.DS2PvpTimerMaxSeconds : 820.0;
     if (s_pvp_timer_max_seconds < s_pvp_timer_min_seconds)
@@ -864,7 +894,20 @@ bool DS2_LogProtobufsHook::Install(Injector& injector)
         }
     }
 
-    s_trace_leave_session = Config.DS2TraceLeaveSession || s_prevent_pvp_timer_leave;
+    const char* PatchPhantomTimersEnv = std::getenv("DS2_PATCH_PHANTOM_TIMERS");
+    if (PatchPhantomTimersEnv != nullptr)
+    {
+        std::string PatchPhantomTimersEnvText = ToLowerAscii(PatchPhantomTimersEnv);
+        if (PatchPhantomTimersEnvText == "1" ||
+            PatchPhantomTimersEnvText == "true" ||
+            PatchPhantomTimersEnvText == "yes" ||
+            PatchPhantomTimersEnvText == "on")
+        {
+            PatchPhantomTimers = true;
+        }
+    }
+
+    s_trace_leave_session = Config.DS2TraceLeaveSession || s_prevent_pvp_timer_leave || PatchPhantomTimers;
 
     DS2_SessionTraceState::Config SessionTraceConfig;
     SessionTraceConfig.PreventPvpTimerLeave = s_prevent_pvp_timer_leave;
@@ -881,7 +924,10 @@ bool DS2_LogProtobufsHook::Install(Injector& injector)
     bool Installed = Install_SerializeWithCachedSizesToArray(injector);
 
 #ifdef _DEBUG
-    Installed = Installed && Install_ParseFromArray(injector);
+    if (s_log_all_protobufs)
+    {
+        Installed = Installed && Install_ParseFromArray(injector);
+    }
 #endif
 
     return Installed;

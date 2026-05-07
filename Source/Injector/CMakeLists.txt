@@ -25,8 +25,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp
     Hooks/DarkSouls2/DS2_SessionTraceState.h
     Hooks/DarkSouls2/DS2_SessionTraceState.cpp
-    Hooks/DarkSouls2/DS2_StateProbeHook.h
-    Hooks/DarkSouls2/DS2_StateProbeHook.cpp
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Dark Souls 3 - Open Server
  * Copyright (C) 2021 Tim Leonard
  *
@@ -805,6 +805,22 @@ namespace Loader
 
                 byte[] InjectorPathBuffer = System.Text.Encoding.Unicode.GetBytes(InjectorPath + "\0");
 
+                InjectionConfig existingInjectConfig = null;
+                if (File.Exists(InjectorConfigPath))
+                {
+                    try
+                    {
+                        if (!InjectionConfig.TryFromJson(File.ReadAllText(InjectorConfigPath), out existingInjectConfig))
+                        {
+                            existingInjectConfig = null;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        existingInjectConfig = null;
+                    }
+                }
+
                 // Write the config file which the injector will read everything from.
                 InjectionConfig injectConfig = new InjectionConfig();
                 injectConfig.ServerName = Config.Name;
@@ -813,15 +829,31 @@ namespace Loader
                 injectConfig.ServerPort = Config.Port;
                 injectConfig.ServerGameType = Config.GameType;
                 injectConfig.EnableSeperateSaveFiles = ProgramSettings.Default.use_seperate_saves;
-                injectConfig.DS2TraceLeaveSession = Config.GameType == GameType.DarkSouls2.ToString();
-                string TraceStateProbeEnv = Environment.GetEnvironmentVariable("DS2_TRACE_STATE_PROBE");
-                injectConfig.DS2TraceStateProbe =
-                    Config.GameType == GameType.DarkSouls2.ToString() &&
-                    (TraceStateProbeEnv == "1" || string.Equals(TraceStateProbeEnv, "true", StringComparison.OrdinalIgnoreCase));
+                bool IsDarkSouls2 = Config.GameType == GameType.DarkSouls2.ToString();
+                bool ExistingPreventTimerLeave = existingInjectConfig != null && existingInjectConfig.ServerGameType == GameType.DarkSouls2.ToString() && existingInjectConfig.DS2PreventPvpTimerLeave;
+                bool ExistingPatchPhantomTimers = existingInjectConfig != null && existingInjectConfig.ServerGameType == GameType.DarkSouls2.ToString() && existingInjectConfig.DS2PatchPhantomTimers;
+                double ExistingPhantomTimerSeconds =
+                    existingInjectConfig != null && existingInjectConfig.ServerGameType == GameType.DarkSouls2.ToString() && existingInjectConfig.DS2PhantomTimerSeconds > 0.0
+                        ? existingInjectConfig.DS2PhantomTimerSeconds
+                        : 4000.0;
+                injectConfig.DS2TraceLeaveSession = false;
+                string PatchPhantomTimersEnv = Environment.GetEnvironmentVariable("DS2_PATCH_PHANTOM_TIMERS");
+                injectConfig.DS2PatchPhantomTimers =
+                    IsDarkSouls2 &&
+                    (ExistingPatchPhantomTimers || PatchPhantomTimersEnv == "1" || string.Equals(PatchPhantomTimersEnv, "true", StringComparison.OrdinalIgnoreCase));
+                injectConfig.DS2PhantomTimerSeconds = ExistingPhantomTimerSeconds;
+                string PhantomTimerSecondsEnv = Environment.GetEnvironmentVariable("DS2_PHANTOM_TIMER_SECONDS");
+                if (!string.IsNullOrWhiteSpace(PhantomTimerSecondsEnv) &&
+                    double.TryParse(PhantomTimerSecondsEnv, NumberStyles.Float, CultureInfo.InvariantCulture, out double PhantomTimerSeconds) &&
+                    PhantomTimerSeconds > 0.0)
+                {
+                        injectConfig.DS2PhantomTimerSeconds = PhantomTimerSeconds;
+                }
                 string PreventTimerLeaveEnv = Environment.GetEnvironmentVariable("DS2_PREVENT_PVP_TIMER_LEAVE");
                 injectConfig.DS2PreventPvpTimerLeave =
-                    Config.GameType == GameType.DarkSouls2.ToString() &&
-                    (PreventTimerLeaveEnv == "1" || string.Equals(PreventTimerLeaveEnv, "true", StringComparison.OrdinalIgnoreCase));
+                    IsDarkSouls2 &&
+                    !injectConfig.DS2PatchPhantomTimers &&
+                    (ExistingPreventTimerLeave || PreventTimerLeaveEnv == "1" || string.Equals(PreventTimerLeaveEnv, "true", StringComparison.OrdinalIgnoreCase));
                 injectConfig.DS2PvpTimerMinSeconds = 700.0;
                 injectConfig.DS2PvpTimerMaxSeconds = 820.0;
 

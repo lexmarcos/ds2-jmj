@@ -150,10 +150,11 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(ServerPublicKey);
     SERIALIZE_VAR(EnableSeperateSaveFiles);
     SERIALIZE_VAR(DS2TraceLeaveSession);
-    SERIALIZE_VAR(DS2TraceStateProbe);
     SERIALIZE_VAR(DS2PreventPvpTimerLeave);
     SERIALIZE_VAR(DS2PvpTimerMinSeconds);
     SERIALIZE_VAR(DS2PvpTimerMaxSeconds);
+    SERIALIZE_VAR(DS2PatchPhantomTimers);
+    SERIALIZE_VAR(DS2PhantomTimerSeconds);
     SERIALIZE_VAR(ServerPort);
     SERIALIZE_VAR(ServerGameType);
 
