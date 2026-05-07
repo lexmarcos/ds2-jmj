@@ -93,6 +93,17 @@ SET(SOURCES
  
 add_executable(${PROJECT_NAME} ${SOURCES} ${PLATFORM_SOURCES})
 
+foreach(config ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${config} config_upper)
+    set(server_output "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}/server")
+
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${server_output}"
+        PDB_OUTPUT_DIRECTORY_${config_upper} "${server_output}"
+        COMPILE_PDB_OUTPUT_DIRECTORY_${config_upper} "${server_output}"
+    )
+endforeach()
+
 target_include_directories(${PROJECT_NAME} PUBLIC 
     "${CMAKE_CURRENT_SOURCE_DIR}" 
     "${CMAKE_CURRENT_SOURCE_DIR}/../"
@@ -120,7 +131,7 @@ foreach(config ${CMAKE_CONFIGURATION_TYPES})
     #file(WRITE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}/steam_appid.txt" "374320")
 
     # Copy WebUI resources to output folder
-    file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/../WebUI" DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}")
+    file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/../WebUI" DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}/server")
 endforeach()
 
 util_setup_folder_structure(${PROJECT_NAME} SOURCES "DS3OS")

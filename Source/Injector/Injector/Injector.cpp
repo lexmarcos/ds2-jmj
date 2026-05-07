@@ -22,12 +22,16 @@
 #include "Injector/Hooks/DarkSouls3/DS3_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
 #include <thread>
 #include <chrono>
 #include <fstream>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #include "ThirdParty/nlohmann/json.hpp"
 
@@ -38,9 +42,39 @@
 
 namespace 
 {
+    constexpr const char* kInjectorVersionMarker = "ds2-jmj injector pvp-timer v2026-05-07.1";
+
+#ifdef _DEBUG
+    constexpr const char* kInjectorBuildType = "Debug";
+#else
+    constexpr const char* kInjectorBuildType = "Release";
+#endif
+
     void dummyFunction()
     {
     }
+
+    bool IsTruthyEnvVar(const char* Name)
+    {
+        const char* Value = std::getenv(Name);
+        if (Value == nullptr)
+        {
+            return false;
+        }
+
+        std::string Text = Value;
+        std::transform(
+            Text.begin(),
+            Text.end(),
+            Text.begin(),
+            [](unsigned char Ch)
+            {
+                return (char)std::tolower(Ch);
+            });
+
+        return Text == "1" || Text == "true" || Text == "yes" || Text == "on";
+    }
+
 };
 
 Injector& Injector::Instance()
@@ -61,6 +95,12 @@ Injector::~Injector()
 bool Injector::Init()
 {
     Log("Initializing injector ...");
+    Log(
+        "Injector Version: %s build=%s compiled=%s %s",
+        kInjectorVersionMarker,
+        kInjectorBuildType,
+        __DATE__,
+        __TIME__);
 
     // Grab the dll path based on the location of static function.
     HMODULE moduleHandle = nullptr;
@@ -140,14 +180,22 @@ bool Injector::Init()
         }
         case GameType::DarkSouls2:
         {
+            const bool PatchPhantomTimers = Config.DS2PatchPhantomTimers || IsTruthyEnvVar("DS2_PATCH_PHANTOM_TIMERS");
+
             if (!BuildConfig::DO_NOT_REDIRECT)
             {
                 Hooks.push_back(std::make_unique<DS2_ReplaceServerAddressHook>());
             }
 
-#ifdef _DEBUG
-            Hooks.push_back(std::make_unique<DS2_LogProtobufsHook>());
-#endif
+            if (Config.DS2TraceLeaveSession || Config.DS2PreventPvpTimerLeave || PatchPhantomTimers)
+            {
+                Hooks.push_back(std::make_unique<DS2_LogProtobufsHook>());
+            }
+
+            if (PatchPhantomTimers)
+            {
+                Hooks.push_back(std::make_unique<DS2_PhantomTimerParamPatchHook>());
+            }
             break;
         }
     }
@@ -194,7 +242,8 @@ bool Injector::Term()
     Log("Uninstalling hooks ...");
     for (auto& hook : InstalledHooks)
     {
-        Error("\t%s", hook->GetName());
+        Log("\t%s", hook->GetName());
+        hook->Uninstall();
     }
     InstalledHooks.clear();
 

@@ -8,6 +8,7 @@ add_subdirectory(ThirdParty)
 if (WIN32)
     add_subdirectory(Loader)
     add_subdirectory(Injector)
+    add_dependencies(Loader Injector)
 endif()
 
 add_subdirectory(Server)

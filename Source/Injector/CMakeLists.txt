@@ -23,6 +23,10 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.cpp
     Hooks/DarkSouls2/DS2_LogProtobufsHook.h
     Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp
+    Hooks/DarkSouls2/DS2_SessionTraceState.h
+    Hooks/DarkSouls2/DS2_SessionTraceState.cpp
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h
@@ -30,6 +34,17 @@ SET(SOURCES
 )
  
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${PLATFORM_SOURCES})
+
+foreach(config ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${config} config_upper)
+    set(injector_output "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}/loader")
+
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+        PDB_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+        COMPILE_PDB_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+    )
+endforeach()
 
 target_include_directories(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../")
 

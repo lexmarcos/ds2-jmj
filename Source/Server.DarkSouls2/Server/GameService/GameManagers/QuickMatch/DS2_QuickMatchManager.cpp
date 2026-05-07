@@ -19,6 +19,7 @@
 #include "Server/Server.h"
 
 #include "Config/BuildConfig.h"
+#include "Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/File.h"
@@ -40,6 +41,12 @@ void DS2_QuickMatchManager::OnLostPlayer(GameClient* Client)
         if (Match->HostPlayerId == Client->GetPlayerState().GetPlayerId())
         {
             LogS(Client->GetName().c_str(), "Unregistered quick match hosted by player %u, as player has disconnected.", Match->HostPlayerId);
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "SessionCleanup",
+                "cleanup=quick_match host_profile_id=%u mode=%s request_area_id=%u cell_id=%u",
+                Match->HostPlayerId,
+                DS2PvpDebug::QuickMatchModeName(Match->GameMode),
+                (uint32_t)Match->AreaId,
+                (uint32_t)Match->CellId);
             Iter = Matches.erase(Iter);
         }
         else
@@ -172,6 +179,15 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestSearchQuickMatch(GameCl
     }
 
     LogS(Client->GetName().c_str(), "RequestSearchQuickMatch: Found %i matches.", ResultCount);
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchSearchRequest",
+        "mode=%s request_area_id=%lld cell_id=%lld max_results=%lld result_count=%d soul_memory=%u name_engraved_ring=%u",
+        DS2PvpDebug::QuickMatchModeName(Request->mode()),
+        (long long)Request->online_area_id(),
+        (long long)Request->cell_id(),
+        (long long)Request->max_results(),
+        ResultCount,
+        Request->matching_parameter().soul_memory(),
+        Request->matching_parameter().name_engraved_ring());
     
     if (!Client->MessageStream->Send(&Response, &Message))
     {
@@ -197,6 +213,13 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestRegisterQuickMatch(Game
     NewMatch->HasStarted = false;
 
     LogS(Client->GetName().c_str(), "RequestRegisterQuickMatch: Hosting new match.");
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchRegisterRequest",
+        "mode=%s request_area_id=%lld cell_id=%lld soul_memory=%u name_engraved_ring=%u",
+        DS2PvpDebug::QuickMatchModeName(Request->mode()),
+        (long long)Request->online_area_id(),
+        (long long)Request->cell_id(),
+        Request->matching_parameter().soul_memory(),
+        Request->matching_parameter().name_engraved_ring());
     
     Matches.push_back(NewMatch);
 
@@ -241,6 +264,12 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestUnregisterQuickMatch(Ga
             (uint32_t)Match->AreaId == Request->online_area_id())
         {
             LogS(Client->GetName().c_str(), "RequestUnregisterQuickMatch: Unregistered quick match hosted by self.", Match->HostPlayerId);
+            DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchUnregisterRequest",
+                "mode=%s request_area_id=%lld cell_id=%lld host_profile_id=%u",
+                DS2PvpDebug::QuickMatchModeName(Request->mode()),
+                (long long)Request->online_area_id(),
+                (long long)Request->cell_id(),
+                Match->HostPlayerId);
             Iter = Matches.erase(Iter);
         }
         else
@@ -263,6 +292,11 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestUpdateQuickMatch(GameCl
     DS2_Frpg2RequestMessage::RequestUpdateQuickMatch* Request = (DS2_Frpg2RequestMessage::RequestUpdateQuickMatch*)Message.Protobuf.get();
 
     // Not sure we really need to do anything with this. It just keeps the match alive?
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchUpdateRequest",
+        "mode=%s request_area_id=%lld cell_id=%lld",
+        DS2PvpDebug::QuickMatchModeName(Request->mode()),
+        (long long)Request->online_area_id(),
+        (long long)Request->cell_id());
 
     DS2_Frpg2RequestMessage::RequestUpdateQuickMatchResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -282,6 +316,13 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestJoinQuickMatch(GameClie
     DS2_Frpg2RequestMessage::RequestJoinQuickMatch* Request = (DS2_Frpg2RequestMessage::RequestJoinQuickMatch*)Message.Protobuf.get();
 
     bool bSuccess = false;
+
+    DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchJoinRequest",
+        "mode=%s host_profile_id=%lld request_area_id=%lld cell_id=%lld",
+        DS2PvpDebug::QuickMatchModeName(Request->mode()),
+        (long long)Request->player_id(),
+        (long long)Request->online_area_id(),
+        (long long)Request->cell_id());
 
     std::shared_ptr<GameClient> HostClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());
     if (HostClient)
@@ -307,12 +348,28 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestJoinQuickMatch(GameClie
             else
             {
                 bSuccess = true;
+                DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchJoinForwarded",
+                    "mode=%s host_profile_id=%u host_steam_id_masked=%s host_character_id=%d request_area_id=%u cell_id=%u",
+                    DS2PvpDebug::QuickMatchModeName(ExistingMatch->GameMode),
+                    HostClient->GetPlayerState().GetPlayerId(),
+                    DS2PvpDebug::MaskIdentifier(HostClient->GetPlayerState().GetSteamId()).c_str(),
+                    HostClient->GetPlayerState().GetCharacterId(),
+                    (uint32_t)ExistingMatch->AreaId,
+                    (uint32_t)ExistingMatch->CellId);
             }
         }
     }
 
     if (!bSuccess)
     {
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchJoinRejected",
+            "mode=%s host_profile_id=%lld host_found=%u request_area_id=%lld cell_id=%lld",
+            DS2PvpDebug::QuickMatchModeName(Request->mode()),
+            (long long)Request->player_id(),
+            HostClient ? 1 : 0,
+            (long long)Request->online_area_id(),
+            (long long)Request->cell_id());
+
         DS2_Frpg2RequestMessage::PushRequestRejectQuickMatch PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectQuickMatch);
         PushMessage.set_player_id(Request->player_id());
@@ -347,9 +404,19 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestRejectQuickMatch(GameCl
 
     DS2_Frpg2RequestMessage::RequestRejectQuickMatch* Request = (DS2_Frpg2RequestMessage::RequestRejectQuickMatch*)Message.Protobuf.get();
 
-    if (std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(Request->player_id()))
+    std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());
+    if (TargetClient)
     {
         LogS(Client->GetName().c_str(), "RequestRejectQuickMatch: Rejecting join request from %s", TargetClient->GetName().c_str());
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchRejectRequest",
+            "mode=%s target_profile_id=%u target_steam_id_masked=%s target_character_id=%d request_area_id=%lld cell_id=%lld reason=%lld",
+            DS2PvpDebug::QuickMatchModeName(Request->mode()),
+            TargetClient->GetPlayerState().GetPlayerId(),
+            DS2PvpDebug::MaskIdentifier(TargetClient->GetPlayerState().GetSteamId()).c_str(),
+            TargetClient->GetPlayerState().GetCharacterId(),
+            (long long)Request->online_area_id(),
+            (long long)Request->cell_id(),
+            (long long)Request->unknown_5());
 
         DS2_Frpg2RequestMessage::PushRequestRejectQuickMatch PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectQuickMatch);
@@ -364,6 +431,16 @@ MessageHandleResult DS2_QuickMatchManager::Handle_RequestRejectQuickMatch(GameCl
         {
             WarningS(Client->GetName().c_str(), "Failed to send PushRequestRejectQuickMatch to target of quick match join.");
         }
+    }
+    else
+    {
+        DS2PvpDebug::LogEvent(ServerInstance, Client, "QuickMatchRejectRequest",
+            "mode=%s target_profile_id=%lld target_found=0 request_area_id=%lld cell_id=%lld reason=%lld",
+            DS2PvpDebug::QuickMatchModeName(Request->mode()),
+            (long long)Request->player_id(),
+            (long long)Request->online_area_id(),
+            (long long)Request->cell_id(),
+            (long long)Request->unknown_5());
     }
 
     DS2_Frpg2RequestMessage::RequestRejectQuickMatchResponse Response;

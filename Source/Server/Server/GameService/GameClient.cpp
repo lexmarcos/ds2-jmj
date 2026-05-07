@@ -14,6 +14,7 @@
 #include "Server/Streams/Frpg2ReliableUdpMessage.h"
 
 #include "Server/Server.h"
+#include "Server.DarkSouls2/Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Platform/Platform.h"
 
@@ -44,6 +45,8 @@ bool GameClient::Poll()
     if (DisconnectTime > 0.0 && GetSeconds() > DisconnectTime)
     {
         WarningS(GetName().c_str(), "Disconnecting client (due to flagged delayed disconnect).");
+        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
+            "reason=delayed_disconnect connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
@@ -51,11 +54,15 @@ bool GameClient::Poll()
     if (Connection->Pump())
     {
         WarningS(GetName().c_str(), "Disconnecting client as connection was in an error state.");
+        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
+            "reason=connection_error connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
     if (!Connection->IsConnected())
     {
         LogS(GetName().c_str(), "Client disconnected.");
+        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
+            "reason=connection_closed connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
@@ -63,6 +70,8 @@ bool GameClient::Poll()
     if (MessageStream->Pump())
     {
         WarningS(GetName().c_str(), "Disconnecting client as message stream closed.");
+        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
+            "reason=message_stream_closed connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
@@ -75,6 +84,10 @@ bool GameClient::Poll()
             if (BuildConfig::DISCONNECT_ON_UNHANDLED_MESSAGE)
             {
                 WarningS(GetName().c_str(), "Disconnecting client as failed to handle message.");
+                DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
+                    "reason=unhandled_message message_type=%s connection_duration=%.3f",
+                    Message.Protobuf ? Message.Protobuf->GetTypeName().c_str() : "Unknown",
+                    GetConnectionDuration());
                 return true;
             }
             else
@@ -95,6 +108,11 @@ bool GameClient::Poll()
     if (TimeSinceLastMessage >= BuildConfig::CLIENT_TIMEOUT)
     {
         WarningS(GetName().c_str(), "Client timed out.");
+        DS2PvpDebug::LogEvent(Service->GetServer(), this, "ClientTimeout",
+            "time_since_last_message=%.3f timeout=%.3f connection_duration=%.3f",
+            TimeSinceLastMessage,
+            BuildConfig::CLIENT_TIMEOUT,
+            GetConnectionDuration());
         return true;
     }
 
