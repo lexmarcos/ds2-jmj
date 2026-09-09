@@ -27,7 +27,7 @@ pub const WRAPPER_SCRIPT: &str = "ds2os-launch.sh";
 pub enum LaunchError {
     #[error("Steam has not created a Proton prefix yet; run the game once through Steam first")]
     NoPrefix,
-    #[error("{INJECTOR_DLL} is missing from {0}")]
+    #[error("{0} is missing; build it and point the loader at its directory")]
     MissingInjector(PathBuf),
     #[error("failed to write {path}: {source}")]
     Write { path: PathBuf, source: std::io::Error },
@@ -57,17 +57,15 @@ pub fn prepare(
         return Err(LaunchError::NoPrefix);
     }
 
-    let dll_source = injector_source.join(INJECTOR_DLL);
-    if !dll_source.is_file() {
-        return Err(LaunchError::MissingInjector(dll_source));
-    }
-
+    // Both are required: the exe performs the injection and the dll is what it
+    // injects. Neither is useful alone.
     let game_dir = &install.install_dir;
-    copy_into(&dll_source, &game_dir.join(INJECTOR_DLL))?;
-
-    let exe_source = injector_source.join(INJECTOR_EXE);
-    if exe_source.is_file() {
-        copy_into(&exe_source, &game_dir.join(INJECTOR_EXE))?;
+    for name in [INJECTOR_DLL, INJECTOR_EXE] {
+        let source = injector_source.join(name);
+        if !source.is_file() {
+            return Err(LaunchError::MissingInjector(source));
+        }
+        copy_into(&source, &game_dir.join(name))?;
     }
 
     let injector_config_path = config
