@@ -46,6 +46,10 @@ pub struct LoaderSettings {
     /// Removes the roughly 12 minute PvP session limit. Dark Souls II only.
     pub patch_phantom_timers: bool,
     pub phantom_timer_seconds: f64,
+    /// Directory holding the Windows-built Injector.dll and Injector.exe.
+    /// Defaults to the directory the loader itself runs from.
+    #[serde(default)]
+    pub injector_dir: Option<PathBuf>,
 }
 
 impl Default for LoaderSettings {
@@ -55,6 +59,7 @@ impl Default for LoaderSettings {
             separate_saves: true,
             patch_phantom_timers: false,
             phantom_timer_seconds: 4000.0,
+            injector_dir: None,
         }
     }
 }
@@ -102,6 +107,12 @@ impl LoaderSettings {
             DS2PhantomTimerSeconds: self.phantom_timer_seconds,
         }
     }
+}
+
+/// Servers the user typed in by hand, which the master server knows nothing
+/// about.
+pub fn manual_servers_path() -> PathBuf {
+    settings_path().with_file_name("servers.json")
 }
 
 /// Where the loader keeps its own settings, following the XDG base directory

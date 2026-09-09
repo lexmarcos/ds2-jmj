@@ -5,9 +5,11 @@
 
 pub mod config;
 pub mod launch;
+pub mod master;
 pub mod steam;
 pub mod vdf;
 
 pub use config::{InjectorConfig, LoaderSettings};
+pub use master::{MasterClient, MasterError, ServerEntry};
 pub use launch::{prepare, LaunchError, LaunchPlan};
 pub use steam::{GameDetection, GameInstall, GameType, Steam, SteamError};

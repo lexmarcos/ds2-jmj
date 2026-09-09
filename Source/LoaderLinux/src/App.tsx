@@ -6,12 +6,20 @@ import {
   Status,
   TabPanel,
   Tabs,
+  TextField,
   Tooltip,
   TooltipProvider,
 } from '@/components'
+import { ImportServerDialog } from '@/features/servers/ImportServerDialog'
 import { ServerList } from '@/features/servers/ServerList'
 import { SettingsPanel } from '@/features/settings/SettingsPanel'
-import { api, type GameDetection, type LaunchPlan, type LoaderSettings, type ServerEntry } from '@/lib/api'
+import {
+  api,
+  type GameDetection,
+  type LaunchPlan,
+  type LoaderSettings,
+  type ServerEntry,
+} from '@/lib/api'
 
 type Section = 'servers' | 'settings'
 
@@ -25,6 +33,7 @@ const DEFAULT_SETTINGS: LoaderSettings = {
   separateSaves: true,
   patchPhantomTimers: false,
   phantomTimerSeconds: 4000,
+  injectorDir: null,
 }
 
 export function App() {
@@ -36,6 +45,8 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [plan, setPlan] = useState<LaunchPlan | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [password, setPassword] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -69,12 +80,42 @@ export function App() {
     void api.saveSettings(next)
   }, [])
 
-  const launch = useCallback(async () => {
-    if (!selectedId) return
-    const result = await api.prepareLaunch(selectedId)
-    if (result.ok) setPlan(result.value)
-    else setListError(result.error)
-  }, [selectedId])
+  const selected = servers.find((server) => server.id === selectedId) ?? null
+
+  const launch = useCallback(
+    async (withPassword?: string) => {
+      if (!selectedId) return
+      const result = await api.prepareLaunch(selectedId, withPassword)
+      if (result.ok) {
+        setPlan(result.value)
+        setPassword(null)
+      } else {
+        setListError(result.error)
+      }
+    },
+    [selectedId],
+  )
+
+  const startLaunch = useCallback(() => {
+    // A passworded server withholds its key, so ask before the backend has to
+    // fail for the want of one.
+    if (selected?.passwordRequired && selected.publicKey.trim() === '') {
+      setPassword('')
+      return
+    }
+    void launch()
+  }, [launch, selected])
+
+  const importServer = useCallback(async (server: ServerEntry): Promise<string | null> => {
+    const result = await api.importServer(server)
+    if (!result.ok) return result.error
+    setServers((current) => [
+      ...result.value,
+      ...current.filter((entry) => !entry.manualImport),
+    ])
+    setListError(null)
+    return null
+  }, [])
 
   const ready = detection?.installDir != null && detection.prefixPath != null
 
@@ -95,7 +136,7 @@ export function App() {
               servers={servers}
               selectedId={selectedId}
               onSelect={setSelectedId}
-              onImport={() => setSection('settings')}
+              onImport={() => setImporting(true)}
               loading={loading}
               error={listError}
             />
@@ -106,8 +147,41 @@ export function App() {
         </Tabs>
 
         <Rule />
-        <LaunchBar detection={detection} ready={ready} canLaunch={selectedId !== null} onLaunch={launch} />
+        <LaunchBar
+          detection={detection}
+          ready={ready}
+          canLaunch={selected !== null}
+          onLaunch={startLaunch}
+        />
       </div>
+
+      <ImportServerDialog open={importing} onOpenChange={setImporting} onImport={importServer} />
+
+      <Dialog
+        open={password !== null}
+        onOpenChange={(open) => {
+          if (!open) setPassword(null)
+        }}
+        title="Senha do servidor"
+        description="Este servidor só entrega a chave pública com a senha correta."
+        actions={
+          <>
+            <Button variant="quiet" onClick={() => setPassword(null)}>
+              Cancelar
+            </Button>
+            <Button variant="primary" onClick={() => void launch(password ?? '')}>
+              Continuar
+            </Button>
+          </>
+        }
+      >
+        <TextField
+          label="Senha"
+          value={password ?? ''}
+          onValueChange={setPassword}
+          placeholder="Senha combinada com quem hospeda"
+        />
+      </Dialog>
 
       <Dialog
         open={plan !== null}

@@ -2,15 +2,23 @@ import { invoke } from '@tauri-apps/api/core'
 
 export type GameType = 'DarkSouls2' | 'DarkSouls3'
 
+/**
+ * Mirrors `ServerEntry` in `crates/ds2os-core/src/master.rs`. Change the two
+ * together. `gameType` is a plain string because the master server is free to
+ * send anything.
+ */
 export interface ServerEntry {
   id: string
   name: string
   description: string
   hostname: string
+  privateHostname: string
+  ipAddress: string
   port: number
+  publicKey: string
   playerCount: number
-  gameType: GameType
   passwordRequired: boolean
+  gameType: string
   manualImport: boolean
 }
 
@@ -18,11 +26,8 @@ export interface ServerEntry {
 export interface GameDetection {
   appId: number
   gameType: GameType
-  /** Steam library path holding the game, if it is installed. */
   installDir: string | null
-  /** Proton prefix (compatdata/<appid>/pfx), if Steam has created one. */
   prefixPath: string | null
-  /** Proton build Steam is configured to use, if it can be determined. */
   protonName: string | null
 }
 
@@ -31,10 +36,11 @@ export interface LoaderSettings {
   separateSaves: boolean
   patchPhantomTimers: boolean
   phantomTimerSeconds: number
+  injectorDir: string | null
 }
 
 export interface LaunchPlan {
-  /** Wrapper script the user pastes into the game's Steam launch options. */
+  /** Wrapper script line the user pastes into the game's Steam launch options. */
   launchOptions: string
   scriptPath: string
   injectorConfigPath: string
@@ -48,7 +54,7 @@ export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<Result<T>> {
   try {
-    return { ok: true, value: (await invoke<T>(command, args)) }
+    return { ok: true, value: await invoke<T>(command, args) }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -57,7 +63,28 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   detectGame: (gameType: GameType) => call<GameDetection>('detect_game', { gameType }),
   listServers: () => call<ServerEntry[]>('list_servers'),
+  importServer: (server: ServerEntry) => call<ServerEntry[]>('import_server', { server }),
+  forgetServer: (serverId: string) => call<ServerEntry[]>('forget_server', { serverId }),
   loadSettings: () => call<LoaderSettings>('load_settings'),
   saveSettings: (settings: LoaderSettings) => call<void>('save_settings', { settings }),
-  prepareLaunch: (serverId: string) => call<LaunchPlan>('prepare_launch', { serverId }),
+  prepareLaunch: (serverId: string, password?: string) =>
+    call<LaunchPlan>('prepare_launch', { serverId, password: password ?? null }),
+}
+
+/** A blank server, ready for the import form to fill in. */
+export function emptyServer(): ServerEntry {
+  return {
+    id: '',
+    name: '',
+    description: '',
+    hostname: '',
+    privateHostname: '',
+    ipAddress: '',
+    port: 50050,
+    publicKey: '',
+    playerCount: 0,
+    passwordRequired: false,
+    gameType: 'DarkSouls2',
+    manualImport: true,
+  }
 }
