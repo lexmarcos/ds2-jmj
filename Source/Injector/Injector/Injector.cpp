@@ -52,9 +52,6 @@ Injector& Injector::Instance()
 Injector::Injector()
 {
     s_instance = this;
-
-    Hooks.push_back(std::make_unique<ReplaceServerAddressHook>());
-    Hooks.push_back(std::make_unique<ChangeSaveGameFilenameHook>());    
 }
 
 Injector::~Injector()
