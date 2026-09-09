@@ -44,6 +44,19 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
 
         <Rule strong />
 
+        <Group title="Injector">
+          <TextField
+            label="Pasta do injector"
+            mono
+            value={settings.injectorDir ?? ''}
+            onValueChange={(value) => patch({ injectorDir: value.trim() === '' ? null : value })}
+            placeholder="/home/você/Downloads/injector"
+            description="Onde estão Injector.dll e Injector.exe. Baixe-os do artefato do workflow Injector for Linux. Vazio usa a pasta do próprio loader."
+          />
+        </Group>
+
+        <Rule strong />
+
         <Group title="Rede">
           <TextField
             label="Master server"
