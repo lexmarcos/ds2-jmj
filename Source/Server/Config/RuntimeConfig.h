@@ -311,6 +311,12 @@ public:
     // that is supplied by the client.
     bool IgnoreInvasionAreaFilter = false;
 
+    // If enabled, a steam id that is already signed in gets a separate player
+    // profile instead of being refused, so one account can hold several
+    // sessions at once. This exists to test PvP with a single copy of the game;
+    // leave it off on a server real people use.
+    bool AllowDuplicateSteamIds = false;
+
     // If enabled DS2 RequestGetRightMatchingArea responses include the
     // requester's current area even when no other compatible client is there.
     // Without this the client hides the area on a low population server.
