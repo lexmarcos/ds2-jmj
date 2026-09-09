@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Dialog, NumberField, Select, TextField } from '@/components'
+import { Button, Dialog, NumberField, Select, TextArea, TextField } from '@/components'
 import { emptyServer, type GameType, type ServerEntry } from '@/lib/api'
 
 const GAMES = [
@@ -89,13 +89,14 @@ export function ImportServerDialog({ open, onOpenChange, onImport }: ImportServe
             options={GAMES}
           />
         </div>
-        <TextField
+        <TextArea
           label="Chave pública"
           mono
+          rows={7}
           value={draft.publicKey}
           onValueChange={(publicKey) => patch({ publicKey })}
           placeholder="-----BEGIN RSA PUBLIC KEY-----"
-          description="Cole o conteúdo do arquivo de chave do servidor."
+          description="Cole o conteúdo do arquivo public.key do servidor, com as quebras de linha."
           {...(error ? { error } : {})}
         />
       </div>

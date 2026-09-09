@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use ds2os_core::config::{self, LoaderSettings};
 use ds2os_core::master::MasterClient;
 use ds2os_core::steam::{GameDetection, GameType};
+use ds2os_core::pem::normalize_public_key;
 use ds2os_core::{launch, LaunchPlan, ServerEntry, Steam};
 
 /// Errors reach the frontend as strings because the user reads them, so each
@@ -77,8 +78,11 @@ fn import_server(mut server: ServerEntry) -> CommandResult<Vec<ServerEntry>> {
     if server.hostname.trim().is_empty() {
         return Err("Informe o endereço do servidor.".to_owned());
     }
-    if !server.public_key.contains("BEGIN RSA PUBLIC KEY") {
-        return Err("A chave pública precisa ser uma chave RSA.".to_owned());
+    // The server compares the key byte for byte, so a stray line ending or a
+    // missing final newline is enough to have the login dropped in silence.
+    match normalize_public_key(&server.public_key) {
+        Some(key) => server.public_key = key,
+        None => return Err("A chave pública precisa ser uma chave RSA completa.".to_owned()),
     }
 
     server.manual_import = true;
@@ -136,6 +140,11 @@ async fn prepare_launch(server_id: String, password: Option<String>) -> CommandR
         if server.public_key.trim().is_empty() {
             return Err("O servidor não forneceu uma chave pública.".to_owned());
         }
+
+        // Keys from the master server go through the same normalisation, since
+        // they travel as JSON and can arrive with the wrong line endings.
+        server.public_key = normalize_public_key(&server.public_key)
+            .ok_or_else(|| "A chave pública do servidor é inválida.".to_owned())?;
 
         let game_type = if server.is(GameType::DarkSouls3) {
             GameType::DarkSouls3
