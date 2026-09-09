@@ -60,7 +60,13 @@ export function App() {
       if (cancelled) return
 
       if (serverResult.ok) {
-        setServers(serverResult.value)
+        const playable = serverResult.value.filter(
+          (server) => server.gameType.toLowerCase() === 'darksouls2',
+        )
+        setServers(playable)
+        // Select something straight away: the interface has exactly one warm
+        // light and it should be lit when the window opens.
+        setSelectedId((current) => current ?? playable[0]?.id ?? null)
         setListError(null)
       } else {
         setListError(serverResult.error)

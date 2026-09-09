@@ -19,31 +19,31 @@ export function ServerRow({ server, selected, onSelect }: ServerRowProps) {
       aria-pressed={selected}
       onClick={() => onSelect(server.id)}
       className={cn(
-        'group relative flex w-full items-start gap-4 px-4 py-3 text-left',
+        'group relative flex w-full items-start gap-4 px-4 py-2.5 text-left',
         'transition-colors duration-150 ease-out',
-        selected ? 'bg-ember/8' : 'hover:bg-raised/50',
+        selected ? 'bg-ember/12' : 'hover:bg-raised/50',
       )}
     >
       <span
         aria-hidden
         className={cn(
-          'absolute inset-y-0 left-0 w-0.5 transition-colors duration-150 ease-out',
+          'absolute inset-y-0 left-0 w-[3px] transition-colors duration-150 ease-out',
           selected ? 'bg-ember' : 'bg-transparent group-hover:bg-line-strong',
         )}
       />
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="flex min-w-0 flex-1 flex-col">
         <span
           className={cn(
-            'truncate font-serif text-md',
+            'truncate font-serif text-md leading-snug',
             selected ? 'text-ember-bright' : 'text-bone',
           )}
         >
           {server.name}
         </span>
         {server.description ? (
-          <span className="truncate font-serif text-sm text-bone-dim">{server.description}</span>
+          <span className="truncate font-serif text-sm leading-snug text-bone-dim">{server.description}</span>
         ) : null}
-        <span className="data mt-0.5">
+        <span className="data">
           {server.hostname}:{server.port}
         </span>
       </span>

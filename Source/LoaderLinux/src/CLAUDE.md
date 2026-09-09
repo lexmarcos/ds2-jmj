@@ -161,3 +161,16 @@ The Rust side has its own checks:
 cargo test -p ds2os-core
 cargo run -q -p ds2os-core --example detect   # prints what it finds on this machine
 ```
+
+A green typecheck says nothing about whether the design landed. Run the app and
+look at it:
+
+```bash
+npm run dev &          # Tauri loads the dev server in debug builds
+cargo run -p ds2os-loader
+```
+
+Subtle values do not survive a dark ground. When something is meant to be
+visible and is not, prove which half is wrong before tuning: crank the value to
+an opaque primary and re-run. If it appears, the value was too weak; if it does
+not, the selector or the stacking order is.
