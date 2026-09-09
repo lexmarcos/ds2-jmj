@@ -148,14 +148,14 @@ namespace Loader
 
         private bool ShouldShowServer(ServerConfig Config)
         {
-            if (Config.ManualImport)
-            {
-                return true;
-            }            
-            
             if (Config.GameType != CurrentGameType.ToString())
             {
                 return false;
+            }
+
+            if (Config.ManualImport)
+            {
+                return true;
             }
 
             string filter = filterBox.Text.ToLower();

@@ -538,6 +538,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
     int MaxAreaPopulation = 1;
 
     int SoulMemory = Client->GetPlayerState().GetSoulMemory();
+    DS2_OnlineAreaId CurrentArea = Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentArea();
 
     for (std::shared_ptr<GameClient>& OtherClient : GameServiceInstance->GetClients())
     {
@@ -565,6 +566,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
             {
                 PotentialAreas.emplace(OtherArea, 1);
             }
+        }
+    }
+
+    // On a low population server the requester is often the only compatible player
+    // in their own area, and the client hides an area it sees no population for.
+    if (Config.DS2IncludeCurrentAreaInRightMatchingArea && CurrentArea != DS2_OnlineAreaId::None)
+    {
+        if (auto Iter = PotentialAreas.find(CurrentArea); Iter == PotentialAreas.end())
+        {
+            PotentialAreas.emplace(CurrentArea, 1);
         }
     }
 
