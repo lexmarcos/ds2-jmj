@@ -686,6 +686,11 @@ namespace Loader
                 injectConfig.ServerGameType = Config.GameType;
                 injectConfig.EnableSeperateSaveFiles = ProgramSettings.Default.use_seperate_saves;
 
+                // The phantom timer patch is DS2-only; never let it leak into a DS3 session.
+                bool IsDarkSouls2 = Config.GameType == GameType.DarkSouls2.ToString();
+                injectConfig.DS2PatchPhantomTimers = IsDarkSouls2 && ProgramSettings.Default.ds2_patch_phantom_timers;
+                injectConfig.DS2PhantomTimerSeconds = ProgramSettings.Default.ds2_phantom_timer_seconds;
+
                 string json = injectConfig.ToJson();
                 File.WriteAllText(InjectorConfigPath, json);
 

@@ -28,6 +28,8 @@ namespace Loader
         public string ServerGameType        { get; set; }
         public int ServerPort               { get; set; }
         public bool EnableSeperateSaveFiles { get; set; }
+        public bool DS2PatchPhantomTimers   { get; set; }
+        public double DS2PhantomTimerSeconds { get; set; } = 4000.0;
 
         public string ToJson()
         {
