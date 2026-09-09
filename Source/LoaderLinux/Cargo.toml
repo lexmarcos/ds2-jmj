@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ds2os-core", "src-tauri"]
+members = ["crates/ds2os-core", "crates/ds2os-dev", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
@@ -13,3 +13,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 ureq = { version = "3", features = ["json"] }
+clap = { version = "4", features = ["derive"] }
