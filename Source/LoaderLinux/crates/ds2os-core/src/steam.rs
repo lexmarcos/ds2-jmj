@@ -212,3 +212,36 @@ fn collect_dirs(parent: &Path, prefix: &str, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// What the UI needs to know about one game. This is the shape the frontend
+/// consumes, so "not installed" is expressed as null fields rather than as an
+/// absent object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameDetection {
+    pub app_id: u32,
+    pub game_type: GameType,
+    pub install_dir: Option<PathBuf>,
+    pub prefix_path: Option<PathBuf>,
+    pub proton_name: Option<String>,
+}
+
+impl GameDetection {
+    /// Reports what Steam has for `game_type`, including the "nothing" case.
+    pub fn probe(steam: &Steam, game_type: GameType) -> Self {
+        let install = steam.find_game(game_type);
+        let proton_name = steam
+            .proton_builds()
+            .last()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+
+        Self {
+            app_id: game_type.app_id(),
+            game_type,
+            install_dir: install.as_ref().map(|game| game.install_dir.clone()),
+            prefix_path: install.and_then(|game| game.prefix_path),
+            proton_name,
+        }
+    }
+}

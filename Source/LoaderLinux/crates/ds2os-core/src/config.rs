@@ -103,3 +103,15 @@ impl LoaderSettings {
         }
     }
 }
+
+/// Where the loader keeps its own settings, following the XDG base directory
+/// spec so it lands in ~/.config/ds2os/settings.json by default.
+pub fn settings_path() -> PathBuf {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
+
+    base.join("ds2os/settings.json")
+}

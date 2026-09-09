@@ -10,4 +10,4 @@ pub mod vdf;
 
 pub use config::{InjectorConfig, LoaderSettings};
 pub use launch::{prepare, LaunchError, LaunchPlan};
-pub use steam::{GameInstall, GameType, Steam, SteamError};
+pub use steam::{GameDetection, GameInstall, GameType, Steam, SteamError};
