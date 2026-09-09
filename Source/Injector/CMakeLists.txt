@@ -31,6 +31,17 @@ SET(SOURCES
  
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${PLATFORM_SOURCES})
 
+foreach(config ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${config} config_upper)
+    set(injector_output "${CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper}}/loader")
+
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+        PDB_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+        COMPILE_PDB_OUTPUT_DIRECTORY_${config_upper} "${injector_output}"
+    )
+endforeach()
+
 target_include_directories(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../")
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE -D_CRT_SECURE_NO_WARNINGS -D_WINSOCK_DEPRECATED_NO_WARNINGS -D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
