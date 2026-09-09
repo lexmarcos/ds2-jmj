@@ -41,6 +41,7 @@ namespace Loader
         System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
         System.Windows.Forms.ListViewItem listViewItem1 = new System.Windows.Forms.ListViewItem(new string[] { "Name", "Players", "Description" }, 0);
         ImportButton = new System.Windows.Forms.Button();
+        ImportServerButton = new System.Windows.Forms.Button();
         serverListImageList = new System.Windows.Forms.ImageList(components);
         LaunchButton = new System.Windows.Forms.Button();
         ExePathLabel = new System.Windows.Forms.Label();
@@ -92,6 +93,20 @@ namespace Loader
         ImportButton.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
         ImportButton.UseVisualStyleBackColor = true;
         ImportButton.Click += OnCreateNewServer;
+        // 
+        // ImportServerButton
+        // 
+        ImportServerButton.ImageKey = "add.png";
+        ImportServerButton.ImageList = serverListImageList;
+        ImportServerButton.Location = new System.Drawing.Point(320, 201);
+        ImportServerButton.Name = "ImportServerButton";
+        ImportServerButton.Size = new System.Drawing.Size(142, 25);
+        ImportServerButton.TabIndex = 29;
+        ImportServerButton.Text = "Import Server";
+        ImportServerButton.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
+        ImportServerButton.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
+        ImportServerButton.UseVisualStyleBackColor = true;
+        ImportServerButton.Click += OnImportServer;
         // 
         // serverListImageList
         // 
@@ -447,6 +462,7 @@ namespace Loader
         ClientSize = new System.Drawing.Size(934, 458);
         Controls.Add(panel3);
         Controls.Add(gameTabControl);
+        Controls.Add(ImportServerButton);
         Controls.Add(SettingsButton);
         Controls.Add(panel2);
         Controls.Add(filterBox);
@@ -483,6 +499,7 @@ namespace Loader
 
         #endregion
         private System.Windows.Forms.Button ImportButton;
+        private System.Windows.Forms.Button ImportServerButton;
         private System.Windows.Forms.Button LaunchButton;
         private System.Windows.Forms.Label ExePathLabel;
         private System.Windows.Forms.TextBox ExeLocationTextBox;

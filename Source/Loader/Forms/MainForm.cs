@@ -355,6 +355,65 @@ namespace Loader
             }
         }
 
+        private void OnImportServer(object sender, EventArgs e)
+        {
+            using (Forms.ImportServerDialog Dialog = new Forms.ImportServerDialog(CurrentGameType))
+            {
+                if (Dialog.ShowDialog(this) != DialogResult.OK)
+                {
+                    return;
+                }
+
+                ServerConfig ImportedConfig = Dialog.ImportedServer;
+                ServerConfig ExistingConfig = null;
+
+                // Re-importing the same endpoint should update it in place rather than
+                // leaving a duplicate entry behind.
+                foreach (ServerConfig Config in ServerList.Servers)
+                {
+                    if (Config.ManualImport &&
+                        string.Equals(Config.Hostname, ImportedConfig.Hostname, StringComparison.OrdinalIgnoreCase) &&
+                        Config.Port == ImportedConfig.Port &&
+                        string.Equals(Config.GameType, ImportedConfig.GameType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ExistingConfig = Config;
+                        break;
+                    }
+                }
+
+                if (ExistingConfig != null)
+                {
+                    ImportedConfig.Id = ExistingConfig.Id;
+                    ServerList.Servers.Remove(ExistingConfig);
+                }
+
+                ServerList.Servers.Insert(0, ImportedConfig);
+
+                SaveConfig();
+                BuildServerList();
+                SelectServerById(ImportedConfig.Id);
+                ValidateUI();
+            }
+        }
+
+        private void SelectServerById(string Id)
+        {
+            ImportedServerListView.SelectedItems.Clear();
+
+            foreach (ListViewItem Item in ImportedServerListView.Items)
+            {
+                ServerConfig Config = Item.Tag as ServerConfig;
+                if (Config != null && Config.Id == Id)
+                {
+                    Item.Selected = true;
+                    Item.Focused = true;
+                    Item.EnsureVisible();
+                    CurrentServerConfig = Config;
+                    break;
+                }
+            }
+        }
+
         private ServerConfig CurrentServerConfig;
 
         private void OnSelectedServerChanged(object sender, EventArgs e)
