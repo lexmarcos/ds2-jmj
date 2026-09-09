@@ -23,6 +23,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.cpp
     Hooks/DarkSouls2/DS2_LogProtobufsHook.h
     Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h
+    Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h

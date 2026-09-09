@@ -36,6 +36,13 @@ public:
     // If we should use seperate saves from the retail ones.
     bool EnableSeperateSaveFiles = true;
 
+    // DS2-only: patch the client-side phantom session timer so PvP sessions are
+    // not ended by it. Disabled by default.
+    bool DS2PatchPhantomTimers = false;
+
+    // Value written to the active session timer when the patch is enabled.
+    double DS2PhantomTimerSeconds = 4000.0;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

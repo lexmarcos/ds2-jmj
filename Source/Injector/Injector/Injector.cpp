@@ -22,6 +22,7 @@
 #include "Injector/Hooks/DarkSouls3/DS3_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -151,6 +152,11 @@ bool Injector::Init()
 #ifdef _DEBUG
             Hooks.push_back(std::make_unique<DS2_LogProtobufsHook>());
 #endif
+
+            if (Config.DS2PatchPhantomTimers)
+            {
+                Hooks.push_back(std::make_unique<DS2_PhantomTimerParamPatchHook>());
+            }
             break;
         }
     }
@@ -197,7 +203,8 @@ bool Injector::Term()
     Log("Uninstalling hooks ...");
     for (auto& hook : InstalledHooks)
     {
-        Error("\t%s", hook->GetName());
+        Log("\t%s", hook->GetName());
+        hook->Uninstall();
     }
     InstalledHooks.clear();
 
