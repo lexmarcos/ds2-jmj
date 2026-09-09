@@ -60,9 +60,24 @@ pub struct GameInstall {
 }
 
 impl GameInstall {
-    /// Full path to the game executable.
-    pub fn executable(&self) -> PathBuf {
-        self.install_dir.join(self.game_type.executable())
+    /// Full path to the game executable, if it can be found.
+    ///
+    /// Scholar of the First Sin keeps DarkSoulsII.exe under a `Game`
+    /// subdirectory rather than at the root of the install, so this looks one
+    /// level down rather than assuming either layout.
+    pub fn executable(&self) -> Option<PathBuf> {
+        let name = self.game_type.executable();
+
+        let at_root = self.install_dir.join(name);
+        if at_root.is_file() {
+            return Some(at_root);
+        }
+
+        let entries = std::fs::read_dir(&self.install_dir).ok()?;
+        entries
+            .flatten()
+            .map(|entry| entry.path().join(name))
+            .find(|candidate| candidate.is_file())
     }
 
     /// `drive_c` inside the Proton prefix, where Windows-side files belong.

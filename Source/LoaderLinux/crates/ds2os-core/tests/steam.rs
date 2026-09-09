@@ -29,6 +29,10 @@ fn game_lookup_is_consistent() {
         };
         assert_eq!(install.app_id, game_type.app_id());
         assert!(install.install_dir.is_dir());
+        if let Some(exe) = install.executable() {
+            assert!(exe.is_file());
+            assert!(exe.starts_with(&install.install_dir));
+        }
         if let Some(prefix) = &install.prefix_path {
             assert!(prefix.join("drive_c").is_dir(), "a prefix always has drive_c");
         }

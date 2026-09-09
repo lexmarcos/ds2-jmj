@@ -34,7 +34,10 @@ fn main() {
             None => println!("not installed"),
             Some(install) => {
                 println!("{}", install.install_dir.display());
-                println!("  exe     {}", install.executable().display());
+                match install.executable() {
+                    Some(exe) => println!("  exe     {}", exe.display()),
+                    None => println!("  exe     not found under the install directory"),
+                }
                 match install.prefix_path {
                     Some(prefix) => println!("  prefix  {}", prefix.display()),
                     None => println!("  prefix  none yet; run the game once through Steam"),
