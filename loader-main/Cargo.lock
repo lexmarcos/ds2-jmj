@@ -86,6 +86,7 @@ dependencies = [
  "ds2os-core",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
