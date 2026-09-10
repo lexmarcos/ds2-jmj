@@ -29,7 +29,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <tlhelp32.h>
 #endif
 
 namespace
@@ -106,13 +105,10 @@ namespace
 
     // ---- phase two: who reads the address we found --------------------------
     //
-    // A hardware watchpoint, the same thing Cheat Engine's "find what accesses
-    // this address" uses: the processor's debug registers fault on any access
-    // to four bytes, without touching the code around them.
+    // A guard page: the page holding the address is marked PAGE_GUARD, so any
+    // access to it faults once and reports the exact address touched. Wine
+    // accepts debug registers and never fires them, but implements this.
 
-    constexpr DWORD64 kDr7EnableDr0 = 1ull;              // L0
-    constexpr DWORD64 kDr7ReadWrite = 0b11ull << 16;     // RW0: data read or write
-    constexpr DWORD64 kDr7FourBytes = 0b11ull << 18;     // LEN0: four bytes
 
     struct Access
     {
@@ -127,116 +123,88 @@ namespace
     // Counters so silence can be told apart from a handler that never runs.
     std::atomic_uint64_t s_exceptions_seen{0};
     std::atomic_uint64_t s_single_steps{0};
-    std::atomic_uint64_t s_dr6_matched{0};
-    std::atomic_uint64_t s_dr6_empty{0};
+    std::atomic_uint64_t s_guard_hits{0};
+    std::atomic_bool s_rearm_pending{false};
     std::atomic_uintptr_t s_watched{0};
     PVOID s_watch_handler = nullptr;
     uintptr_t s_module_base = 0;
+
+    constexpr DWORD64 kTrapFlag = 0x100;
+
+    /// Re-applies PAGE_GUARD to the page holding the watched address.
+    ///
+    /// The guard is one-shot: the processor clears it as it delivers the fault,
+    /// so it has to be put back after every hit.
+    bool ArmGuardPage(uintptr_t Address)
+    {
+        MEMORY_BASIC_INFORMATION Info = {};
+        if (VirtualQuery((void*)Address, &Info, sizeof(Info)) != sizeof(Info))
+        {
+            return false;
+        }
+        if (Info.State != MEM_COMMIT || (Info.Protect & PAGE_GUARD) != 0)
+        {
+            return false;
+        }
+
+        DWORD Previous = 0;
+        return VirtualProtect(Info.BaseAddress, Info.RegionSize, Info.Protect | PAGE_GUARD, &Previous) != 0;
+    }
 
     LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* Exception)
     {
         s_exceptions_seen++;
 
-        if (Exception->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
-        {
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-        if (s_watched.load() == 0)
+        const uintptr_t Watched = s_watched.load();
+        if (Watched == 0)
         {
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
-        s_single_steps++;
         CONTEXT* Context = Exception->ContextRecord;
+        const DWORD Code = Exception->ExceptionRecord->ExceptionCode;
 
-        // Bit 0 of Dr6 says our watchpoint is the one that fired. Wine does not
-        // always fill Dr6 in, so an empty one is counted and taken as ours
-        // rather than dropped: with the trap flag unused here, a single step we
-        // did not ask for has nowhere else to come from.
-        if ((Context->Dr6 & 0x1ull) != 0)
+        if (Code == STATUS_GUARD_PAGE_VIOLATION)
         {
-            s_dr6_matched++;
-        }
-        else if (Context->Dr6 == 0)
-        {
-            s_dr6_empty++;
-        }
-        else
-        {
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-        Context->Dr6 = 0;
+            s_guard_hits++;
 
-        const uintptr_t Rip = (uintptr_t)Context->Rip;
-        const double Now = GetSeconds();
-        {
-            std::scoped_lock lock(s_access_mutex);
-            auto& Entry = s_accesses[Rip];
-            if (Entry.Count == 0)
+            // The record carries the address the instruction actually touched,
+            // which is what separates our four bytes from the rest of the page.
+            const uintptr_t Touched =
+                Exception->ExceptionRecord->NumberParameters >= 2
+                    ? (uintptr_t)Exception->ExceptionRecord->ExceptionInformation[1]
+                    : 0;
+
+            if (Touched >= Watched && Touched < Watched + sizeof(uint32_t))
             {
-                Entry.FirstSeen = Now;
+                const uintptr_t Rip = (uintptr_t)Context->Rip;
+                const double Now = GetSeconds();
+                std::scoped_lock lock(s_access_mutex);
+                auto& Entry = s_accesses[Rip];
+                if (Entry.Count == 0)
+                {
+                    Entry.FirstSeen = Now;
+                }
+                Entry.Count++;
+                Entry.LastSeen = Now;
             }
-            Entry.Count++;
-            Entry.LastSeen = Now;
+
+            // The guard is gone now. Step one instruction, then put it back.
+            Context->EFlags |= (DWORD)kTrapFlag;
+            s_rearm_pending.store(true);
+            return EXCEPTION_CONTINUE_EXECUTION;
         }
 
-        return EXCEPTION_CONTINUE_EXECUTION;
-    }
-
-    /// Points DR0 at an address on every thread that currently exists.
-    int ArmAllThreads(uintptr_t Address)
-    {
-        HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if (Snapshot == INVALID_HANDLE_VALUE)
+        if (Code == EXCEPTION_SINGLE_STEP && s_rearm_pending.load())
         {
-            return 0;
+            s_single_steps++;
+            s_rearm_pending.store(false);
+            Context->EFlags &= ~(DWORD)kTrapFlag;
+            ArmGuardPage(Watched);
+            return EXCEPTION_CONTINUE_EXECUTION;
         }
 
-        const DWORD Process = GetCurrentProcessId();
-        const DWORD Self = GetCurrentThreadId();
-        int Armed = 0;
-
-        THREADENTRY32 Entry = {};
-        Entry.dwSize = sizeof(Entry);
-        if (Thread32First(Snapshot, &Entry))
-        {
-            do
-            {
-                if (Entry.th32OwnerProcessID != Process || Entry.th32ThreadID == Self)
-                {
-                    continue;
-                }
-
-                HANDLE Thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME,
-                                           FALSE,
-                                           Entry.th32ThreadID);
-                if (Thread == nullptr)
-                {
-                    continue;
-                }
-
-                SuspendThread(Thread);
-
-                CONTEXT Context = {};
-                Context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-                if (GetThreadContext(Thread, &Context))
-                {
-                    Context.Dr0 = Address;
-                    Context.Dr7 = kDr7EnableDr0 | kDr7ReadWrite | kDr7FourBytes;
-                    Context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-                    if (SetThreadContext(Thread, &Context))
-                    {
-                        Armed++;
-                    }
-                }
-
-                ResumeThread(Thread);
-                CloseHandle(Thread);
-            } while (Thread32Next(Snapshot, &Entry));
-        }
-
-        CloseHandle(Snapshot);
-        return Armed;
+        return EXCEPTION_CONTINUE_SEARCH;
     }
 
     /// Writes the accesses seen so far, rarest first.
@@ -255,12 +223,11 @@ namespace
         // loop is alive, which silence does not.
         Append(StringFormat(
             "time=%.3f event=DS2AreaWatch result=counters exceptions=%llu single_steps=%llu "
-            "dr6_matched=%llu dr6_empty=%llu readers=%zu\n",
+            "guard_hits=%llu readers=%zu\n",
             GetSeconds(),
             (unsigned long long)s_exceptions_seen.load(),
             (unsigned long long)s_single_steps.load(),
-            (unsigned long long)s_dr6_matched.load(),
-            (unsigned long long)s_dr6_empty.load(),
+            (unsigned long long)s_guard_hits.load(),
             Sorted.size()));
 
         if (Sorted.empty())
@@ -462,7 +429,7 @@ namespace
                 // the watchpoint has to be reapplied as the game spawns them.
                 if (Now - LastRearm >= 15.0)
                 {
-                    ArmAllThreads(s_watched.load());
+                    ArmGuardPage(s_watched.load());
                     LastRearm = Now;
                 }
                 if (Now - LastReport >= 15.0)
@@ -559,23 +526,23 @@ namespace
             }
 
             s_watched.store(Best->Address);
-            const int Armed = ArmAllThreads(Best->Address);
+            const int Armed = ArmGuardPage(Best->Address) ? 1 : 0;
             LastRearm = Now;
 
             Append(StringFormat(
-                "time=%.3f event=DS2AreaWatch result=armed address=0x%016llx threads=%d module_base=0x%016llx\n",
+                "time=%.3f event=DS2AreaWatch result=armed address=0x%016llx guard=%d module_base=0x%016llx\n",
                 Now,
                 (unsigned long long)Best->Address,
                 Armed,
                 (unsigned long long)s_module_base));
-            Log("[DS2AreaWatch] observando 0x%016llx em %d thread(s); use o item agora",
+            Log("[DS2AreaWatch] observando 0x%016llx (guard=%d); use o item agora",
                 (unsigned long long)Best->Address,
                 Armed);
 
             if (Armed == 0)
             {
-                Append("    nenhuma thread aceitou o breakpoint de hardware; o Wine pode nao suportar\n");
-                Warning("[DS2AreaWatch] nenhuma thread aceitou o breakpoint; o Wine pode nao suportar");
+                Append("    nao consegui marcar a pagina com PAGE_GUARD\n");
+                Warning("[DS2AreaWatch] nao consegui marcar a pagina com PAGE_GUARD");
             }
         }
 
