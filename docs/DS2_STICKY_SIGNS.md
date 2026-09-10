@@ -453,3 +453,49 @@ client asks for itself. Leave it off. `DS2_InvadeAnywhere` is likewise
 not needed to reach a player in Majula by sign; keep it only for the
 separate goal of invading across areas, which still drops on the
 invader's side.
+
+## The summon: the server is clean, the owner refuses
+
+With the mask fixed, a red sign goes down in Majula and the searcher
+finds it. The summon still fails, and the log now says exactly where:
+
+    12:55:59  Marcos  Sign 1002 created: type 4, area 0x009932c0, cell 0xffc00000
+    12:56:03  Chico   Sign poll ... room for 19, 1 signs cached
+    12:56:08  Chico   Summoning sign 1002, looked up under area 0x009932c0 cell 0xffc00000
+    12:56:08  Marcos  Rejecting summon of sign 1002: error 0
+
+Type 4 is `SignType_RedSoapstone`. The lookup matched on both area and
+cell, so no server-side miss and no need for any sticky fallback. The
+server sent `PushRequestSummonSign` and the **owner's client** answered
+`RequestRejectSign` with error 0, `NoLongerBeSummonable`. A screenshot
+taken at that moment shows the sign still on the owner's ground, so the
+client has not dropped it. It simply refuses to be summoned.
+
+That is a different problem from every one before it. Placing works,
+polling works, delivery works, the summon reaches both ends. What fails
+is the owner agreeing to travel.
+
+### First suspect: our own forced zone
+
+`DS2ForceMultiPlayZone` writes Heide's zone id, 103110, into the map
+block record, so a client in Majula reports and believes it stands in
+Heide's multiplay zone. That was a workaround for the problem the mask
+fix has now solved properly, and it makes the client lie about where it
+is. Agreeing to a summon means reconciling with the host's world, and a
+client that believes it is somewhere it is not is a plausible reason to
+refuse.
+
+It is now off. If the summon succeeds with it off, the workaround was
+the obstacle.
+
+### The control, if it does not
+
+Run the identical test in Heide: owner places a red sign there, searcher
+summons. If that fails the same way, the refusal has nothing to do with
+Majula and the red-sign summon is broken in this setup generally, which
+is a different investigation. If it succeeds, the refusal is specific to
+being summoned out of Majula.
+
+Do not skip this. Invasion was proven to work only because the same
+control was run, and three earlier negatives in this project were
+worthless for want of one.
