@@ -338,3 +338,56 @@ That leaves two ways forward, both client-side:
 
 The second is closer to what already exists and does not need the
 disconnect's cause pinned down first.
+
+## The mask the game tests, and the value the hook was writing
+
+Two places in the game read a byte at `+0x18` of a param row and refuse
+the item when bit 3 is clear:
+
+    1402a5fbb  testb $0x8,0x18(%rax) ; je 1402a6000   summon signs
+    140272222  testb $0x8,0x18(%rax) ; je 1402721a0   invasion orbs
+
+Both branch targets are `xor al,al; ret`. The row comes from a lookup
+keyed on the online area id: `1402503a0` unpacks a byte-packed id into
+the decimal form (`0x0a1f0000` becomes 10310000) and indexes a table at
+`[obj+0xc8]`. Row offset `+0x18` is exactly where the earlier decode put
+`NETWORK_AREA_PARAM`'s bitmask, and bit 3 is `enableMultiPlay` in DS3's
+paramdef for the same layout.
+
+That one bit gating both signs and orbs matches the measurements
+perfectly: both items are refused in Majula, both work in Heide.
+
+**`DS2_UnlockAreaMultiPlayHook` was writing 7, which leaves bit 3
+clear.** Every run of that hook has written a value that cannot satisfy
+the test it exists to satisfy. The constant said 7 because Heide reads 7
+and accepts signs, and because forcing 63 was believed to break Heide.
+That second belief is void: it was measured on a hollow character, and a
+hollow character is refused the soapstone everywhere. It was never
+re-run on a human. The constant is now 63.
+
+### But the predicate did not fire
+
+Breakpoints on `1402a5fbb`, `1402a5fc1`, `1402a6000` and `1402a6012`
+were armed in a live instance and none was reached, either idle or on an
+item press, while `140250e50` armed alongside fired immediately. So the
+tracer worked and that code did not run.
+
+What did run, reached from `+0x50ca69` inside the quick-slot loop:
+
+    1401a8b90   from 50ca69
+    1401a8f70   from 50ca69
+    1401a9230   from 1a8cdf
+
+and `14024f350`, the per-item dispatch, was never reached.
+
+One caveat keeps this from being conclusive, and it is the same caveat
+that has bitten before: **no sign was ever placed during these presses**,
+in Heide, where placing one works. So it is not established that the
+press exercised a full item use at all. Until a press demonstrably
+places a sign with the breakpoints armed, "the predicate is not on the
+live path" is a hypothesis, not a result.
+
+The next measurement is therefore small and specific: in Heide, human,
+not invaded, arm `1401a8f70` and `14024f350`, press the soapstone, and
+confirm a `RequestCreateSign` reaches the server in the same moment.
+Only then does the absence of `14024f350` mean anything.

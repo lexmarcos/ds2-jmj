@@ -45,12 +45,26 @@ namespace
     constexpr const char* kParamName = "NETWORK_AREA_PARAM";
 
     // The value to raise a shut area to. Heide carries 7 and a sign can be
-    // placed there, which makes 7 the one value known to work. 63 is what most
-    // of the world carries and it was tried first, but forcing it broke Heide:
-    // with 63 the soapstone is refused in an area that accepts it at 7. So this
-    // copies what works rather than reaching for the largest number, and only
-    // raises rows that sit below it.
-    constexpr int32_t kTargetMask = 7;
+    // 7 was chosen because Heide reads 7 and accepts a summon sign, and because
+    // forcing 63 appeared to break Heide. That second observation is void: it
+    // was made on a hollow character, and a hollow character is refused the
+    // soapstone in every area, which looks exactly like an area refusal. The
+    // test was never re-run on a human baseline.
+    //
+    // 7 also cannot be right. Two places in the game test bit 3 of this byte
+    // and refuse the item when it is clear:
+    //
+    //   1402a5fbb  testb $0x8,0x18(%rax) ; je 1402a6000  -> summon signs
+    //   140272222  testb $0x8,0x18(%rax) ; je 1402721a0  -> invasion orbs
+    //
+    // Both targets return false. 7 leaves bit 3 clear, so every run of this
+    // hook has been writing a value that cannot satisfy the test it was meant
+    // to satisfy. 63 is what most of the world carries and it sets the bit.
+    //
+    // Whether that predicate is actually on the live path is a separate
+    // question and is not yet settled: breakpoints on 1402a5fbb did not fire
+    // during idle or on an item press, with a working control on 140250e50.
+    constexpr int32_t kTargetMask = 63;
 
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
