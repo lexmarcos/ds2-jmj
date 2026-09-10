@@ -6,10 +6,15 @@
 //! launch-wrapper planner; nothing here talks to a server list any more.
 
 pub mod config;
+pub mod exe;
 pub mod pem;
+pub mod process;
+pub mod proton;
 pub mod steam;
 pub mod vdf;
 
 pub use config::InjectorConfig;
+pub use exe::Fingerprint;
 pub use pem::normalize_public_key;
+pub use proton::ProtonBuild;
 pub use steam::{GameDetection, GameInstall, GameType, Steam, SteamError};

@@ -9,3 +9,8 @@ description = "Steam, Proton and configuration logic for the ds2os Linux loader"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+sha2 = "0.10"
+
+# Steam's location on Windows is a registry value, not a known path.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
