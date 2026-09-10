@@ -398,11 +398,15 @@ reached in Heide: 1a8bfb 1a8c23 1a8c2f 1a8c3b 1a8c47 1a8c53 1a8c5f
 never reached:    1a8ca7 (the bail)
 ```
 
-**The same reading has not been taken in Majula.** That single measurement
-names the guard, and it is the next thing to do. Arm the same fourteen
-addresses, stand in Majula, wait ten seconds, read the log: whichever
-fall-through is missing is the guard that refuses, and the guard right before
-it is the answer.
+**And it runs identically in Majula.** The same fourteen addresses were armed
+standing in Majula: the same eleven are reached, the bail is never touched.
+So this chain is not the gate either, and `0x1401a8b90` is not on the path
+that diverges - it is per-frame work that happens in both places.
+
+Which leaves `+0x1a6820` still the earliest known divergence, reached from
+somewhere that has not been identified. It is not reached from the tail call
+out of `+0x1a64e0`, because that lands in the chain above and the chain
+completes in both areas.
 
 ## Still open
 
