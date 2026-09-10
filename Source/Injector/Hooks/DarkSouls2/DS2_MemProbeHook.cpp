@@ -347,6 +347,8 @@ namespace
     // Writes take the same three shapes with a "poke" prefix and hex bytes in
     // place of the length, so pokemod patches an instruction by its offset:
     //   pokemod <label> 250e5b b80100000c3
+    // A poke may carry a fourth field with the bytes it expects to find, and
+    // is refused if they are not there.
     void ServeRequests()
     {
         std::error_code Error;
@@ -468,6 +470,38 @@ namespace
                 // the old bytes are the only record of what to put back.
                 std::vector<uint8_t> Before(Bytes.size(), 0);
                 const bool ReadOld = TryRead((const void*)Address, Before.data(), Before.size());
+
+                // An optional fourth field says what the caller believes is
+                // there. Addresses found by a scan go stale, and writing to one
+                // that has been reused since has already killed the game twice,
+                // so when an expectation is given a mismatch is refused rather
+                // than written through.
+                std::string ExpectedHex;
+                Parts >> ExpectedHex;
+                if (!ExpectedHex.empty())
+                {
+                    std::vector<uint8_t> Expected;
+                    if (!ParseHexBytes(ExpectedHex, Expected) ||
+                        Expected.size() != Before.size() ||
+                        !ReadOld ||
+                        memcmp(Expected.data(), Before.data(), Expected.size()) != 0)
+                    {
+                        std::string NowText;
+                        char OneByte[4];
+                        for (uint8_t Byte : Before)
+                        {
+                            snprintf(OneByte, sizeof(OneByte), "%02x", Byte);
+                            NowText += OneByte;
+                        }
+                        Append(StringFormat(
+                            "\n=== poke %s 0x%016llx RECUSADO esperava=%s achou=%s ===\n",
+                            Label.c_str(),
+                            (unsigned long long)Address,
+                            ExpectedHex.c_str(),
+                            ReadOld ? NowText.c_str() : "ilegivel"));
+                        continue;
+                    }
+                }
 
                 const bool Wrote = WriteGuarded(Address, Bytes);
 
