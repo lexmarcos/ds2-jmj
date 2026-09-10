@@ -403,10 +403,58 @@ standing in Majula: the same eleven are reached, the bail is never touched.
 So this chain is not the gate either, and `0x1401a8b90` is not on the path
 that diverges - it is per-frame work that happens in both places.
 
-Which leaves `+0x1a6820` still the earliest known divergence, reached from
-somewhere that has not been identified. It is not reached from the tail call
-out of `+0x1a64e0`, because that lands in the chain above and the chain
-completes in both areas.
+Which leaves `+0x1a6820` still the earliest known divergence. It is not
+reached from the tail call out of `+0x1a64e0`, because that lands in the chain
+above and the chain completes in both areas.
+
+### Climbing from there
+
+Recording the return address on each breakpoint hit names the caller directly,
+which grep cannot do here - everything arrives through adjustor thunks and
+vtables, so the static listing shows a thunk and stops. Two levels were
+climbed this way:
+
+```text
++0x1a6820   reached only in Heide, called with id 0x52d
+  called from +0x32f5f6, inside the function at 0x14032f4e3
+```
+
+That call sits in a small branch:
+
+```asm
+14032f5d9:  test %rbx,%rbx
+14032f5dc:  je   0x14032f5f8      ; null -> skip the call entirely
+14032f5e1:  cmp  $0x1,%ebp
+14032f5e4:  jne  0x14032f5ed
+14032f5e6:  call 0x1401abb80      ; ebp == 1
+14032f5ed:  movzwl %r15w,%edx
+14032f5f1:  call 0x1401abe90      ; ebp != 1   <- reaches +0x1a6820
+14032f5fc:  mov  %eax,0x700(%rsi) ; the result is stored here
+```
+
+In Heide the path is `32f5d9 -> 32f5ed -> 32f5fc -> 32f645`, the success
+return. **In Majula none of those addresses is reached, and neither is the
+function's own entry at `0x32f4e3`.** So the branch is not the gate either;
+the whole function is skipped.
+
+The gate is above `0x14032f4e3`, which has no static callers - it is virtual.
+
+### How to continue, concretely
+
+The climb is mechanical now and does not need a travel per level, which is what
+made it slow: **stay in Heide, where the path runs**, and repeat this loop as
+many times as needed in one sitting.
+
+1. `bp <offset of the function>` , press the item, read `de=+0x...` from the
+   log. That is the caller.
+2. Take the caller's own function entry from `.pdata` and repeat.
+3. When a level looks like a plausible decision point, go to Majula **once**
+   and arm every level captured so far. The highest one that still fires in
+   Majula is where the two paths part, and the gate is inside it.
+
+Each Heide level costs about a minute. The expensive step is the single trip to
+Majula, so batch it.
+
 
 ## Still open
 
