@@ -1,17 +1,15 @@
-//! Core logic for the ds2os Linux loader.
+//! What the ds2os tools share: finding the game, reading Steam's files, and
+//! writing the config the injector reads.
 //!
-//! Everything here is plain Rust with no Tauri dependency, so it can be tested
-//! without a GUI toolchain and reused by a CLI later.
+//! Plain Rust with no GUI dependency. The Tauri loader that used to sit beside
+//! this is gone, and with it went the master-server client and the Steam
+//! launch-wrapper planner; nothing here talks to a server list any more.
 
 pub mod config;
-pub mod launch;
-pub mod master;
 pub mod pem;
 pub mod steam;
 pub mod vdf;
 
-pub use config::{InjectorConfig, LoaderSettings};
+pub use config::InjectorConfig;
 pub use pem::normalize_public_key;
-pub use master::{MasterClient, MasterError, ServerEntry};
-pub use launch::{prepare, LaunchError, LaunchPlan};
 pub use steam::{GameDetection, GameInstall, GameType, Steam, SteamError};
