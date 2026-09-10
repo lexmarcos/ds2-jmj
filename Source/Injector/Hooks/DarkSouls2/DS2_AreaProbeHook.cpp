@@ -399,6 +399,28 @@ namespace
         Candidates.swap(Kept);
     }
 
+    /// Removes the guard so the game runs at full speed again.
+    void DisarmGuardPage(uintptr_t Address)
+    {
+        MEMORY_BASIC_INFORMATION Info = {};
+        if (VirtualQuery((void*)Address, &Info, sizeof(Info)) != sizeof(Info))
+        {
+            return;
+        }
+        if ((Info.Protect & PAGE_GUARD) == 0)
+        {
+            return;
+        }
+        DWORD Previous = 0;
+        VirtualProtect(Info.BaseAddress, Info.RegionSize, Info.Protect & ~(DWORD)PAGE_GUARD, &Previous);
+    }
+
+    /// A file the harness drops next to the DLL to ask for a burst of watching.
+    std::filesystem::path TriggerPath()
+    {
+        return Injector::Instance().GetDllPath() / "DS2_AreaWatch.trigger";
+    }
+
     /// Arms the watch on an address the caller already knows, if it currently
     /// holds a known area id.
     ///
@@ -471,25 +493,58 @@ namespace
 
         if (s_watched.load() != 0)
         {
-            // Armed from the hint; the loop below only reports from here on.
-            double LastReport = 0.0;
-            double LastRearm = 0.0;
+            // A guard covers a whole page, so everything sharing it faults too:
+            // leaving it on cost seventy thousand exceptions in half a minute
+            // and took the game down with it. It is armed only in short bursts,
+            // when the harness asks, so the cost lands on a window we choose.
+            const uintptr_t Address = s_watched.load();
+            DisarmGuardPage(Address);
+
+            Append(StringFormat(
+                "time=%.3f event=DS2AreaWatch result=ready address=0x%016llx trigger=%s\n",
+                GetSeconds(),
+                (unsigned long long)Address,
+                TriggerPath().string().c_str()));
+            Log("[DS2AreaWatch] pronto; crie %s para observar por alguns segundos",
+                TriggerPath().string().c_str());
+
             while (s_running.load())
             {
-                std::this_thread::sleep_for(std::chrono::seconds(3));
-                const double Now = GetSeconds();
-                if (Now - LastRearm >= 15.0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+                std::error_code Error;
+                if (!std::filesystem::exists(TriggerPath(), Error))
                 {
-                    ArmGuardPage(s_watched.load());
-                    LastRearm = Now;
+                    continue;
                 }
-                if (Now - LastReport >= 15.0)
+                std::filesystem::remove(TriggerPath(), Error);
+
                 {
-                    ReportAccesses();
-                    LastReport = Now;
+                    std::scoped_lock lock(s_access_mutex);
+                    s_accesses.clear();
                 }
+                s_guard_hits.store(0);
+
+                const double Started = GetSeconds();
+                Append(StringFormat("time=%.3f event=DS2AreaWatch result=burst_started\n", Started));
+
+                // Re-arm as it fires: the guard is one-shot and the handler
+                // only restores it after stepping past the faulting access.
+                while (s_running.load() && GetSeconds() - Started < 4.0)
+                {
+                    ArmGuardPage(Address);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                DisarmGuardPage(Address);
+
+                Append(StringFormat(
+                    "time=%.3f event=DS2AreaWatch result=burst_ended seconds=%.1f\n",
+                    GetSeconds(),
+                    GetSeconds() - Started));
+                ReportAccesses();
             }
-            ReportAccesses();
+
+            DisarmGuardPage(Address);
             return;
         }
 

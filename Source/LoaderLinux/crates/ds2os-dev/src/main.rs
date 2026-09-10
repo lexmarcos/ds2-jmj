@@ -233,6 +233,12 @@ enum GameAction {
     Stop,
     /// Prints the line to paste into Steam's launch options
     Options,
+    /// Asks the injector to watch the area address for a few seconds
+    Watch {
+        /// 1 or 2, in the order the windows are listed
+        #[arg(long, default_value_t = 1)]
+        account: u8,
+    },
     /// Brings one instance's window to the front so it receives input
     Focus {
         /// 1 or 2, in the order the windows are listed
@@ -371,6 +377,19 @@ fn run(command: Command) -> Result<(), String> {
             }
             GameAction::Options => {
                 print_launch_options(&environment);
+                Ok(())
+            }
+            GameAction::Watch { account } => {
+                let install = environment
+                    .installs
+                    .iter()
+                    .find(|i| i.account == account)
+                    .ok_or_else(|| format!("conta {account} não encontrada"))?;
+                let trigger = install.game_dir.join("DS2_AreaWatch.trigger");
+                std::fs::write(&trigger, b"")
+                    .map_err(|e| format!("não consegui criar {}: {e}", trigger.display()))?;
+                println!("  pedido enviado; a janela é de ~4 segundos");
+                println!("  use o item agora");
                 Ok(())
             }
             GameAction::Shot { out } => shot(out),
