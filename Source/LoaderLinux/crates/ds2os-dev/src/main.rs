@@ -388,8 +388,7 @@ fn run(command: Command) -> Result<(), String> {
                 let trigger = install.game_dir.join("DS2_AreaWatch.trigger");
                 std::fs::write(&trigger, b"")
                     .map_err(|e| format!("não consegui criar {}: {e}", trigger.display()))?;
-                println!("  pedido enviado; a janela é de ~4 segundos");
-                println!("  use o item agora");
+                println!("  dump da estrutura pedido; sai no DS2_AreaProbe.log");
                 Ok(())
             }
             GameAction::Shot { out } => shot(out),
