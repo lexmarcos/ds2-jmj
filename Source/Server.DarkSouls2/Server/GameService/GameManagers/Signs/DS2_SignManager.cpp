@@ -354,6 +354,9 @@ MessageHandleResult DS2_SignManager::Handle_RequestCreateSign(GameClient* Client
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
+    LogS(Client->GetName().c_str(), "Sign %u created: type %u, area 0x%08x, cell 0x%016llx.",
+        Sign->SignId, (uint32_t)Sign->Type, (uint32_t)Sign->OnlineAreaId, (unsigned long long)Sign->CellId);
+
     LiveCache.Add(LocationId, Sign->SignId, Sign);
     Client->ActiveSummonSigns.push_back(Sign);
 
@@ -402,6 +405,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestRemoveSign(GameClient* Client
     DS2_Frpg2RequestMessage::RequestRemoveSign* Request = (DS2_Frpg2RequestMessage::RequestRemoveSign*)Message.Protobuf.get();
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
+
+    // Removals matter as much as creations. A sign the owner has quietly
+    // dropped still sits in a searcher's local list, and touching that stale
+    // entry produces a rejection that reads like an area problem.
+    LogS(Client->GetName().c_str(), "Sign %u removed by its owner, area 0x%08x cell 0x%016llx.",
+        (uint32_t)Request->sign_id(), (uint32_t)Request->online_area_id(), (unsigned long long)Request->cell_id());
 
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_id());
     if (!Sign)
@@ -481,6 +490,10 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     DS2_CellAndAreaId LocationId = { (uint64_t)Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
+    LogS(Client->GetName().c_str(), "Summoning sign %u, looked up under area 0x%08x cell 0x%016llx.",
+        (uint32_t)Request->sign_info().sign_id(), (uint32_t)Request->online_area_id(),
+        (unsigned long long)Request->cell_id());
+
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_info().sign_id());
 
     // A sticky sign was offered under the summoner's own cell and area, not the
@@ -583,6 +596,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_id());
+
+    // The reason the owner gives is the only account we get of why a summon
+    // that reached both clients still failed.
+    LogS(Client->GetName().c_str(), "Rejecting summon of sign %u: error %u, area 0x%08x, cell 0x%016llx.",
+        (uint32_t)Request->sign_id(), (uint32_t)Request->error(),
+        (uint32_t)Request->online_area_id(), (unsigned long long)Request->cell_id());
 
     // Same fallback as the summon path, for the same reason.
     if (!Sign && Config.DS2_StickySigns)
