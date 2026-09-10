@@ -29,6 +29,9 @@ pub struct InjectorConfig {
     /// Exploratory probe that locates the current area id in memory.
     #[serde(default)]
     pub DS2ProbeArea: bool,
+    /// With the probe on, watch reads of the address it finds.
+    #[serde(default)]
+    pub DS2WatchAreaReads: bool,
 }
 
 impl InjectorConfig {
@@ -109,6 +112,7 @@ impl LoaderSettings {
             DS2PatchPhantomTimers: is_ds2 && self.patch_phantom_timers,
             DS2PhantomTimerSeconds: self.phantom_timer_seconds,
             DS2ProbeArea: false,
+            DS2WatchAreaReads: false,
         }
     }
 }

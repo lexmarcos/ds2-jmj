@@ -47,6 +47,10 @@ public:
     // area the player is in. Writes DS2_AreaProbe.log and changes nothing.
     bool DS2ProbeArea = false;
 
+    // With the probe on, watch reads of the address it finds using a hardware
+    // watchpoint, and report which instructions touch it.
+    bool DS2WatchAreaReads = false;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

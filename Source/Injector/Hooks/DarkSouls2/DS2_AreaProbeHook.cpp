@@ -14,6 +14,7 @@
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Platform/Platform.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -22,10 +23,12 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #endif
 
 namespace
@@ -86,6 +89,166 @@ namespace
         uint32_t Value;
         int Changes;
     };
+
+    // ---- phase two: who reads the address we found --------------------------
+    //
+    // A hardware watchpoint, the same thing Cheat Engine's "find what accesses
+    // this address" uses: the processor's debug registers fault on any access
+    // to four bytes, without touching the code around them.
+
+    constexpr DWORD64 kDr7EnableDr0 = 1ull;              // L0
+    constexpr DWORD64 kDr7ReadWrite = 0b11ull << 16;     // RW0: data read or write
+    constexpr DWORD64 kDr7FourBytes = 0b11ull << 18;     // LEN0: four bytes
+
+    struct Access
+    {
+        uint64_t Count;
+        double FirstSeen;
+        double LastSeen;
+    };
+
+    std::mutex s_access_mutex;
+    std::unordered_map<uintptr_t, Access> s_accesses;
+    std::atomic_uintptr_t s_watched{0};
+    PVOID s_watch_handler = nullptr;
+    uintptr_t s_module_base = 0;
+
+    LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* Exception)
+    {
+        if (Exception->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        if (s_watched.load() == 0)
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        CONTEXT* Context = Exception->ContextRecord;
+
+        // Bit 0 of Dr6 says our watchpoint is the one that fired.
+        if ((Context->Dr6 & 0x1ull) == 0)
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        Context->Dr6 = 0;
+
+        const uintptr_t Rip = (uintptr_t)Context->Rip;
+        const double Now = GetSeconds();
+        {
+            std::scoped_lock lock(s_access_mutex);
+            auto& Entry = s_accesses[Rip];
+            if (Entry.Count == 0)
+            {
+                Entry.FirstSeen = Now;
+            }
+            Entry.Count++;
+            Entry.LastSeen = Now;
+        }
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    /// Points DR0 at an address on every thread that currently exists.
+    int ArmAllThreads(uintptr_t Address)
+    {
+        HANDLE Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (Snapshot == INVALID_HANDLE_VALUE)
+        {
+            return 0;
+        }
+
+        const DWORD Process = GetCurrentProcessId();
+        const DWORD Self = GetCurrentThreadId();
+        int Armed = 0;
+
+        THREADENTRY32 Entry = {};
+        Entry.dwSize = sizeof(Entry);
+        if (Thread32First(Snapshot, &Entry))
+        {
+            do
+            {
+                if (Entry.th32OwnerProcessID != Process || Entry.th32ThreadID == Self)
+                {
+                    continue;
+                }
+
+                HANDLE Thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME,
+                                           FALSE,
+                                           Entry.th32ThreadID);
+                if (Thread == nullptr)
+                {
+                    continue;
+                }
+
+                SuspendThread(Thread);
+
+                CONTEXT Context = {};
+                Context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                if (GetThreadContext(Thread, &Context))
+                {
+                    Context.Dr0 = Address;
+                    Context.Dr7 = kDr7EnableDr0 | kDr7ReadWrite | kDr7FourBytes;
+                    Context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                    if (SetThreadContext(Thread, &Context))
+                    {
+                        Armed++;
+                    }
+                }
+
+                ResumeThread(Thread);
+                CloseHandle(Thread);
+            } while (Thread32Next(Snapshot, &Entry));
+        }
+
+        CloseHandle(Snapshot);
+        return Armed;
+    }
+
+    /// Writes the accesses seen so far, rarest first.
+    ///
+    /// Something read every frame piles up thousands of hits; a check that only
+    /// runs when an item is used shows up with a handful. Sorting that way puts
+    /// the interesting one at the top.
+    void ReportAccesses()
+    {
+        std::vector<std::pair<uintptr_t, Access>> Sorted;
+        {
+            std::scoped_lock lock(s_access_mutex);
+            Sorted.assign(s_accesses.begin(), s_accesses.end());
+        }
+        if (Sorted.empty())
+        {
+            return;
+        }
+
+        std::sort(Sorted.begin(), Sorted.end(), [](const auto& a, const auto& b) {
+            return a.second.Count < b.second.Count;
+        });
+
+        Append(StringFormat(
+            "time=%.3f event=DS2AreaWatch result=report readers=%zu\n",
+            GetSeconds(),
+            Sorted.size()));
+
+        int Reported = 0;
+        for (const auto& [Rip, Info] : Sorted)
+        {
+            if (Reported >= 25)
+            {
+                break;
+            }
+            Append(StringFormat(
+                "    rip=0x%016llx offset=%s+0x%llx hits=%llu first=%.3f last=%.3f\n",
+                (unsigned long long)Rip,
+                s_module_base != 0 && Rip > s_module_base ? "DarkSoulsII.exe" : "?",
+                (unsigned long long)(s_module_base != 0 && Rip > s_module_base ? Rip - s_module_base : Rip),
+                (unsigned long long)Info.Count,
+                Info.FirstSeen,
+                Info.LastSeen));
+            Reported++;
+        }
+    }
 
     std::atomic_bool s_running{false};
     std::thread s_thread;
@@ -196,8 +359,13 @@ namespace
         // Let the game finish loading before walking its address space.
         std::this_thread::sleep_for(std::chrono::seconds(20));
 
+        const bool Watch = Injector::Instance().GetConfig().DS2WatchAreaReads;
+        s_module_base = (uintptr_t)Injector::Instance().GetBaseAddress();
+
         Append("============================================================\n");
-        Append(StringFormat("time=%.3f event=DS2AreaProbe result=scan_started\n", GetSeconds()));
+        Append(StringFormat("time=%.3f event=DS2AreaProbe result=scan_started watch=%d\n",
+                            GetSeconds(),
+                            Watch ? 1 : 0));
 
         std::vector<Candidate> Candidates = ScanEverything();
         Append(StringFormat(
@@ -207,12 +375,36 @@ namespace
         Log("[DS2AreaProbe] primeira varredura: %zu candidatos", Candidates.size());
 
         int Pass = 0;
+        double LastReport = 0.0;
+        double LastRearm = 0.0;
+
         while (s_running.load())
         {
             std::this_thread::sleep_for(std::chrono::seconds(3));
             if (!s_running.load())
             {
                 break;
+            }
+
+            const double Now = GetSeconds();
+
+            // Once the watchpoint is set, the scan has done its job and the
+            // thread's only remaining work is reporting.
+            if (s_watched.load() != 0)
+            {
+                // Threads created after arming carry no debug registers, so
+                // the watchpoint has to be reapplied as the game spawns them.
+                if (Now - LastRearm >= 15.0)
+                {
+                    ArmAllThreads(s_watched.load());
+                    LastRearm = Now;
+                }
+                if (Now - LastReport >= 15.0)
+                {
+                    ReportAccesses();
+                    LastReport = Now;
+                }
+                continue;
             }
 
             int Changed = 0;
@@ -224,33 +416,87 @@ namespace
                 continue;
             }
 
-            // Only the addresses that have followed the player are worth
-            // reporting; everything else is a constant that happens to match.
             Append(StringFormat(
                 "time=%.3f event=DS2AreaProbe result=moved pass=%d remaining=%zu changed=%d\n",
-                GetSeconds(),
+                Now,
                 Pass,
                 Candidates.size(),
                 Changed));
 
+            const Candidate* Best = nullptr;
             int Reported = 0;
             for (const Candidate& Entry : Candidates)
             {
-                if (Entry.Changes == 0 || Reported >= 40)
+                if (Entry.Changes == 0)
                 {
                     continue;
                 }
-                Append(StringFormat(
-                    "    address=0x%016llx value=0x%08x area=%s changes=%d\n",
-                    (unsigned long long)Entry.Address,
-                    Entry.Value,
-                    AreaName(Entry.Value),
-                    Entry.Changes));
-                Reported++;
+                if (Best == nullptr || Entry.Changes > Best->Changes)
+                {
+                    Best = &Entry;
+                }
+                if (Reported < 40)
+                {
+                    Append(StringFormat(
+                        "    address=0x%016llx value=0x%08x area=%s changes=%d\n",
+                        (unsigned long long)Entry.Address,
+                        Entry.Value,
+                        AreaName(Entry.Value),
+                        Entry.Changes));
+                    Reported++;
+                }
             }
             Log("[DS2AreaProbe] %d endereco(s) seguiram o jogador (restam %zu candidatos)",
                 Changed,
                 Candidates.size());
+
+            if (!Watch || Best == nullptr)
+            {
+                continue;
+            }
+
+            // A watchpoint covers four bytes and the address has to be aligned
+            // to that, which the game's own variable will be.
+            if ((Best->Address & 0x3) != 0)
+            {
+                Append(StringFormat(
+                    "time=%.3f event=DS2AreaWatch result=unaligned address=0x%016llx\n",
+                    Now,
+                    (unsigned long long)Best->Address));
+                continue;
+            }
+
+            s_watch_handler = AddVectoredExceptionHandler(1, WatchHandler);
+            if (s_watch_handler == nullptr)
+            {
+                Append(StringFormat("time=%.3f event=DS2AreaWatch result=no_handler\n", Now));
+                continue;
+            }
+
+            s_watched.store(Best->Address);
+            const int Armed = ArmAllThreads(Best->Address);
+            LastRearm = Now;
+
+            Append(StringFormat(
+                "time=%.3f event=DS2AreaWatch result=armed address=0x%016llx threads=%d module_base=0x%016llx\n",
+                Now,
+                (unsigned long long)Best->Address,
+                Armed,
+                (unsigned long long)s_module_base));
+            Log("[DS2AreaWatch] observando 0x%016llx em %d thread(s); use o item agora",
+                (unsigned long long)Best->Address,
+                Armed);
+
+            if (Armed == 0)
+            {
+                Append("    nenhuma thread aceitou o breakpoint de hardware; o Wine pode nao suportar\n");
+                Warning("[DS2AreaWatch] nenhuma thread aceitou o breakpoint; o Wine pode nao suportar");
+            }
+        }
+
+        if (s_watched.load() != 0)
+        {
+            ReportAccesses();
         }
     }
 
@@ -282,6 +528,11 @@ void DS2_AreaProbeHook::Uninstall()
     if (s_thread.joinable())
     {
         s_thread.join();
+    }
+    if (s_watch_handler != nullptr)
+    {
+        RemoveVectoredExceptionHandler(s_watch_handler);
+        s_watch_handler = nullptr;
     }
 #endif
 }
