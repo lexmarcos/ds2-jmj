@@ -63,6 +63,67 @@ namespace
         }
     }
 
+    // Writes are what make a hypothesis cheap: a field or an instruction can be
+    // changed in the running game and changed back seconds later. Pages that
+    // are not writable - anything in .text - are opened just long enough.
+    bool TryWrite(void* Into, const void* From, size_t Length)
+    {
+        __try
+        {
+            memcpy(Into, From, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool WriteGuarded(uintptr_t Address, const std::vector<uint8_t>& Bytes)
+    {
+        if (TryWrite((void*)Address, Bytes.data(), Bytes.size()))
+        {
+            return true;
+        }
+
+        DWORD Previous = 0;
+        if (!VirtualProtect((LPVOID)Address, Bytes.size(), PAGE_EXECUTE_READWRITE, &Previous))
+        {
+            return false;
+        }
+
+        const bool Wrote = TryWrite((void*)Address, Bytes.data(), Bytes.size());
+
+        DWORD Ignored = 0;
+        VirtualProtect((LPVOID)Address, Bytes.size(), Previous, &Ignored);
+
+        if (Wrote)
+        {
+            FlushInstructionCache(GetCurrentProcess(), (LPCVOID)Address, Bytes.size());
+        }
+        return Wrote;
+    }
+
+    bool ParseHexBytes(const std::string& Text, std::vector<uint8_t>& Out)
+    {
+        if (Text.empty() || (Text.size() % 2) != 0)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < Text.size(); i += 2)
+        {
+            const std::string One = Text.substr(i, 2);
+            char* End = nullptr;
+            const unsigned long Value = strtoul(One.c_str(), &End, 16);
+            if (End == One.c_str() || *End != '\0')
+            {
+                return false;
+            }
+            Out.push_back((uint8_t)Value);
+        }
+        return !Out.empty();
+    }
+
     bool ReadPointer(uintptr_t At, uintptr_t& Out)
     {
         uintptr_t Value = 0;
@@ -198,10 +259,13 @@ namespace
         return true;
     }
 
-    // A request file holds one dump per line, in one of three shapes:
+    // A request file holds one command per line. Reads:
     //   abs   <label> <hex address> <length>
     //   mod   <label> <hex offset from the module base> <length>
     //   chain <label> <hex offset from the module base> <off,off,...> <length>
+    // Writes take the same three shapes with a "poke" prefix and hex bytes in
+    // place of the length, so pokemod patches an instruction by its offset:
+    //   pokemod <label> 250e5b b80100000c3
     void ServeRequests()
     {
         std::error_code Error;
@@ -238,29 +302,30 @@ namespace
                 continue;
             }
 
-            uintptr_t Address = 0;
-            size_t Length = 0;
+            const bool IsPoke = Kind.rfind("poke", 0) == 0;
+            const std::string Shape = IsPoke ? Kind.substr(4) : Kind;
 
-            if (Kind == "abs" || Kind == "mod")
+            uintptr_t Address = 0;
+            if (Shape == "abs")
             {
-                Parts >> std::dec >> Length;
                 Address = (uintptr_t)strtoull(Where.c_str(), nullptr, 16);
-                if (Kind == "mod")
-                {
-                    Address += s_base;
-                }
             }
-            else if (Kind == "chain")
+            else if (Shape == "mod")
+            {
+                Address = s_base + (uintptr_t)strtoull(Where.c_str(), nullptr, 16);
+            }
+            else if (Shape == "chain")
             {
                 std::string OffsetList;
-                Parts >> OffsetList >> std::dec >> Length;
+                Parts >> OffsetList;
 
                 std::vector<size_t> Offsets{ 0 };
                 size_t At = 0;
                 while (At <= OffsetList.size())
                 {
-                    size_t Comma = OffsetList.find(',', At);
-                    std::string One = OffsetList.substr(At, Comma == std::string::npos ? std::string::npos : Comma - At);
+                    const size_t Comma = OffsetList.find(',', At);
+                    const std::string One = OffsetList.substr(
+                        At, Comma == std::string::npos ? std::string::npos : Comma - At);
                     if (!One.empty())
                     {
                         Offsets.push_back((size_t)strtoull(One.c_str(), nullptr, 16));
@@ -272,10 +337,9 @@ namespace
                     At = Comma + 1;
                 }
 
-                uintptr_t Start = s_base + (uintptr_t)strtoull(Where.c_str(), nullptr, 16);
-                if (!Walk(Start, Offsets, Address))
+                if (!Walk(s_base + (uintptr_t)strtoull(Where.c_str(), nullptr, 16), Offsets, Address))
                 {
-                    Append(StringFormat("\n=== pedido %s: cadeia nao resolveu ===\n", Label.c_str()));
+                    Append(StringFormat("\n=== %s: cadeia nao resolveu ===\n", Label.c_str()));
                     continue;
                 }
             }
@@ -284,6 +348,49 @@ namespace
                 continue;
             }
 
+            if (IsPoke)
+            {
+                std::string HexBytes;
+                Parts >> HexBytes;
+
+                std::vector<uint8_t> Bytes;
+                if (!ParseHexBytes(HexBytes, Bytes))
+                {
+                    Append(StringFormat("\n=== poke %s: bytes invalidos '%s' ===\n",
+                        Label.c_str(), HexBytes.c_str()));
+                    continue;
+                }
+
+                // Report what was there first: a poke has to be reversible, and
+                // the old bytes are the only record of what to put back.
+                std::vector<uint8_t> Before(Bytes.size(), 0);
+                const bool ReadOld = TryRead((const void*)Address, Before.data(), Before.size());
+
+                const bool Wrote = WriteGuarded(Address, Bytes);
+
+                std::string OldText = "?";
+                if (ReadOld)
+                {
+                    OldText.clear();
+                    char One[4];
+                    for (uint8_t Byte : Before)
+                    {
+                        snprintf(One, sizeof(One), "%02x", Byte);
+                        OldText += One;
+                    }
+                }
+
+                Append(StringFormat("\n=== poke %s 0x%016llx %s antes=%s %s ===\n",
+                    Label.c_str(),
+                    (unsigned long long)Address,
+                    HexBytes.c_str(),
+                    OldText.c_str(),
+                    Wrote ? "ok" : "FALHOU"));
+                continue;
+            }
+
+            size_t Length = 0;
+            Parts >> std::dec >> Length;
             if (Length == 0 || Length > 0x4000)
             {
                 Length = 0x100;
