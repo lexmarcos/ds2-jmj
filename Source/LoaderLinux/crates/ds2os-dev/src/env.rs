@@ -82,18 +82,22 @@ impl Environment {
             })
         });
 
-        // The injector binaries are wherever the user unpacked the CI artifact.
-        // The game directory is checked first because that is where a previous
-        // `game prepare` will have put them.
-        let injector_source = install
-            .as_ref()
-            .map(|i| i.install_dir.clone())
-            .filter(|dir| dir.join("Injector.dll").is_file())
-            .or_else(|| {
-                [paths::home().join("Downloads/injector"), paths::home().join("injector")]
-                    .into_iter()
-                    .find(|dir| dir.join("Injector.dll").is_file())
-            });
+        // Where the CI artifact gets unpacked comes first. The game directory
+        // is only a fallback: it already holds a copy from a previous prepare,
+        // and preferring it would mean a freshly downloaded build never gets
+        // installed.
+        let injector_source = [
+            paths::home().join("Downloads/injector"),
+            paths::home().join("injector"),
+        ]
+        .into_iter()
+        .find(|dir| dir.join("Injector.dll").is_file())
+        .or_else(|| {
+            install
+                .as_ref()
+                .map(|i| i.install_dir.clone())
+                .filter(|dir| dir.join("Injector.dll").is_file())
+        });
 
         let mut installs = Vec::new();
         if let (Some(steam), Some(game)) = (steam.as_ref(), install.as_ref()) {
