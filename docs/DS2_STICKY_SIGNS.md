@@ -98,6 +98,15 @@ the gate correctly declined it. The Majula client sent no
 `RequestGetSignList` at all, so there was nothing for the gate to decline
 or accept.
 
+The gate itself was wrong, which a later measurement showed: the Majula
+client reports an online activity area of 103110 too, not zero. That is
+Heide's multiplay zone, and it appears there because
+`DS2ForceMultiPlayZone` is already on in the injector config, writing
+103110 into the map block record. So the Majula client already believes
+it stands in a valid multiplay zone, and it still does not poll. The
+zone is not what decides this, which is the same conclusion the area
+investigation reached from the other direction.
+
 **This kills the approach in its server-only form.** The server cannot
 put a sign in front of a player who never asks for one, and there is no
 push message that adds a sign: the DS2 message set has
