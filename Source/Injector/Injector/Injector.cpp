@@ -27,6 +27,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_MultiPlayZoneProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_MemProbeHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -172,6 +173,7 @@ bool Injector::Init()
             if (Config.DS2ForceMultiPlayZone)
             {
                 Hooks.push_back(std::make_unique<DS2_ForceMultiPlayZoneHook>());
+                Hooks.push_back(std::make_unique<DS2_UnlockAreaMultiPlayHook>());
             }
 
             // Always on for Dark Souls II: it only polls, and it is the only
