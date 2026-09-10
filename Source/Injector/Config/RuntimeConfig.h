@@ -56,6 +56,10 @@ public:
     // it currently holds a known area id.
     std::string DS2AreaAddress = "";
 
+    // DS2-only exploratory probe: reports the multiplay zone the player is in
+    // and the permissions it carries. Writes DS2_MultiPlayZone.log.
+    bool DS2ProbeMultiPlayZone = false;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

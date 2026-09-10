@@ -154,6 +154,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(DS2ProbeArea);
     SERIALIZE_VAR(DS2WatchAreaReads);
     SERIALIZE_VAR(DS2AreaAddress);
+    SERIALIZE_VAR(DS2ProbeMultiPlayZone);
     SERIALIZE_VAR(ServerPort);
     SERIALIZE_VAR(ServerGameType);
 

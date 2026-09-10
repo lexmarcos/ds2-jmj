@@ -35,6 +35,9 @@ pub struct InjectorConfig {
     /// Address of the area id, if already known; skips the scan.
     #[serde(default)]
     pub DS2AreaAddress: String,
+    /// Reports the multiplay zone and its permissions.
+    #[serde(default)]
+    pub DS2ProbeMultiPlayZone: bool,
 }
 
 impl InjectorConfig {
@@ -117,6 +120,7 @@ impl LoaderSettings {
             DS2ProbeArea: false,
             DS2WatchAreaReads: false,
             DS2AreaAddress: String::new(),
+            DS2ProbeMultiPlayZone: false,
         }
     }
 }
