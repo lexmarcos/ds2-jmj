@@ -44,6 +44,10 @@ pub struct InjectorConfig {
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,
+    /// Twelve players in a session instead of six. Changes the shape of two of
+    /// the game's objects; see docs/DS2_SESSION_SLOTS.md.
+    #[serde(default)]
+    pub DS2ExpandSessionSlots: bool,
 }
 
 impl InjectorConfig {
@@ -129,6 +133,7 @@ impl LoaderSettings {
             DS2ProbeMultiPlayZone: false,
             DS2ForceMultiPlayZone: false,
             DS2ForcedZoneId: 103110,
+            DS2ExpandSessionSlots: false,
         }
     }
 }
