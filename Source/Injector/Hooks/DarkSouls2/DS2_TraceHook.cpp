@@ -112,7 +112,16 @@ namespace
             {
                 WriteByte(Point.Address, Point.Original);
                 Point.Armed = false;
-                Line = StringFormat("  alcancado +0x%zx\n", Point.Offset);
+                // The arguments matter as much as the fact of the call: the
+                // function that decides this looks something up by an id in
+                // rdx, and knowing which id is what the comparison needs.
+                Line = StringFormat(
+                    "  alcancado +0x%zx rcx=%016llx rdx=%016llx r8=%016llx r9=%016llx\n",
+                    Point.Offset,
+                    (unsigned long long)Exception->ContextRecord->Rcx,
+                    (unsigned long long)Exception->ContextRecord->Rdx,
+                    (unsigned long long)Exception->ContextRecord->R8,
+                    (unsigned long long)Exception->ContextRecord->R9);
             }
 
             Exception->ContextRecord->Rip = (DWORD64)Point.Address;
