@@ -244,13 +244,52 @@ The `DS2ForceMultiPlayZone` patch is therefore not the fix for Majula. It is
 kept because it is correct about what it does and is likely still needed for
 phantoms to see each other, but on its own it changes nothing here.
 
+## What the gate actually reads: the online area id
+
+Found by elimination, and confirmed in both directions on a character standing
+at the Heide bonfire where the item works:
+
+| What was done | Result |
+| --- | --- |
+| Every copy of the online area id changed from Heide's `0x009d5170` to Majula's `0x009932c0` | **refused** (0.8%) |
+| The same copies changed back to `0x009d5170` | **works** (9.3%, sign placed) |
+
+Nothing else about the game changed between those two runs. **The online area
+id is the input the refusal is computed from** - the same id the server uses for
+matchmaking, out of `OnlineAreaId.inc`, and not the map id and not the multiplay
+zone.
+
+This is the first positive identification in this investigation. Everything
+before it was an elimination.
+
+### Which copy
+
+There were 32 copies in 956MB. Narrowing by halves, the one that decides is
+**not** the documented `+0x1d0` field that follows the player - changing that
+alone leaves the item working. It is one of a cluster sitting at `+0x00`,
+`+0x20`, `+0x24`, `+0x30` and `+0x50` of a structure, which has the shape of a
+list rather than a single current-area field.
+
+That fits the behaviour: if the game holds a list of online areas that permit
+summoning and asks whether the current one is in it, then overwriting the
+entries with Majula's id would refuse in Heide, which is exactly what happened.
+
+The exact addresses are not reusable between runs, so the structure has to be
+identified by what reads it rather than by where it sat.
+
+### A warning about how to test this
+
+Two game crashes came from writing to addresses a scan had reported earlier.
+Four of thirty addresses no longer held the expected value by the time the write
+went out, and one of those writes killed the process. **Read each address back
+and confirm it still holds the old value immediately before writing it**, and
+stay inside the game's own heap. Nothing was lost either time - the character
+had been saved through the menu - but the loop costs several minutes each time.
+
 ## Still open
 
-The gate is somewhere else entirely. What is known about it: it runs on the
-client before anything reaches the network, it produces no animation and no
-message, and it is not any of the state above. The next move is to find it by
-elimination rather than by guessing fields - patching candidate functions in
-Heide, where the item works, until one of them stops it.
+Finding the code that reads the id, so the fix can be a patch rather than a
+list of addresses that changes every run.
 
 `+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
 shows `FUN_1400f2690` builds display text, formatting the area name for the
