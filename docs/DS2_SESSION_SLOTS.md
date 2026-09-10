@@ -49,14 +49,25 @@ the reading is right:
     0x1a8 + 5 * 0xd0  = 0x5b8    the member array ends exactly at the pointer
     0x5c0 + 5 * 0x640 = 0x2500   the peer array ends exactly at the object
 
-The peer array's constructor counts the slots down:
+The object's constructor, `FUN_14051ad90`, builds both arrays and settles
+the layout beyond argument. It counts each one down from four, which is
+five iterations, and zeroes the pointer between them:
 
-    14051aeb0  FUN_14051aeb0(array_base)
-    14051aecd  mov $0x4,%ebp        five iterations: 4,3,2,1,0
+    14051ae0b  lea 0x4(%rbp),%esi     rbp = 0, so esi = 4
+    14051ae14  lea 0x1fc(%rdi),%rbx   0x1a8 + 0x54, a field of entry 0
+    14051ae61  dec %esi
+    14051ae67  lea 0xd0(%rbx),%rbx
+    14051ae6e  jns 0x14051ae20        five member records
+
+    14051ae77  mov %rbp,0x5b8(%rdi)   the pointer, cleared
+    14051ae70  lea 0x5c0(%rdi),%rcx
+    14051ae7e  call 0x14051aeb0       the peer array's own constructor
+
+    14051aecd  mov $0x4,%ebp          five iterations again
     14051af78  lea 0x640(%rdi),%rdi
 
-Each entry is zeroed from `+0x40` for `0x5f0` bytes and carries a state
-int at `+0x80`, a word at `+0x630` and a flag at `+0x631`.
+Each peer entry is zeroed from `+0x40` for `0x5f0` bytes and carries a
+state int at `+0x80`, a word at `+0x630` and a flag at `+0x631`.
 
 ## The literals
 
@@ -141,17 +152,47 @@ and as `lea 0x1f40(base)` on the array — every `cmp $0x5` index bound,
 the `6 -` budget, the three session slot counts, and the second object
 above.
 
-### The question that decides whether this is possible
+## The world side, which decides whether this is possible at all
 
-Everything mapped here is the **netcode** peer table. A seventh player
-also has to exist in the world, as a character the game draws and
-simulates, and the world manager has its own storage. Nobody has looked
-at it yet.
+Everything above is the netcode. A seventh player also has to exist in
+the world, as a character the game draws and simulates, and if the world
+kept its players in another fixed inline array this would be a second
+relocation project of unknown size.
 
-If the world's player slots are another fixed inline array in a large
-object, that is a second relocation project of unknown size. If they are
-allocated per phantom, it is free. **This is unresolved, and it is the
-item that decides whether twelve players is a patch or a rewrite.**
+It does not appear to. Three things were checked:
+
+- `ChrNetworkDataCtrl` is allocated per character, on demand. The
+  RTTI walk gives its vftable at `0x1410e4818`; the only code that
+  writes that vftable is its constructor `FUN_140379750`, whose single
+  caller allocates `0x58` bytes from the heap and hangs the result off
+  `[chr+0x20]`:
+
+      14031b517  mov $0x8,%edx         alignment
+      14031b520  lea 0x50(%rdx),%ecx   size 0x58
+      14031b523  call 0x140833320      allocator
+      14031b530  call 0x140379750      constructor
+      14031b535  mov %rax,0x20(%rbx)   stored on the character
+
+- the world's count of networked players is a walk of a `std::vector`,
+  not an index into a fixed array. `FUN_1404430d0` iterates
+  `[*mgr, mgr[1])` and counts entries whose type byte is `4`.
+
+- no other singleton in this family is big enough to hide a player
+  pool. The multiplay globals on `0x141616cf8` are allocated together in
+  `FUN_140513be0` at `0xa8`, `0x2d0`, `0x1b0`, `0x100`, `0x100`,
+  `0x2500`, `0x1a0`, `0xf0` and `0x2a0` bytes. The `0x2500` one is the
+  peer table above, and it is an order of magnitude larger than
+  anything else.
+
+So the answer is that the six looks confined to the matching layer, and
+raising it is a patch rather than a rewrite.
+
+That is "no fixed pool found where one would be expected", not "proved
+dynamic everywhere". Two things remain unchecked and would each be a
+surprise late in the work: the character spawn path itself, including
+whatever model and animation resources a phantom needs, and whether the
+protocol carries the player index in a field narrow enough to cap it
+below twelve.
 
 ## What can and cannot be verified here
 
