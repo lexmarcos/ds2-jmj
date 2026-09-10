@@ -28,6 +28,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_MemProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
@@ -171,10 +172,16 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_MultiPlayZoneProbeHook>());
             }
 
+            // These three go together. Each answers a different refusal and
+            // none is sufficient alone, which is why testing them one at a
+            // time produced nothing but refusals for a long time: the zone the
+            // player stands in, the area's permission bit, and the counters
+            // that block a session outright.
             if (Config.DS2ForceMultiPlayZone)
             {
                 Hooks.push_back(std::make_unique<DS2_ForceMultiPlayZoneHook>());
                 Hooks.push_back(std::make_unique<DS2_UnlockAreaMultiPlayHook>());
+                Hooks.push_back(std::make_unique<DS2_UnblockMultiPlayHook>());
             }
 
             // Always on for Dark Souls II: it only polls, and it is the only

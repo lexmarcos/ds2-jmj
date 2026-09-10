@@ -68,11 +68,15 @@ Three consumers read them, and each is a different failure on screen:
 | `FUN_1402c2a80`, guest join controller | guest's `+8` | error 0x13 |
 | `FUN_1402bf440` at `0x1402bf46d` | **host's** `+9` | error 6, "Disconnected from multiplayer session" |
 
-The patch makes `FUN_1403c0890` return true and the edge logic zeroes
-both counters within a frame on its own. Patch the source rather than
-poking the counters: the object holding the edge flag can be rebuilt
-when a client loads into another world, which would re-raise a poked
-counter mid-session.
+This now ships as `DS2_UnblockMultiPlayHook`, which writes the same
+three bytes at install time and restores them on uninstall. It refuses
+to apply if the bytes are not what it expects, so a game update moves
+the offset and the hook declines rather than corrupting whatever is
+there.
+
+Patch the source rather than poking the counters: the object holding the
+edge flag can be rebuilt when a client loads into another world, which
+would re-raise a poked counter mid-session.
 
 `FUN_1403c0890` looks up a per-map record by packed map id and wants a
 non-zero first byte with `[block+0x16] == 0`. Majula's `+0x16` is
@@ -82,21 +86,23 @@ it is a better place for a permanent fix than the patch above.
 
 ## Applying it
 
-The zone and the mask ship in the injector and need a build. See
+All three ship in the injector, gated together behind
+`DS2ForceMultiPlayZone` in `Injector.config`, and need a build. See
 [[injector-built-on-ci]] in the project memory: `Injector.dll` needs
 MSVC, so the GitHub Actions workflow `injector-linux.yml` builds it,
 `gh` fetches the artifact into `~/Downloads/injector`, and
 `ds2os-dev game prepare --force-zone` installs it into both game
 directories.
 
-The third is not yet shipped. Until it is, write it into each running
-client by hand. **The two instances have separate installations**, each
-with its own request file, so it has to be written to both:
+To try a change without a build, the same patch can be written into a
+running client through the probe. **The two instances have separate
+installations**, each with its own request file, so it has to be written
+to both:
 
     /mnt/ssd/SteamLibrary/steamapps/common/Dark Souls II Scholar of the First Sin/DS2_MemProbe.req
     /home/suel/steam2/.steam/debian-installation/steamapps/common/Dark Souls II Scholar of the First Sin/DS2_MemProbe.req
 
-It is live memory, so it is lost whenever a client restarts.
+That is live memory and is lost whenever a client restarts.
 
 ## Verifying
 
@@ -112,13 +118,19 @@ Then place a sign and summon, and look for
 server log. Their absence is the failure; a missing error message is
 not the success.
 
+## The control
+
+Run with the block patch active, a summon in Heide still works: sign
+1008 placed in `0x009d5170`, summoned, consumed, no rejection, phantom
+delivered. So the patch opens Majula without disturbing the areas that
+already worked.
+
+The join handshake lines do not repeat in that run, because the server's
+census logs only the first of each message type per client and they had
+already fired. Their absence there is expected and is not a failure.
+
 ## What is not done
 
-- **The Heide control has not been run with the block patch active.**
-  Nothing has yet confirmed that this does not break the areas that
-  already worked. Do this before shipping.
-- The block patch is not an injector hook yet. It should be, gated to
-  DS2 and off by default, alongside the other two.
 - Cross-area invasion, an invader in Heide reaching a target in Majula,
   still dropped the session when last tested. That test predates the
   block patch and is worth repeating: the host's `+9` was the cause
