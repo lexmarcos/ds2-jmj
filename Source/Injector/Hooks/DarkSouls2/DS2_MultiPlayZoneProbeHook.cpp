@@ -21,6 +21,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -50,8 +51,13 @@ namespace
     PVOID s_handler = nullptr;
     uintptr_t s_address = 0;
     uint8_t s_original = 0;
-    std::mutex s_step_mutex;
-    std::atomic_bool s_step_pending{false};
+    // One pending step per thread, not one global flag. The function runs every
+    // frame on more than one thread, and a shared flag lets one thread consume
+    // another's step, which leaves the breakpoint byte in the wrong state and
+    // the game dies with an unhandled STATUS_BREAKPOINT.
+    std::mutex s_state_mutex;
+    std::unordered_map<DWORD, bool> s_pending_steps;
+    bool s_breakpoint_present = false;
 
     // Only a change is worth a line; this runs every frame.
     std::atomic_int s_last_zone{-999};
@@ -87,8 +93,20 @@ namespace
         CONTEXT* Context = Exception->ContextRecord;
         const DWORD Code = Exception->ExceptionRecord->ExceptionCode;
 
+        const DWORD ThreadId = GetCurrentThreadId();
+
         if (Code == EXCEPTION_BREAKPOINT && (uintptr_t)Context->Rip == s_address + 1)
         {
+            {
+                std::scoped_lock lock(s_state_mutex);
+                if (!s_breakpoint_present)
+                {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+                WriteByte(s_address, s_original);
+                s_breakpoint_present = false;
+                s_pending_steps[ThreadId] = true;
+            }
             s_hits++;
 
             const int Zone = (int)Context->Rbx;
@@ -109,19 +127,27 @@ namespace
                 Log("[DS2Zone] zona=%d permissoes=0x%02x (em vigor 0x%02x)", Zone, Permissions, InForce);
             }
 
-            // Step past the restored instruction, then put the breakpoint back.
+            // Re-run the instruction that the breakpoint replaced, then put the
+            // breakpoint back once it has stepped past it.
             Context->Rip = s_address;
-            WriteByte(s_address, s_original);
             Context->EFlags |= (DWORD)kTrapFlag;
-            s_step_pending.store(true);
             return EXCEPTION_CONTINUE_EXECUTION;
         }
 
-        if (Code == EXCEPTION_SINGLE_STEP && s_step_pending.load())
+        if (Code == EXCEPTION_SINGLE_STEP)
         {
-            s_step_pending.store(false);
+            std::scoped_lock lock(s_state_mutex);
+            auto Pending = s_pending_steps.find(ThreadId);
+            if (Pending == s_pending_steps.end())
+            {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            s_pending_steps.erase(Pending);
             Context->EFlags &= ~(DWORD)kTrapFlag;
-            WriteByte(s_address, kBreakpointOpcode);
+            if (WriteByte(s_address, kBreakpointOpcode))
+            {
+                s_breakpoint_present = true;
+            }
             return EXCEPTION_CONTINUE_EXECUTION;
         }
 
@@ -174,6 +200,10 @@ bool DS2_MultiPlayZoneProbeHook::Install(Injector& injector)
         return true;
     }
 
+    {
+        std::scoped_lock lock(s_state_mutex);
+        s_breakpoint_present = true;
+    }
     s_installed.store(true);
     Append(StringFormat(
         "time=%.3f event=DS2MultiPlayZone result=installed address=0x%016llx offset=0x%zx\n",
@@ -193,7 +223,12 @@ void DS2_MultiPlayZoneProbeHook::Uninstall()
 #if defined(_WIN32) && defined(_M_X64)
     if (s_installed.exchange(false))
     {
-        WriteByte(s_address, s_original);
+        std::scoped_lock lock(s_state_mutex);
+        if (s_breakpoint_present)
+        {
+            WriteByte(s_address, s_original);
+            s_breakpoint_present = false;
+        }
     }
     if (s_handler != nullptr)
     {
