@@ -205,3 +205,20 @@ this path does not touch the item-use state machine at all.
 4. On selecting the target, an `Invading ... across areas` line reports
    both locations. Then watch the Majula client: does the invasion
    arrive, and does the Steam peer-to-peer session form.
+
+### Firing an invasion without an orb
+
+The test above needs the invader to hold an invasion item, which is a
+separate errand from the question being asked. So the server will fire
+the push directly when `DS2_InvadeAnywhere` is on:
+
+    echo "<invader player id> <target player id>" > Saved/default/debug_invade.req
+
+The file is read once a second and deleted. Player ids come from the log
+line each client prints on login. An optional third number sets the
+break-in type; it defaults to the red eye orb.
+
+This skips the item, the target list and every matching rule, so it
+proves nothing about whether an ordinary invasion would be allowed. It
+asks one question only: with the push delivered, does the client
+standing in Majula act on it.

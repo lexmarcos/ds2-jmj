@@ -32,6 +32,8 @@ public:
 
     virtual void OnLostPlayer(GameClient* Client) override;
 
+    virtual void Poll() override;
+
 protected:
     bool CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParameter& Client, const std::shared_ptr<GameClient>& Match, DS2_Frpg2RequestMessage::BreakInType Type);
 
@@ -40,7 +42,16 @@ protected:
     MessageHandleResult Handle_RequestRejectBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message);
 
 private:
+    // Fires an invasion straight from a request file, skipping the item and
+    // the target list. This exists so the one open question, whether a client
+    // accepts the invasion push where the game allows no online activity, can
+    // be asked without first solving how the invader gets an orb.
+    void PollDebugInvadeRequest();
+
+private:
     Server* ServerInstance;
     GameService* GameServiceInstance;
+
+    double NextDebugPollTime = 0.0;
 
 };

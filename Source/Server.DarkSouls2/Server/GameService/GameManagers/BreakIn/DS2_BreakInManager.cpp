@@ -22,6 +22,10 @@
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DiffTracker.h"
+#include "Shared/Core/Utils/File.h"
+
+#include <cstdio>
+#include <filesystem>
 
 DS2_BreakInManager::DS2_BreakInManager(Server* InServerInstance, GameService* InGameServiceInstance)
     : ServerInstance(InServerInstance)
@@ -262,6 +266,83 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
     }
 
     return MessageHandleResult::Handled;
+}
+
+void DS2_BreakInManager::Poll()
+{
+    PollDebugInvadeRequest();
+}
+
+void DS2_BreakInManager::PollDebugInvadeRequest()
+{
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
+    if (!Config.DS2_InvadeAnywhere)
+    {
+        return;
+    }
+
+    // Cheap enough, but there is no reason to stat a file every tick.
+    double Now = GetSeconds();
+    if (Now < NextDebugPollTime)
+    {
+        return;
+    }
+    NextDebugPollTime = Now + 1.0;
+
+    std::filesystem::path RequestPath = ServerInstance->GetSavedPath() / "debug_invade.req";
+    if (!std::filesystem::exists(RequestPath))
+    {
+        return;
+    }
+
+    std::string Contents;
+    if (!ReadTextFromFile(RequestPath, Contents))
+    {
+        WarningS("BreakIn", "Could not read %s.", RequestPath.string().c_str());
+        std::filesystem::remove(RequestPath);
+        return;
+    }
+    std::filesystem::remove(RequestPath);
+
+    // "<invader player id> <target player id> [<break in type>]"
+    uint32_t InvaderId = 0, TargetId = 0, Type = (uint32_t)DS2_Frpg2RequestMessage::BreakInType_RedEyeOrb;
+    if (sscanf(Contents.c_str(), "%u %u %u", &InvaderId, &TargetId, &Type) < 2)
+    {
+        WarningS("BreakIn", "debug_invade.req wants '<invader player id> <target player id> [type]', got '%s'.", Contents.c_str());
+        return;
+    }
+
+    std::shared_ptr<GameClient> InvaderClient = GameServiceInstance->FindClientByPlayerId(InvaderId);
+    std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(TargetId);
+    if (!InvaderClient || !TargetClient)
+    {
+        WarningS("BreakIn", "debug_invade.req names player %u invading %u; %s not connected.",
+            InvaderId, TargetId, !InvaderClient ? "invader is" : "target is");
+        return;
+    }
+
+    auto& Target = TargetClient->GetPlayerStateType<DS2_PlayerState>();
+
+    DS2_Frpg2RequestMessage::PushRequestBreakInTarget PushMessage;
+    PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestBreakInTarget);
+    PushMessage.set_player_id(InvaderClient->GetPlayerState().GetPlayerId());
+    PushMessage.set_steam_id(InvaderClient->GetPlayerState().GetSteamId());
+    PushMessage.set_type((DS2_Frpg2RequestMessage::BreakInType)Type);
+    PushMessage.set_cell_id(Target.GetCurrentCellId());
+    PushMessage.set_online_area_id((uint32_t)Target.GetCurrentArea());
+
+    LogS("BreakIn", "Debug invade: '%s' -> '%s', type %u, target area 0x%08x cell 0x%08x, activity area %d, invadable %s.",
+        InvaderClient->GetName().c_str(), TargetClient->GetName().c_str(), Type,
+        (uint32_t)Target.GetCurrentArea(), Target.GetCurrentCellId(),
+        Target.GetCurrentOnlineActivityArea(), Target.GetIsInvadable() ? "yes" : "no");
+
+    if (!TargetClient->MessageStream->Send(&PushMessage))
+    {
+        WarningS("BreakIn", "Debug invade: failed to send PushRequestBreakInTarget.");
+        return;
+    }
+
+    LogS("BreakIn", "Debug invade: push sent. Whether the client acts on it is the thing being measured.");
 }
 
 MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
