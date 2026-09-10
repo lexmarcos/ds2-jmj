@@ -344,6 +344,66 @@ So the restriction is real and reproducible, and **the permission mask is ruled
 out for good**: Majula carrying Heide's exact value, applied before the map is
 built, changes nothing.
 
+## Where the two areas actually part
+
+Comparing memory found nothing. Comparing **execution** did, and it is the
+result to carry forward.
+
+Arming one-shot breakpoints on every function in a range, letting the game idle
+so the per-frame ones disarm themselves, then pressing the button, says which
+code a press reached. Run in both areas on a human character:
+
+| Where | Functions of the sign subsystem reached |
+| --- | --- |
+| Heide | 28 |
+| Majula | **0** |
+
+**The code that places a sign is never entered in Majula.** That is why no
+amount of diffing found a flag: the flag being looked for sits inside a path
+that is not walked.
+
+Widening the range and taking the difference narrows it to fifteen functions
+that run only in Heide, the earliest being `+0x1a6820`. Walking back from
+there:
+
+- `+0x1a64e0` looks something up by a 16-bit id and returns false when it is
+  missing. It was a tempting answer and it is **not** the gate: it is called
+  with identical arguments in both areas (`rcx=<same object>`, `rdx=0x52d`)
+  and takes its **success** exit in both.
+- Its success path tail-calls `0x1401a8b90`, which is where the interesting
+  code is. From `+0x1a8bfb` it runs a chain of nine guards over the player's
+  state, each bailing to the same address:
+
+```asm
+1401a8c00:  call 0x1401ab5e0     ; null -> bail
+1401a8c16:  call 0x140500720     ; true -> bail
+1401a8c26:  call 0x140500960     ; true -> bail
+1401a8c32:  call 0x140500980     ; true -> bail
+1401a8c3e:  call 0x1405009a0     ; true -> bail
+1401a8c4a:  call 0x140500940     ; true -> bail
+1401a8c56:  call 0x140500920     ; true -> bail
+1401a8c6e:  call 0x1404517d0     ; false -> bail
+1401a8c77:  call 0x1401ab660     ; null -> bail
+1401a8c88:  call 0x140203db0     ; 0/1/2, anything else -> bail
+1401a8ca7:  xor al,al ; ret      ; the bail
+```
+
+This chain runs **every frame**, not only on the press, so it can be read
+without pressing anything. In Heide it runs to the end and never touches the
+bail. Measured, with the fall-through address after each guard armed:
+
+```text
+reached in Heide: 1a8bfb 1a8c23 1a8c2f 1a8c3b 1a8c47 1a8c53 1a8c5f
+                  1a8c77 1a8c81 1a8cc7 1a8cd5
+never reached:    1a8ca7 (the bail)
+```
+
+**The same reading has not been taken in Majula.** That single measurement
+names the guard, and it is the next thing to do. Arm the same fourteen
+addresses, stand in Majula, wait ten seconds, read the log: whichever
+fall-through is missing is the guard that refuses, and the guard right before
+it is the answer.
+
 ## Still open
 
 Nothing found so far separates Majula from Heide. Ruled out by direct
