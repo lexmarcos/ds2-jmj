@@ -439,6 +439,53 @@ the whole function is skipped.
 
 The gate is above `0x14032f4e3`, which has no static callers - it is virtual.
 
+### The gate, found
+
+Climbing further reached a state machine and then the decision itself.
+
+`0x14032fa00` dispatches on a state at `[this+0x10]`:
+
+```asm
+14032fa37:  test %ecx,%ecx ; je 0x14032fc13   ; state 0
+14032fa3f:  dec %ecx ; je 0x14032fbf7          ; state 1
+14032fa47:  dec %ecx ; je 0x14032fa7b          ; state 2   <- Heide runs here
+14032fa4b:  dec %ecx ; je 0x14032fa64          ; state 3
+14032fa4f:  dec %ecx ; jne 0x14032fcc3         ; otherwise refuse
+```
+
+**Majula never leaves state 0.** Measured: pressing the item reaches
+`+0x32fa00` and then `+0x32fc13`, the state-0 handler, and stops.
+
+The state-0 handler decides what kind of sign this is, in `ebx`, and refuses if
+it decides nothing:
+
+```asm
+14032fc2d:  call 0x140365ee0(rsi, 4)      ; -> ebx = 1
+14032fc5c:  call 0x140365f10(rsi, 0xb)    ; -> ebx = 3
+14032fc6b:  testl $0x800,0xfc(%r14)       ; set -> ebx = 2
+14032fc8d:  je   0x14032fcc3              ; ebx == 0 -> REFUSE
+14032fc9c:  call 0x14032f450              ; else carry on
+14032fcc0:  mov  %esi,0x10(%rdi)          ; and advance the state to 2
+```
+
+In Majula all three fail. Measured by arming each branch: `+0x32fc54` (the
+first test returned false), `+0x32fc6b`, then `+0x32fc8b` - which is the path
+taken when **bit `0x800` of `[r14+0xfc]` is clear**. `ebx` stays 0 and the
+function refuses.
+
+Heide's state becomes 2, and the only route to 2 is that flag, so **the flag is
+what separates the two areas.**
+
+### Confirmed by patching it
+
+Overwriting the branch at `0x14032fc7b` (`je 0x14032fc8b`, bytes `74 0e`) with
+two nops forces the flag path. In Majula the flow then **passes the refusal**:
+`+0x32fc8f` is reached, which never happens unpatched.
+
+It stops one step later, at `0x14032f450` returning false - a second gate in
+series. So the restriction is at least two checks deep, and the first of them
+is now named exactly.
+
 ### How to continue, concretely
 
 The climb is mechanical now and does not need a travel per level, which is what
