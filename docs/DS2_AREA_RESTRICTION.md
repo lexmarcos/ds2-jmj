@@ -483,8 +483,48 @@ two nops forces the flag path. In Majula the flow then **passes the refusal**:
 `+0x32fc8f` is reached, which never happens unpatched.
 
 It stops one step later, at `0x14032f450` returning false - a second gate in
-series. So the restriction is at least two checks deep, and the first of them
-is now named exactly.
+series. Patching that one out of the way too (the six-byte `je` at
+`0x14032f4d6`) gets past it as well, and lands on the thing the whole
+investigation was looking for.
+
+### What actually stops it: the map has nothing to place a sign on
+
+Inside `0x14032f450`, after a virtual call that fills three output slots:
+
+```asm
+14032f50b:  call *0x90(%rax)      ; ask for the placement
+14032f511:  mov  0x38(%rsp),%r12
+14032f516:  mov  0x40(%rsp),%r14
+14032f51b:  test %r12,%r12
+14032f51e:  je   0x14032f649      ; null -> refuse
+14032f524:  test %r14,%r14        ; ... and two more like it
+```
+
+Measured in Majula with both gates above patched away: `+0x32f511` is reached
+and `+0x32f649` follows immediately. **`+0x32f524` is never reached**, so the
+very first output is null - the call produced nothing.
+
+**That is the restriction.** It is not a flag anywhere. Majula's map does not
+contain whatever that call looks up - the data a sign is placed *on*. Every
+negative result in this document follows from it: there was no flag to find
+because the difference is a thing the map does not have.
+
+### What that means for the mod
+
+Flipping a bit will not do it. Two of the checks in front can be patched out,
+and doing so only moves the refusal to the point where the game asks the map
+for a place to put the sign and gets nothing back.
+
+Making Majula work means supplying that. The shape of the fix is a hook on the
+virtual call at `0x14032f50b` that, when the lookup comes back empty, returns a
+synthesised placement instead - the same thing Heide hands back. That is a real
+piece of work rather than a byte patch, but it is a defined one, and the two
+patches above are already proven to clear everything in front of it.
+
+Worth knowing before starting: the three outputs at `[rsp+0x38]`, `[rsp+0x40]`
+and `[rsp+0x48]` are what the caller needs, and the next check after them reads
+`[r9+0x5]` bit 1 when `[rsi+0x4c8]` bit 2 is set. Capturing those three in
+Heide is the first step - they are what a synthesised answer has to look like.
 
 ### How to continue, concretely
 
