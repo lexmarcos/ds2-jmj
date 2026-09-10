@@ -20,7 +20,9 @@ const BINARIES: [&str; 2] = ["Injector.dll", "Injector.exe"];
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Prepared {
+    pub account: u8,
     pub game_dir: PathBuf,
+    pub launch_options: String,
     pub injector_config: PathBuf,
     pub copied: Vec<String>,
     pub timer_seconds: f64,
@@ -34,13 +36,11 @@ pub struct Prepared {
 /// every login dropped in silence.
 pub fn prepare(
     environment: &Environment,
+    install: &crate::env::Install,
     timer_seconds: f64,
     timer_patch: bool,
 ) -> Result<Prepared, String> {
-    let game_dir = environment
-        .game_dir
-        .clone()
-        .ok_or("Dark Souls II não está instalado; rode `ds2os-dev doctor`")?;
+    let game_dir = install.game_dir.clone();
     let server_paths = environment
         .server
         .as_ref()
@@ -83,23 +83,33 @@ pub fn prepare(
     std::fs::write(game_dir.join("steam_appid.txt"), APP_ID.to_string())
         .map_err(|e| format!("não consegui escrever steam_appid.txt: {e}"))?;
 
-    Ok(Prepared { game_dir, injector_config, copied, timer_seconds, timer_patch })
+    let script = write_wrapper(install)?;
+
+    Ok(Prepared {
+        account: install.account,
+        launch_options: format!("{} %command%", shell_quote(&script)),
+        game_dir,
+        injector_config,
+        copied,
+        timer_seconds,
+        timer_patch,
+    })
 }
 
-/// The Steam launch options line that makes instance 1 go through the injector.
-pub fn launch_options(environment: &Environment) -> Option<String> {
-    let game_dir = environment.game_dir.as_ref()?;
-    let script = game_dir.join("ds2os-launch.sh");
-    Some(format!("'{}' %command%", script.display()))
+/// Quotes a path for a Steam launch options line, which a shell parses.
+fn shell_quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if text.chars().all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c)) {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
 }
 
-/// Writes the wrapper Steam runs in place of the game for instance 1.
-pub fn write_wrapper(environment: &Environment) -> Result<PathBuf, String> {
-    let game_dir = environment
-        .game_dir
-        .clone()
-        .ok_or("Dark Souls II não está instalado")?;
-    let exe_name = environment
+/// Writes the wrapper Steam runs in place of the game.
+fn write_wrapper(install: &crate::env::Install) -> Result<PathBuf, String> {
+    let game_dir = install.game_dir.clone();
+    let exe_name = install
         .game_exe
         .as_ref()
         .and_then(|p| p.file_name())

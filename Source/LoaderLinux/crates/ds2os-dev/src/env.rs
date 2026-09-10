@@ -9,6 +9,7 @@ use ds2os_core::steam::{GameDetection, GameInstall, GameType, Steam};
 use serde::Serialize;
 
 use crate::paths;
+use crate::settings::HarnessConfig;
 
 /// The DS3OS server binary and the data directory it writes beside itself.
 #[derive(Debug, Clone, Serialize)]
@@ -32,6 +33,20 @@ pub struct Environment {
     pub server: Option<ServerPaths>,
     /// Directory holding the Windows-built Injector.dll and Injector.exe.
     pub injector_source: Option<PathBuf>,
+    /// Every install the harness can prepare, one per Steam account.
+    pub installs: Vec<Install>,
+}
+
+/// One game install: where it lives and which Steam account owns it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Install {
+    /// 1 is the account Steam runs by default, 2 the second client.
+    pub account: u8,
+    pub steam_root: PathBuf,
+    pub game_dir: PathBuf,
+    pub game_exe: Option<PathBuf>,
+    pub prefix: Option<PathBuf>,
 }
 
 /// One thing that is wrong, and what to do about it.
@@ -80,7 +95,35 @@ impl Environment {
                     .find(|dir| dir.join("Injector.dll").is_file())
             });
 
+        let mut installs = Vec::new();
+        if let (Some(steam), Some(game)) = (steam.as_ref(), install.as_ref()) {
+            installs.push(Install {
+                account: 1,
+                steam_root: steam.root().to_path_buf(),
+                game_dir: game.install_dir.clone(),
+                game_exe: game.executable(),
+                prefix: game.prefix_path.clone(),
+            });
+        }
+        // The second account has its own client, its own install and its own
+        // Proton prefix, which is what keeps the single-instance mutex from
+        // seeing the first one.
+        if let Some(home) = HarnessConfig::load().second_steam_home {
+            if let Ok(second) = Steam::discover_in(&home) {
+                if let Some(game) = second.find_game(GameType::DarkSouls2) {
+                    installs.push(Install {
+                        account: 2,
+                        steam_root: second.root().to_path_buf(),
+                        game_exe: game.executable(),
+                        prefix: game.prefix_path.clone(),
+                        game_dir: game.install_dir,
+                    });
+                }
+            }
+        }
+
         Self {
+            installs,
             repo_root,
             state_dir: paths::state_dir(),
             steam_root: steam.as_ref().map(|s| s.root().to_path_buf()),

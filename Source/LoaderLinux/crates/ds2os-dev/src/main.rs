@@ -14,6 +14,7 @@ mod logs;
 mod paths;
 mod proc;
 mod server;
+mod settings;
 
 use std::path::PathBuf;
 
@@ -151,28 +152,7 @@ enum LogName {
     Cli,
 }
 
-/// Settings the harness remembers between runs.
-#[derive(Debug, Default, Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct HarnessConfig {
-    /// Home directory of a second Steam client, logged into another account.
-    second_steam_home: Option<PathBuf>,
-}
-
-impl HarnessConfig {
-    fn load() -> Self {
-        std::fs::read_to_string(paths::harness_config())
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
-    }
-
-    fn save(&self) -> Result<(), String> {
-        let path = paths::harness_config();
-        let body = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, body).map_err(|e| format!("não consegui salvar {}: {e}", path.display()))
-    }
-}
+use settings::HarnessConfig;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -274,9 +254,7 @@ fn run(command: Command) -> Result<(), String> {
                 Ok(())
             }
             GameAction::Options => {
-                let line = game::launch_options(&environment)
-                    .ok_or("Dark Souls II não está instalado")?;
-                println!("{line}");
+                print_launch_options(&environment);
                 Ok(())
             }
         },
@@ -437,27 +415,48 @@ fn row<T: std::fmt::Debug>(label: &str, value: Option<T>) {
 }
 
 fn prepare(environment: &Environment, timer_seconds: f64, timer_patch: bool) -> Result<(), String> {
-    let prepared = game::prepare(environment, timer_seconds, timer_patch)?;
-    let wrapper = game::write_wrapper(environment)?;
-
-    println!("  pasta do jogo   {}", prepared.game_dir.display());
-    if !prepared.copied.is_empty() {
-        println!("  copiado         {}", prepared.copied.join(", "));
+    if environment.installs.is_empty() {
+        return Err("nenhuma instalação do Dark Souls II encontrada".into());
     }
-    println!("  injector config {}", prepared.injector_config.display());
-    println!("  wrapper         {}", wrapper.display());
-    println!(
-        "  timer           {}",
-        if timer_patch { format!("{timer_seconds:.0}s") } else { "desligado".to_owned() }
-    );
+
+    for install in &environment.installs {
+        let prepared = game::prepare(environment, install, timer_seconds, timer_patch)?;
+        println!("  conta {}", prepared.account);
+        println!("    pasta   {}", prepared.game_dir.display());
+        if !prepared.copied.is_empty() {
+            println!("    copiado {}", prepared.copied.join(", "));
+        }
+        println!(
+            "    timer   {}",
+            if timer_patch { format!("{timer_seconds:.0}s") } else { "desligado".to_owned() }
+        );
+    }
     Ok(())
+}
+
+/// The launch options line for each account, which the user pastes into that
+/// account's own Steam client.
+fn print_launch_options(environment: &Environment) {
+    for install in &environment.installs {
+        let script = install.game_dir.join("ds2os-launch.sh");
+        println!("  conta {}: {}", install.account, quoted(&script));
+    }
+}
+
+fn quoted(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if text.chars().all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c)) {
+        format!("{text} %command%")
+    } else {
+        format!("'{}' %command%", text.replace('\'', r"'\''"))
+    }
 }
 
 fn up(
     environment: &Environment,
     timer_seconds: f64,
     timer_patch: bool,
-    start_second: bool,
+    _start_second: bool,
 ) -> Result<(), String> {
     let problems = environment.problems();
     if !problems.is_empty() {
@@ -474,23 +473,21 @@ fn up(
     println!("\njogo");
     prepare(environment, timer_seconds, timer_patch)?;
 
-    if start_second {
-        println!("\nsegunda instância");
-        let home = resolve_second_steam(None)?;
-        announce_account(home.as_deref());
-        let pid = game::launch_second(environment, home.as_deref())?;
-        println!("  iniciada, pid {pid}");
-        println!("  log {}", paths::instance_log(2).display());
-    }
+    println!("\nopções de lançamento");
+    print_launch_options(environment);
 
     println!("\nfalta você");
-    println!("  1. cole isto nas opções de lançamento do Dark Souls II na Steam:");
-    println!(
-        "       {}",
-        game::launch_options(environment).unwrap_or_else(|| "—".into())
-    );
-    println!("  2. dê Play na Steam. A Steam é quem inicia a primeira instância.");
-    println!("  3. acompanhe: ds2os-dev logs server -f -g client");
+    if environment.installs.len() < 2 {
+        println!("  só uma conta configurada. As duas instâncias precisam de contas Steam");
+        println!("  diferentes, senão a sessão PvP entre elas não conecta.");
+        println!("  rode: ds2os-dev steam2 init");
+    } else {
+        println!("  1. cole a linha da conta 1 nas opções de lançamento do DS2 nessa Steam");
+        println!("  2. cole a linha da conta 2 nas opções de lançamento da OUTRA Steam");
+        println!("     (abra-a com: ds2os-dev steam2 run)");
+        println!("  3. dê Play nas duas");
+    }
+    println!("  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
     Ok(())
 }
 
