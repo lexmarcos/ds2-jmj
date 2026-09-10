@@ -516,3 +516,37 @@ being summoned out of Majula.
 Do not skip this. Invasion was proven to work only because the same
 control was run, and three earlier negatives in this project were
 worthless for want of one.
+
+## The control: the same character, three minutes apart
+
+    13:03:54  Samuel  Sign 1003 created: type 4, area 0x009932c0   Majula
+    13:04:03  Chico   Summoning sign 1003
+    13:04:03  Samuel  Rejecting summon of sign 1003: error 0
+
+    13:04:35  Samuel  Sign 1004 created: type 4, area 0x009d5170   Heide
+    13:05:25  Chico   Summoning sign 1004
+    13:05:31  Samuel  Sign 1004 removed by its owner
+
+No rejection in Heide. The sign was consumed and the phantom arrived in
+the host's world. Same character, same two accounts, same server, three
+minutes apart, differing only in which area the sign's owner stood in.
+
+So the red-sign summon path is sound and the peer-to-peer session is
+sound. **The refusal is specific to being summoned out of Majula.**
+
+That is the last thing standing between this and a duel in Majula, and
+it is a single client-side decision on the sign owner's machine.
+
+### Where to attack it
+
+The client's own `NetSvrSummonSignInterface::RejectSummonSign` builds a
+`NetSvrRejectSummonSignJob`, and the site that writes that job's vtable
+is `0x14029e5ed`, inside the chunk `0x14029e5c3 .. 0x14029e61b`. Walking
+outward from there statically runs into unwind-split chunks and stops
+being trustworthy, so do it empirically instead: the tracer records the
+return address of every hit, so one real rejection gives a real caller
+rather than a guess. Arm `29e5ed`, provoke a rejection in Majula, read
+`de=`, and repeat one level out.
+
+Arm a hot address such as `250e50` alongside every time. A breakpoint
+that does not fire proves nothing without one.
