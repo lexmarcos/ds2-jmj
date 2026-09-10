@@ -504,27 +504,47 @@ Measured in Majula with both gates above patched away: `+0x32f511` is reached
 and `+0x32f649` follows immediately. **`+0x32f524` is never reached**, so the
 very first output is null - the call produced nothing.
 
-**That is the restriction.** It is not a flag anywhere. Majula's map does not
-contain whatever that call looks up - the data a sign is placed *on*. Every
-negative result in this document follows from it: there was no flag to find
-because the difference is a thing the map does not have.
+### What the call returns, and what it is not
 
-### What that means for the mod
+The first reading of this was "Majula's map has nothing to place a sign on".
+**That was wrong**, and the correction matters because it moves the search.
 
-Flipping a bit will not do it. Two of the checks in front can be patched out,
-and doing so only moves the refusal to the point where the game asks the map
-for a place to put the sign and gets nothing back.
+Capturing the outputs in Heide, where the call succeeds:
 
-Making Majula work means supplying that. The shape of the fix is a hook on the
-virtual call at `0x14032f50b` that, when the lookup comes back empty, returns a
-synthesised placement instead - the same thing Heide hands back. That is a real
-piece of work rather than a byte patch, but it is a defined one, and the two
-patches above are already proven to clear everything in front of it.
+```text
++0x32f55d  rdx=0x7fffe9420a60   rcx=0x7fffeb718d10   r8=0x7fffe9422e24
+```
 
-Worth knowing before starting: the three outputs at `[rsp+0x38]`, `[rsp+0x40]`
-and `[rsp+0x48]` are what the caller needs, and the next check after them reads
-`[r9+0x5]` bit 1 when `[rsi+0x4c8]` bit 2 is set. Capturing those three in
-Heide is the first step - they are what a synthesised answer has to look like.
+Both outputs sit inside loaded **param** data, not map geometry. Searching the
+region around them for a type name finds `ITEM_TYPE_PARAM` and
+`ITEM_USAGE_PARAM` immediately after, and the rows have the shape of item
+parameters - counts, distances, a couple of floats:
+
+```text
+0x7fffe9420a60  ... 0456 ... 03ea 1388 1.0f 0352 096a ...
+0x7fffe9422e24  ... 1.0f 0096 0096 ... 0.5f 0064
+```
+
+So the call at `0x14032f50b` resolves **which item is being used**, not where a
+sign may go. It returning null in Majula does not mean the map is missing
+something; it means the game has already decided there is no item to use by the
+time it is asked.
+
+**The decision is therefore still upstream**, and the useful thing this
+established is narrower but solid: the refusal is reached through a specific,
+short path, and two of the checks along it can be patched away without
+changing the outcome.
+
+### What is nailed down
+
+- Majula never leaves state 0 of the state machine at `0x14032fa00`.
+- In the state-0 handler the sign type stays 0, because all three routes fail,
+  including the `0x800` flag test at `0x14032fc6b`.
+- Patching that branch (`0x14032fc7b`, `74 0e` to two nops) gets past the
+  refusal at `0x14032fc8d`, which never happens otherwise.
+- Patching the next one (`0x14032f4d6`, the six-byte `je`) gets past that too.
+- What is left refusing is the item resolution at `0x14032f50b` coming back
+  empty, and that is a consequence rather than the cause.
 
 ### How to continue, concretely
 
