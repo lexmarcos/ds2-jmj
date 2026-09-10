@@ -1,4 +1,4 @@
-# Multiplayer in Majula
+# Multiplayer in Majula, and the other closed areas
 
 Solved on 2026-09-10. A player places a Red Sign Soapstone in Majula,
 another player finds it, touches it, and a red phantom arrives. Verified
@@ -14,6 +14,18 @@ an error:
 Those last two had never appeared once in this project before. In Heide
 they arrive within seconds of a sign being consumed, and now they do in
 Majula too.
+
+**It is not a Majula special case.** The same three changes open Things
+Betwixt, the tutorial area, which is the most closed area in the game:
+
+    15:02:32  Samuel  Sign 1009 created: type 4, area 0x0098e4a0
+    15:03:05  Chico   Summoning sign 1009
+    15:03:11  Samuel  Sign 1009 removed by its owner
+
+Its permission mask reads `0`, meaning nothing at all, not even ghosts,
+against Majula's `4` and Heide's `7`. So this is not a patch for one
+town; it opens the areas the game closes, as a class. That was the wider
+goal all along, and it came free with the narrow one.
 
 This document is the reference. The investigation that got here,
 including three approaches that failed and why, is in
@@ -122,8 +134,12 @@ not the success.
 
 Run with the block patch active, a summon in Heide still works: sign
 1008 placed in `0x009d5170`, summoned, consumed, no rejection, phantom
-delivered. So the patch opens Majula without disturbing the areas that
-already worked.
+delivered. So the patch opens the closed areas without disturbing the
+ones that already worked.
+
+Three areas have now been tested with one build, spanning the whole
+range of the permission mask: Things Betwixt at `0`, Majula at `4`,
+Heide at `7`. All three place, summon and deliver.
 
 The join handshake lines do not repeat in that run, because the server's
 census logs only the first of each message type per client and they had
