@@ -202,15 +202,55 @@ plainly worked, so "the server logged nothing" says nothing about whether the
 item fired. The animation is the signal; on success the game also prints
 "Check your Summon Sign".
 
+## The multiplay zone is not on this path at all
+
+The cache theory was tested and is wrong, and so is everything else the zone
+system holds. With one character travelling between the two areas by bonfire,
+and with reads and writes into the running game from inside it
+(see [DS2_LIVE_MEMORY_ACCESS.md](DS2_LIVE_MEMORY_ACCESS.md)):
+
+- **Forced from map load.** The injector hook now writes the zone id into the
+  block record itself, on the first frame after the map is built, and the log
+  proves it lands: `subs=1 block_writes=1` over 30451 hits, one write that then
+  holds by itself. Majula still refuses.
+- **The whole object was compared.** Dumping the zone control in both places,
+  with the zone forced, leaves exactly two bytes differing that are not the
+  player's position: `+0x08` and the map id at `+0x0c`.
+- **`+0x08` was equalised, both ways.** It is copied from `[block+0x12]`, and
+  reads `2` in Majula and `1` in Heide. Setting Heide's to `2` does not stop
+  the item working there.
+- **The map id was equalised.** Majula is `100400` (m10_04) and Heide is
+  `103100` (m10_31); an earlier attempt used `101000`, which is not a map at
+  all, so that test did not count. Giving Heide Majula's real map id does not
+  stop the item working there.
+- **The gate itself was disabled.** `DarkSoulsII.exe+0x2509f0` is the function
+  that answers "is multiplayer allowed here", and it reads the zone id:
+
+  ```asm
+  1402509f0:  cmpl $0x0,0x10(%rcx)     ; zone id
+  1402509f4:  jl   0x1402509f9
+  1402509f6:  mov  $0x1,%al ; ret      ; >= 0 -> allowed
+  ```
+
+  Patching it to `mov al,0; ret` so it always denies **does not stop the
+  soapstone working in Heide.**
+
+That last one settles it. **Whatever refuses the item in Majula does not read
+the multiplay zone**, and neither does the code that places a sign. The zone
+system governs something else - `FUN_140273840`, which decides whether another
+player's sign is shown, does consult it - but not this.
+
+The `DS2ForceMultiPlayZone` patch is therefore not the fix for Majula. It is
+kept because it is correct about what it does and is likely still needed for
+phantoms to see each other, but on its own it changes nothing here.
+
 ## Still open
 
-The permission is most likely computed **once when the map loads** and cached
-somewhere the per-frame zone state never reaches. Forcing the zone afterwards
-would never touch such a cache, which fits every measurement so far.
-
-The next test is a memory diff of the same character in both places - Heide
-where the item works, Majula where it does not - which is now possible because
-one character can travel between them by bonfire.
+The gate is somewhere else entirely. What is known about it: it runs on the
+client before anything reaches the network, it produces no animation and no
+message, and it is not any of the state above. The next move is to find it by
+elimination rather than by guessing fields - patching candidate functions in
+Heide, where the item works, until one of them stops it.
 
 `+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
 shows `FUN_1400f2690` builds display text, formatting the area name for the
