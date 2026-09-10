@@ -598,6 +598,41 @@ stored state that can be poked; it is derived. Everything in front of it is
 now mapped, measured and reproducible, and the two byte patches above show
 that forcing past it moves the whole chain.
 
+### Where the flag is meant to be set
+
+Three sites in the binary set that bit, and two of them do exactly what the
+state needs, all three fields together:
+
+```asm
+140500e4b:  orl  $0x800,0xfc(%rsi)   ; the flag
+140500e55:  mov  %r14w,0x40(%rsi)    ; the item id
+140500e5a:  mov  %r15w,0x42(%rsi)
+```
+
+They sit at the end of a loop in `0x140500c85` that walks the four quick slots
+and asks `0x140500ec0` whether each may be used:
+
+```asm
+140500dc0:  movzbl 0x20(%rsp,%rbx,1),%edx
+140500dc8:  call 0x140500ec0          ; may this slot be used?
+140500dcd:  cmp  $0x1,%al
+140500dcf:  je   0x140500de1          ; yes -> register it
+140500dda:  jl   0x140500dc0          ; else try the next of four
+140500ddc:  jmp  0x140500e84          ; none -> register nothing
+```
+
+`0x140500ec0` dispatches on the slot's category and, for category 4, indexes a
+16-byte table at `0x1410c0050` and returns whether `table[i].byte1 == 3`.
+
+**And none of it runs in Majula.** Arming every exit of `0x140500ec0` plus the
+loop's two outcomes and pressing the item: nothing fires at all, not even the
+function's entry. So the registration is itself gated further up, and the
+climb has one more level in it.
+
+That is where this session ended. Every level named here was measured, not
+inferred, and the method for the next one is the same: arm the entry, read
+`de=`, repeat.
+
 ### What is nailed down
 
 - Majula never leaves state 0 of the state machine at `0x14032fa00`.
