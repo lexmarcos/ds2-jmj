@@ -16,6 +16,8 @@
 #include "Server.DarkSouls2/Server/GameService/Utils/DS2_GameIds.h"
 #include "Server.DarkSouls2/Server/GameService/Utils/DS2_CellAndAreaId.h"
 
+#include <unordered_map>
+
 struct Frpg2ReliableUdpMessage;
 class Server;
 class GameService;
@@ -29,7 +31,7 @@ class DS2_SignManager
 public:    
     DS2_SignManager(Server* InServerInstance, GameService* InGameServiceInstance);
 
-    virtual MessageHandleResult OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message) override;
+    virtual MessageHandleResult OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message) override;
 
     virtual std::string GetName() override;
     virtual void Poll() override;
@@ -58,5 +60,9 @@ private:
     OnlineAreaPool<DS2_CellAndAreaId, SummonSign> LiveCache;
 
     uint32_t NextSignId = 1000;
+
+    // Throttles the sticky-sign diagnostic, which would otherwise print on
+    // every sign list poll. Keyed on player id.
+    std::unordered_map<uint32_t, double> LastStickyLogTime;
 
 };

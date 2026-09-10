@@ -36,17 +36,37 @@ public:
     // If we should use seperate saves from the retail ones.
     bool EnableSeperateSaveFiles = true;
 
-    // DS2-only diagnostic hook: logs outgoing session-leave protobufs and callstacks.
-    bool DS2TraceLeaveSession = false;
-
-    // DS2-only experimental timer leave prevention. Disabled by default.
-    bool DS2PreventPvpTimerLeave = false;
-    double DS2PvpTimerMinSeconds = 700.0;
-    double DS2PvpTimerMaxSeconds = 820.0;
-
-    // DS2-only phantom session timer patch. Disabled by default.
+    // DS2-only: patch the client-side phantom session timer so PvP sessions are
+    // not ended by it. Disabled by default.
     bool DS2PatchPhantomTimers = false;
+
+    // Value written to the active session timer when the patch is enabled.
     double DS2PhantomTimerSeconds = 4000.0;
+
+    // DS2-only exploratory probe: finds where the game keeps the id of the
+    // area the player is in. Writes DS2_AreaProbe.log and changes nothing.
+    bool DS2ProbeArea = false;
+
+    // With the probe on, watch reads of the address it finds using a hardware
+    // watchpoint, and report which instructions touch it.
+    bool DS2WatchAreaReads = false;
+
+    // Address of the current area id, if already known. Skips the scan, which
+    // otherwise needs a trip between two areas to identify it. Ignored unless
+    // it currently holds a known area id.
+    std::string DS2AreaAddress = "";
+
+    // DS2-only exploratory probe: reports the multiplay zone the player is in
+    // and the permissions it carries. Writes DS2_MultiPlayZone.log.
+    bool DS2ProbeMultiPlayZone = false;
+
+    // DS2-only: make the game believe the player is always inside a multiplay
+    // zone, so summon signs and invasions work where they normally cannot.
+    bool DS2ForceMultiPlayZone = false;
+
+    // Zone substituted when the game reports none. 103110 is Heide's Tower of
+    // Flame, measured as a zone that permits summoning.
+    int DS2ForcedZoneId = 103110;
 
 public:
 

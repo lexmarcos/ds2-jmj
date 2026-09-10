@@ -53,7 +53,7 @@ public:
 
 private:
 
-    bool QuitRecieved = false;
+    bool QuitReceived = false;
 
     static inline Injector* s_instance = nullptr;
 

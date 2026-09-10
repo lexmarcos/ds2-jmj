@@ -14,7 +14,6 @@
 #include "Server/Server.h"
 #include "Server/Streams/Frpg2ReliableUdpPacketStream.h"
 #include "Server/Streams/Frpg2ReliableUdpMessageStream.h"
-#include "Server.DarkSouls2/Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Core/Network/NetConnection.h"
 #include "Shared/Core/Network/NetConnectionUDP.h"
@@ -124,11 +123,6 @@ void GameService::Poll()
         if (Client->Poll())
         {
             LogS(Client->GetName().c_str(), "Disconnecting client connection.");
-            DS2PvpDebug::LogEvent(ServerInstance, Client.get(), "SessionCleanupBegin",
-                "manager_count=%u active_client_count=%u disconnecting_client_count=%u",
-                (uint32_t)Managers.size(),
-                (uint32_t)Clients.size(),
-                (uint32_t)DisconnectingClients.size());
             DisconnectingClients.push_back(Client);
 
             Client->MessageStream->Disconnect();
@@ -139,12 +133,6 @@ void GameService::Poll()
             {
                 Manager->OnLostPlayer(Client.get());
             }
-
-            DS2PvpDebug::LogEvent(ServerInstance, Client.get(), "SessionCleanupEnd",
-                "manager_count=%u active_client_count=%u disconnecting_client_count=%u",
-                (uint32_t)Managers.size(),
-                (uint32_t)Clients.size(),
-                (uint32_t)DisconnectingClients.size());
 
             iter = Clients.erase(iter);
         }
@@ -164,8 +152,6 @@ void GameService::Poll()
         if (Client->MessageStream->GetState() == Frpg2ReliableUdpStreamState::Closed)
         {
             LogS(Client->GetName().c_str(), "Client disconnected.");
-            DS2PvpDebug::LogEvent(ServerInstance, Client.get(), "DisconnectComplete",
-                "disconnecting_client_count=%u", (uint32_t)DisconnectingClients.size());
 
             iter = DisconnectingClients.erase(iter);
         }
@@ -196,11 +182,11 @@ void GameService::Poll()
 void GameService::HandleClientConnection(std::shared_ptr<NetConnection> ClientConnection)
 {
     uint64_t AuthToken;
-    int BytesRecieved = 0;
+    int BytesReceived = 0;
 
     std::vector<uint8_t> Buffer;
     Buffer.resize(sizeof(uint64_t));
-    if (!ClientConnection->Peek(Buffer, 0, sizeof(AuthToken), BytesRecieved) || BytesRecieved != sizeof(AuthToken))
+    if (!ClientConnection->Peek(Buffer, 0, sizeof(AuthToken), BytesReceived) || BytesReceived != sizeof(AuthToken))
     {
         LogS(ClientConnection->GetName().c_str(), "Failed to peek authentication token, or not enough data available. Ignoring connection.");
         return;

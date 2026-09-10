@@ -22,7 +22,6 @@
 
 #include "Config/BuildConfig.h"
 #include "Server/GameService/Utils/DS2_NRSSRSanitizer.h"
-#include "Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/File.h"
@@ -40,9 +39,6 @@ DS2_SignManager::DS2_SignManager(Server* InServerInstance, GameService* InGameSe
 
 void DS2_SignManager::OnLostPlayer(GameClient* Client)
 {
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "SessionCleanup",
-        "cleanup=summon_signs active_sign_count=%u", (uint32_t)Client->ActiveSummonSigns.size());
-
     // Remove all the players signs from the cache.
     for (std::shared_ptr<SummonSign> Sign : Client->ActiveSummonSigns)
     {
@@ -54,17 +50,6 @@ void DS2_SignManager::OnLostPlayer(GameClient* Client)
 void DS2_SignManager::RemoveSignAndNotifyAware(const std::shared_ptr<SummonSign>& Sign)
 {
     DS2_CellAndAreaId LocationId = { Sign->CellId, (DS2_OnlineAreaId)Sign->OnlineAreaId };
-
-    DS2PvpDebug::LogEvent(ServerInstance, nullptr, "SummonSignCleanup",
-        "sign_id=%u sign_type=%s red_soapstone=%u owner_profile_id=%u owner_steam_id_masked=%s request_area_id=%u cell_id=%llu aware_player_count=%u",
-        Sign->SignId,
-        DS2PvpDebug::SignTypeName(Sign->Type),
-        Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-        Sign->PlayerId,
-        DS2PvpDebug::MaskIdentifier(Sign->PlayerSteamId).c_str(),
-        Sign->OnlineAreaId,
-        (unsigned long long)Sign->CellId,
-        (uint32_t)Sign->AwarePlayerIds.size());
 
     LiveCache.Remove(LocationId, Sign->SignId);
 
@@ -94,7 +79,7 @@ void DS2_SignManager::Poll()
 {
 }
 
-MessageHandleResult DS2_SignManager::OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
+MessageHandleResult DS2_SignManager::OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     if (Message.Header.IsType(DS2_Frpg2ReliableUdpMessageType::RequestGetSignList))
     {
@@ -133,7 +118,13 @@ bool DS2_SignManager::CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParame
     const RuntimeConfig& Config = ServerInstance->GetConfig();
 
     // Sign globally disabled?
-    bool IsDisabled = (SignType != DS2_Frpg2RequestMessage::SignType_SmallWhiteSoapstone && SignType != DS2_Frpg2RequestMessage::SignType_WhiteSoapstone) ? Config.DisableInvasions : Config.DisableCoop;
+    bool IsDisabled = (
+                SignType != DS2_Frpg2RequestMessage::SignType_SmallWhiteSoapstoneSunlight
+             && SignType != DS2_Frpg2RequestMessage::SignType_SmallWhiteSoapstone
+             && SignType != DS2_Frpg2RequestMessage::SignType_WhiteSoapstoneSunlight
+             && SignType != DS2_Frpg2RequestMessage::SignType_WhiteSoapstone
+         ) ? Config.DisableInvasions : Config.DisableCoop;
+
     if (IsDisabled)
     {
         return false;
@@ -145,13 +136,15 @@ bool DS2_SignManager::CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParame
         {
             return Config.DS2_RedSoapstoneMatchingParameters.CheckMatch(Host.soul_memory(), Match.soul_memory(), Host.name_engraved_ring() > 0);
         }
+    case DS2_Frpg2RequestMessage::SignType_WhiteSoapstoneSunlight:
     case DS2_Frpg2RequestMessage::SignType_WhiteSoapstone:
         {
-            return Config.DS2_SmallWhiteSoapstoneMatchingParameters.CheckMatch(Host.soul_memory(), Match.soul_memory(), Host.name_engraved_ring() > 0);
+            return Config.DS2_WhiteSoapstoneMatchingParameters.CheckMatch(Host.soul_memory(), Match.soul_memory(), Host.name_engraved_ring() > 0);
         }
+    case DS2_Frpg2RequestMessage::SignType_SmallWhiteSoapstoneSunlight:
     case DS2_Frpg2RequestMessage::SignType_SmallWhiteSoapstone:
         {
-            return Config.DS2_WhiteSoapstoneMatchingParameters.CheckMatch(Host.soul_memory(), Match.soul_memory(), Host.name_engraved_ring() > 0);
+            return Config.DS2_SmallWhiteSoapstoneMatchingParameters.CheckMatch(Host.soul_memory(), Match.soul_memory(), Host.name_engraved_ring() > 0);
         }
     case DS2_Frpg2RequestMessage::SignType_Dragon:
         {
@@ -164,14 +157,49 @@ bool DS2_SignManager::CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParame
 
 MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestGetSignList* Request = (DS2_Frpg2RequestMessage::RequestGetSignList*)Message.Protobuf.get();
     DS2_Frpg2RequestMessage::RequestGetSignListResponse Response;
 
     int RemainingSignCount = (int)Request->max_signs();
-    int ResultSignCount = 0;
-    int RedSoapstoneCount = 0;
+
+    // Signs already put in this response. The sticky pass sweeps every area, so
+    // without this it could offer a sign the normal pass has already sent.
+    std::unordered_set<uint32_t> SentSignIds;
+
+    // Writes one sign into the response. ReportedAreaId/ReportedCellId are what
+    // the searching client is told the sign lives in, which is normally where it
+    // really is but is overridden by the sticky pass below.
+    auto AppendSign = [&](const std::shared_ptr<SummonSign>& Sign, const std::unordered_set<uint32_t>& ClientExistingSignId, uint32_t ReportedAreaId, uint64_t ReportedCellId)
+    {
+        // If client already has sign data we only need to return a limited set of data.
+        if (ClientExistingSignId.count(Sign->SignId) > 0)
+        {
+            DS2_Frpg2RequestMessage::SignInfo* SignInfo = Response.add_sign_info();
+            SignInfo->set_player_id(Sign->PlayerId);
+            SignInfo->set_sign_id(Sign->SignId);
+        }
+        else
+        {
+            DS2_Frpg2RequestMessage::SignData* SignData = Response.add_sign_data();
+            SignData->mutable_sign_info()->set_player_id(Sign->PlayerId);
+            SignData->mutable_sign_info()->set_sign_id(Sign->SignId);
+            SignData->set_online_area_id(ReportedAreaId);
+            SignData->mutable_matching_parameter()->CopyFrom(static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters));
+            SignData->set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
+            SignData->set_player_steam_id(Sign->PlayerSteamId);
+            SignData->set_cell_id(ReportedCellId);
+            SignData->set_sign_type((DS2_Frpg2RequestMessage::SignType)Sign->Type);
+        }
+
+        // Make sure user is marked as aware of the sign so we can clear up when the sign is removed.
+        Sign->AwarePlayerIds.insert(Player.GetPlayerId());
+
+        SentSignIds.insert(Sign->SignId);
+        RemainingSignCount--;
+    };
 
     // Grab as many recent signs as we can from the cache that match our matching criteria.
     for (int i = 0; i < Request->search_areas_size() && RemainingSignCount > 0; i++)
@@ -200,36 +228,8 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
 
         for (std::shared_ptr<SummonSign>& Sign : AreaSigns)
         {
-            // If client already has sign data we only need to return a limited set of data.
-            if (ClientExistingSignId.count(Sign->SignId) > 0)
-            {
-                DS2_Frpg2RequestMessage::SignInfo* SignInfo = Response.add_sign_info();
-                SignInfo->set_player_id(Sign->PlayerId);
-                SignInfo->set_sign_id(Sign->SignId);
-            }
-            else
-            {
-                DS2_Frpg2RequestMessage::SignData* SignData = Response.add_sign_data();
-                SignData->mutable_sign_info()->set_player_id(Sign->PlayerId);
-                SignData->mutable_sign_info()->set_sign_id(Sign->SignId);
-                SignData->set_online_area_id((uint32_t)Sign->OnlineAreaId);
-                SignData->mutable_matching_parameter()->CopyFrom(static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters));
-                SignData->set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
-                SignData->set_player_steam_id(Sign->PlayerSteamId);
-                SignData->set_cell_id(Sign->CellId);
-                SignData->set_sign_type((DS2_Frpg2RequestMessage::SignType)Sign->Type);
-            }
+            AppendSign(Sign, ClientExistingSignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId);
 
-            // Make sure user is marked as aware of the sign so we can clear up when the sign is removed.
-            Sign->AwarePlayerIds.insert(Player.GetPlayerId());
-
-            ResultSignCount++;
-            if (Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone)
-            {
-                RedSoapstoneCount++;
-            }
-
-            RemainingSignCount--;
             if (RemainingSignCount <= 0)
             {
                 break;
@@ -237,15 +237,80 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
         }
     }
 
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "ListSummonSigns",
-        "request_area_id=%u search_area_count=%d max_signs=%u response_sign_count=%d red_soapstone_count=%d soul_memory=%u name_engraved_ring=%u",
-        Request->online_area_id(),
-        Request->search_areas_size(),
-        Request->max_signs(),
-        ResultSignCount,
-        RedSoapstoneCount,
-        Request->matching_parameter().soul_memory(),
-        Request->matching_parameter().name_engraved_ring());
+    // Sticky signs: the client reports online activity area 0 for the areas the
+    // game refuses to place a sign in, Majula among them. A player standing
+    // there can never see a sign, because no sign is ever filed under a cell
+    // they search. So offer them signs from anywhere, reported under a cell and
+    // area they are actually searching, which is what makes the client render
+    // them. The sign itself is left filed where its owner placed it, so the
+    // owner's client and the server stay in agreement about where it is.
+    int OnlineActivityArea = Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentOnlineActivityArea();
+    bool StickyEligible = (OnlineActivityArea == 0);
+
+    // Report this outside the gate. That the client polls for signs at all, and
+    // what it claims about the area it stands in, are both things being
+    // measured here, and a gate that quietly never fires looks identical to a
+    // client that refuses the response. Throttled, this runs on every poll.
+    if (Config.DS2_StickySigns)
+    {
+        double Now = GetSeconds();
+        if (double& Last = LastStickyLogTime[Player.GetPlayerId()]; Now - Last > 10.0)
+        {
+            Last = Now;
+            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s.",
+                Request->online_area_id(), OnlineActivityArea, Request->search_areas_size(),
+                Request->search_areas_size() > 0 ? (uint64_t)Request->search_areas(0).cell_id() : 0ull,
+                RemainingSignCount, LiveCache.GetTotalEntries(), StickyEligible ? "eligible" : "skipped");
+        }
+    }
+
+    if (Config.DS2_StickySigns &&
+        StickyEligible &&
+        RemainingSignCount > 0 &&
+        Request->search_areas_size() > 0)
+    {
+
+        // Union of everything the client says it already holds.
+        std::unordered_set<uint32_t> ClientExistingSignId;
+        for (int i = 0; i < Request->search_areas_size(); i++)
+        {
+            const DS2_Frpg2RequestMessage::SignCellInfo& Area = Request->search_areas(i);
+            for (int j = 0; j < Area.local_signs_size(); j++)
+            {
+                ClientExistingSignId.insert(Area.local_signs(j).sign_id());
+            }
+        }
+
+        uint32_t ReportedAreaId = Request->online_area_id();
+        uint64_t ReportedCellId = Request->search_areas(0).cell_id();
+
+        uint32_t SelfPlayerId = Player.GetPlayerId();
+
+        std::vector<std::shared_ptr<SummonSign>> StickySigns = LiveCache.GetRecentSetGlobal(RemainingSignCount, [this, &Request, &SentSignIds, SelfPlayerId](const std::shared_ptr<SummonSign>& Sign) {
+            if (Sign->PlayerId == SelfPlayerId || SentSignIds.count(Sign->SignId) > 0)
+            {
+                return false;
+            }
+            return CanMatchWith(
+                Request->matching_parameter(),
+                static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters.get()),
+                Sign->Type
+            );
+        });
+
+        for (std::shared_ptr<SummonSign>& Sign : StickySigns)
+        {
+            LogS(Client->GetName().c_str(), "Sticky sign %u (owner area 0x%08x cell 0x%016llx) offered as area 0x%08x cell 0x%016llx.",
+                Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId, ReportedAreaId, ReportedCellId);
+
+            AppendSign(Sign, ClientExistingSignId, ReportedAreaId, ReportedCellId);
+
+            if (RemainingSignCount <= 0)
+            {
+                break;
+            }
+        }
+    }
 
     if (!Client->MessageStream->Send(&Response, &Message))
     {
@@ -289,19 +354,11 @@ MessageHandleResult DS2_SignManager::Handle_RequestCreateSign(GameClient* Client
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
+    LogS(Client->GetName().c_str(), "Sign %u created: type %u, area 0x%08x, cell 0x%016llx.",
+        Sign->SignId, (uint32_t)Sign->Type, (uint32_t)Sign->OnlineAreaId, (unsigned long long)Sign->CellId);
+
     LiveCache.Add(LocationId, Sign->SignId, Sign);
     Client->ActiveSummonSigns.push_back(Sign);
-
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "CreateSummonSign",
-        "sign_id=%u sign_type=%s red_soapstone=%u request_area_id=%u cell_id=%llu soul_memory=%u name_engraved_ring=%u player_struct_size=%u",
-        Sign->SignId,
-        DS2PvpDebug::SignTypeName(Sign->Type),
-        Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-        Sign->OnlineAreaId,
-        (unsigned long long)Sign->CellId,
-        Request->matching_parameter().soul_memory(),
-        Request->matching_parameter().name_engraved_ring(),
-        (uint32_t)Sign->PlayerStruct.size());
 
     DS2_Frpg2RequestMessage::RequestCreateSignResponse Response;
     Response.set_sign_id(Sign->SignId);
@@ -349,6 +406,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestRemoveSign(GameClient* Client
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
+    // Removals matter as much as creations. A sign the owner has quietly
+    // dropped still sits in a searcher's local list, and touching that stale
+    // entry produces a rejection that reads like an area problem.
+    LogS(Client->GetName().c_str(), "Sign %u removed by its owner, area 0x%08x cell 0x%016llx.",
+        (uint32_t)Request->sign_id(), (uint32_t)Request->online_area_id(), (unsigned long long)Request->cell_id());
+
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_id());
     if (!Sign)
     {
@@ -368,7 +431,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestRemoveSign(GameClient* Client
         WarningS(Client->GetName().c_str(), "Client attempted to remove summon sign that didn't belong to them, %i.", Request->sign_id());
     }
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestRemoveSignResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -387,7 +450,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestUpdateSign(GameClient* Client
     // I think the game uses this as something of a hearbeat to keep the sign active in the pool.
     // We keep all players signs active until they are removed, so we don't need to handle this.
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestUpdateSignResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -402,18 +465,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestUpdateSign(GameClient* Client
 MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     ServerDatabase& Database = ServerInstance->GetDatabase();
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestSummonSign* Request = (DS2_Frpg2RequestMessage::RequestSummonSign*)Message.Protobuf.get();
 
     bool bSuccess = true;
-
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonAttempt",
-        "sign_id=%u request_area_id=%lld cell_id=%llu player_struct_size=%u",
-        Request->sign_info().sign_id(),
-        (long long)Request->online_area_id(),
-        (unsigned long long)Request->cell_id(),
-        (uint32_t)Request->player_struct().size());
 
     // Make sure the NRSSR data contained within this message is valid (if the CVE-2022-24126 fix is enabled)
     if (BuildConfig::NRSSR_SANITY_CHECKS)
@@ -433,7 +490,25 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     DS2_CellAndAreaId LocationId = { (uint64_t)Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
+    LogS(Client->GetName().c_str(), "Summoning sign %u, looked up under area 0x%08x cell 0x%016llx.",
+        (uint32_t)Request->sign_info().sign_id(), (uint32_t)Request->online_area_id(),
+        (unsigned long long)Request->cell_id());
+
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_info().sign_id());
+
+    // A sticky sign was offered under the summoner's own cell and area, not the
+    // one it is filed under, so the lookup above cannot find it. The sign id is
+    // unique across the whole cache, so fall back to that.
+    if (!Sign && Config.DS2_StickySigns)
+    {
+        Sign = LiveCache.Find(Request->sign_info().sign_id());
+        if (Sign)
+        {
+            LogS(Client->GetName().c_str(), "Summoning sticky sign %u, filed under area 0x%08x cell 0x%016llx.",
+                Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId);
+        }
+    }
+
     if (!Sign)
     {
         WarningS(Client->GetName().c_str(), "Client attempted to use invalid summon sign, sending back rejection, %i.", Request->sign_info().sign_id());
@@ -470,20 +545,10 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
         else
         {
             Sign->BeingSummonedByPlayerId = Player.GetPlayerId();
-
-            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonAccepted",
-                "sign_id=%u sign_type=%s red_soapstone=%u owner_profile_id=%u owner_steam_id_masked=%s request_area_id=%u cell_id=%llu",
-                Sign->SignId,
-                DS2PvpDebug::SignTypeName(Sign->Type),
-                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-                Sign->PlayerId,
-                DS2PvpDebug::MaskIdentifier(Sign->PlayerSteamId).c_str(),
-                Sign->OnlineAreaId,
-                (unsigned long long)Sign->CellId);
         }
     }
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestSummonSignResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -495,15 +560,6 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     // If failure then send a reject message.
     if (!bSuccess)
     {
-        DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRejected",
-            "sign_id=%u sign_type=%s red_soapstone=%u error=%d request_area_id=%lld cell_id=%llu",
-            Request->sign_info().sign_id(),
-            Sign ? DS2PvpDebug::SignTypeName(Sign->Type) : "Unknown",
-            Sign && Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-            (int)SummonError,
-            (long long)Request->online_area_id(),
-            (unsigned long long)Request->cell_id());
-
         DS2_Frpg2RequestMessage::PushRequestRejectSign PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectSign);
         PushMessage.set_error(SummonError);
@@ -532,21 +588,30 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
 
 MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
+
     DS2_Frpg2RequestMessage::RequestRejectSign* Request = (DS2_Frpg2RequestMessage::RequestRejectSign*)Message.Protobuf.get();
 
     DS2_CellAndAreaId LocationId = { (uint64_t)Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_id());
+
+    // The reason the owner gives is the only account we get of why a summon
+    // that reached both clients still failed.
+    LogS(Client->GetName().c_str(), "Rejecting summon of sign %u: error %u, area 0x%08x, cell 0x%016llx.",
+        (uint32_t)Request->sign_id(), (uint32_t)Request->error(),
+        (uint32_t)Request->online_area_id(), (unsigned long long)Request->cell_id());
+
+    // Same fallback as the summon path, for the same reason.
+    if (!Sign && Config.DS2_StickySigns)
+    {
+        Sign = LiveCache.Find(Request->sign_id());
+    }
+
     if (!Sign)
     {
         WarningS(Client->GetName().c_str(), "Client attempted to reject summoning for invalid sign (or sign cancelled), %i.", Request->sign_id());
-        DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
-            "sign_id=%lld sign_type=Unknown red_soapstone=0 error=%d request_area_id=%lld cell_id=%llu result=missing_sign",
-            (long long)Request->sign_id(),
-            (int)Request->error(),
-            (long long)Request->online_area_id(),
-            (unsigned long long)Request->cell_id());
         return MessageHandleResult::Handled;
     }
 
@@ -569,36 +634,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client
                 WarningS(Client->GetName().c_str(), "Failed to send PushRequestRejectSign to summoner.");
                 return MessageHandleResult::Error;
             }
-
-            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
-                "sign_id=%u sign_type=%s red_soapstone=%u error=%d summoner_profile_id=%u summoner_steam_id_masked=%s request_area_id=%u cell_id=%llu",
-                Sign->SignId,
-                DS2PvpDebug::SignTypeName(Sign->Type),
-                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-                (int)Request->error(),
-                OtherClient->GetPlayerState().GetPlayerId(),
-                DS2PvpDebug::MaskIdentifier(OtherClient->GetPlayerState().GetSteamId()).c_str(),
-                Sign->OnlineAreaId,
-                (unsigned long long)Sign->CellId);
         }
         else
         {
             WarningS(Client->GetName().c_str(), "PlayerId summoning sign no longer exists, nothing to reject.");
-            DS2PvpDebug::LogEvent(ServerInstance, Client, "SummonRefused",
-                "sign_id=%u sign_type=%s red_soapstone=%u error=%d summoner_profile_id=%u request_area_id=%u cell_id=%llu result=missing_summoner",
-                Sign->SignId,
-                DS2PvpDebug::SignTypeName(Sign->Type),
-                Sign->Type == DS2_Frpg2RequestMessage::SignType_RedSoapstone ? 1 : 0,
-                (int)Request->error(),
-                Sign->BeingSummonedByPlayerId,
-                Sign->OnlineAreaId,
-                (unsigned long long)Sign->CellId);
         }        
 
         Sign->BeingSummonedByPlayerId = 0;
     }
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestRejectSignResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -657,15 +702,14 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
         }
     }
 
-    bool IncludedCurrentArea = false;
+    // On a low population server the requester is often the only compatible player
+    // in their own area, and the client hides an area it sees no population for.
     if (Config.DS2IncludeCurrentAreaInRightMatchingArea && CurrentArea != DS2_OnlineAreaId::None)
     {
-        auto [Iter, Inserted] = PotentialAreas.emplace(CurrentArea, 1);
-        if (!Inserted && Iter->second < 1)
+        if (auto Iter = PotentialAreas.find(CurrentArea); Iter == PotentialAreas.end())
         {
-            Iter->second = 1;
+            PotentialAreas.emplace(CurrentArea, 1);
         }
-        IncludedCurrentArea = Inserted;
     }
 
     // Normalize the values to the 0-5 range the client expects and return them.
@@ -675,14 +719,6 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetRightMatchingArea(GameClie
         Info.set_online_area_id((uint32_t)Pair.first);
         Info.set_population((int)Pair.second);
     }
-
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "RightMatchingArea",
-        "current_area=%u include_current_area=%u injected_current_area=%u response_area_count=%d soul_memory=%d",
-        (uint32_t)CurrentArea,
-        Config.DS2IncludeCurrentAreaInRightMatchingArea ? 1 : 0,
-        IncludedCurrentArea ? 1 : 0,
-        Response.area_info_size(),
-        SoulMemory);
 
     if (!Client->MessageStream->Send(&Response, &Message))
     {

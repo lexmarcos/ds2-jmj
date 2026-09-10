@@ -106,5 +106,29 @@ namespace Loader {
                 this["ds3_exe_location"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool ds2_patch_phantom_timers {
+            get {
+                return ((bool)(this["ds2_patch_phantom_timers"]));
+            }
+            set {
+                this["ds2_patch_phantom_timers"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("4000")]
+        public double ds2_phantom_timer_seconds {
+            get {
+                return ((double)(this["ds2_phantom_timer_seconds"]));
+            }
+            set {
+                this["ds2_phantom_timer_seconds"] = value;
+            }
+        }
     }
 }

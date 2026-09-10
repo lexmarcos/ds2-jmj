@@ -26,11 +26,13 @@ class DS2_BreakInManager
 public:    
     DS2_BreakInManager(Server* InServerInstance, GameService* InGameServiceInstance);
 
-    virtual MessageHandleResult OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message) override;
+    virtual MessageHandleResult OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message) override;
 
     virtual std::string GetName() override;
 
     virtual void OnLostPlayer(GameClient* Client) override;
+
+    virtual void Poll() override;
 
 protected:
     bool CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParameter& Client, const std::shared_ptr<GameClient>& Match, DS2_Frpg2RequestMessage::BreakInType Type);
@@ -40,7 +42,27 @@ protected:
     MessageHandleResult Handle_RequestRejectBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message);
 
 private:
+    // Fires an invasion straight from a request file, skipping the item and
+    // the target list. This exists so the one open question, whether a client
+    // accepts the invasion push where the game allows no online activity, can
+    // be asked without first solving how the invader gets an orb.
+    void PollDebugInvadeRequest();
+
+    // Which location the invasion push claims. Read from a file so the choice
+    // can be changed without a restart, because a restart costs every
+    // connected client its auth token and a relaunch of the game.
+    void PollInvadeMode();
+
+private:
     Server* ServerInstance;
     GameService* GameServiceInstance;
+
+    double NextDebugPollTime = 0.0;
+
+    // 0 = pass the invader's value through, 1 = use the target's.
+    int InvadeAreaMode = 1;
+    // 0 = the invader's cell, 1 = the target's online activity area,
+    // 2 = the packed cell from the target's player_location.
+    int InvadeCellMode = 1;
 
 };

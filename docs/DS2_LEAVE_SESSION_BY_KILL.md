@@ -2,6 +2,12 @@
 
 This document records how Dark Souls II reports a PvP session ending after a player kill.
 
+> **Historical record.** The instrumentation named below (`DS2PvpDebugLogging`
+> on the server and `DS2TraceLeaveSession` in the injector) was scaffolding
+> used to reach these findings and is not part of this branch. The findings
+> themselves still hold and are what
+> [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md) is built on.
+
 ## Context
 
 The behavior was observed with:

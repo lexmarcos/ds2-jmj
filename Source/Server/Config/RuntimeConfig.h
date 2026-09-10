@@ -178,7 +178,7 @@ public:
     // the main ds3os servers.
     bool SupportSharding = false;
 
-    // If set the user will need to enter a password to recieve the keys to enter the 
+    // If set the user will need to enter a password to receive the keys to enter the 
     // server when its advertised.
     std::string Password = "";
 
@@ -311,13 +311,39 @@ public:
     // that is supplied by the client.
     bool IgnoreInvasionAreaFilter = false;
 
-    // If enabled DS2 PvP flow events are logged with enough context to debug
-    // summon, invasion, quick match and disconnect/session lifecycle issues.
-    bool DS2PvpDebugLogging = false;
+    // If enabled, a steam id that is already signed in gets a separate player
+    // profile instead of being refused, so one account can hold several
+    // sessions at once. This exists to test PvP with a single copy of the game;
+    // leave it off on a server real people use.
+    bool AllowDuplicateSteamIds = false;
 
     // If enabled DS2 RequestGetRightMatchingArea responses include the
     // requester's current area even when no other compatible client is there.
+    // Without this the client hides the area on a low population server.
     bool DS2IncludeCurrentAreaInRightMatchingArea = false;
+
+    // If enabled DS2 summon signs are offered to players standing in areas
+    // where no sign of their own can be placed (Majula and the other hub
+    // areas). The sign keeps living in the cell its owner placed it in; it is
+    // only reported to the searcher under the searcher's own cell and area so
+    // the client accepts it as local. Summon and reject then fall back to a
+    // lookup by sign id alone, because the searcher reports a location the
+    // sign was never filed under.
+    bool DS2_StickySigns = false;
+
+    // If enabled DS2 players are invadable in the areas the game treats as
+    // having no online activity, Majula among them, and the invader is not
+    // restricted to targets in their own area. The invasion push is rewritten
+    // to name the target's own area and cell, since the target has to be told
+    // something is happening where they are standing rather than where the
+    // invader is. Sitting at a bonfire and burning an effigy still protect a
+    // player; only the dead-area rule is lifted.
+    bool DS2_InvadeAnywhere = false;
+
+    // If enabled the server logs the first time each client sends each kind of
+    // message. One line per client per message type, so it stays readable, and
+    // it maps which online subsystems a client actually uses where it stands.
+    bool LogFirstMessageOfEachType = false;
 
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
@@ -514,7 +540,7 @@ public:
     std::string WarningAnnouncementMessage = "Your account has been flagged for unfair play. Further unfair behaviour will lead to disconnection or bans.";
 
 
-    // If set the player will recieve ingame management messages periodically when they mean the threshold.
+    // If set the player will receive ingame management messages periodically when they mean the threshold.
     bool AntiCheatSendWarningMessageInGame = true;
 
     // How often the user will see a message if AntiCheatSendWarningMessageInGame is enabled.
@@ -549,7 +575,7 @@ public:
     // How much gets added to the players penalty score when the delta between their stats on one update and another is impossible (eg. going from level 1 to 100).
     float AntiCheatScore_ImpossibleStatDelta = 20;
 
-    // How much gets added to the players penalty score when they recieve and impossible number of items in one go (eg. 100x titanite slabs).
+    // How much gets added to the players penalty score when they receive and impossible number of items in one go (eg. 100x titanite slabs).
     float AntiCheatScore_ImpossibleGetItemQuantity = 20;
 
     // How much gets added to the players penalty score when their level is impossible with the play time they have.

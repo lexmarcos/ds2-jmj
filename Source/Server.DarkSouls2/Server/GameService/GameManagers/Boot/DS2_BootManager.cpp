@@ -29,7 +29,7 @@ DS2_BootManager::DS2_BootManager(Server* InServerInstance)
 {
 }
 
-MessageHandleResult DS2_BootManager::OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
+MessageHandleResult DS2_BootManager::OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     if (Message.Header.IsType(DS2_Frpg2ReliableUdpMessageType::RequestWaitForUserLogin))
     {
@@ -52,19 +52,20 @@ MessageHandleResult DS2_BootManager::Handle_RequestWaitForUserLogin(GameClient* 
     
     std::string SteamId = Request->steam_id();
 
-#ifdef _DEBUG
-
-    // In debug if a stream id is already signed in we make a duplicate player profile, this allows us to have multiple of the 
-    // same steam id connected without screwin up logic everywhere else.
-    std::shared_ptr<GameService> Service = ServerInstance->GetService<GameService>();
-    std::string BaseSteamId = SteamId;
-    size_t ProfileInstance = 1;
-    while (Service->FindClientBySteamId(SteamId) != nullptr)
+    // A steam id that is already signed in gets a suffixed profile rather than
+    // colliding with the existing one, which lets a single account hold several
+    // sessions. This used to be behind _DEBUG, which the Linux build never
+    // defines, so it is a config option instead.
+    if (ServerInstance->GetConfig().AllowDuplicateSteamIds)
     {
-        SteamId = StringFormat("%s_%i", BaseSteamId.c_str(), ProfileInstance++);
+        std::shared_ptr<GameService> Service = ServerInstance->GetService<GameService>();
+        std::string BaseSteamId = SteamId;
+        size_t ProfileInstance = 1;
+        while (Service->FindClientBySteamId(SteamId) != nullptr)
+        {
+            SteamId = StringFormat("%s_%i", BaseSteamId.c_str(), ProfileInstance++);
+        }
     }
-
-#endif
 
     State.SetSteamId(SteamId);
 

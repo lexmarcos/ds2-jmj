@@ -23,10 +23,22 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.cpp
     Hooks/DarkSouls2/DS2_LogProtobufsHook.h
     Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp
-    Hooks/DarkSouls2/DS2_SessionTraceState.h
-    Hooks/DarkSouls2/DS2_SessionTraceState.cpp
     Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h
     Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.cpp
+    Hooks/DarkSouls2/DS2_AreaProbeHook.h
+    Hooks/DarkSouls2/DS2_AreaProbeHook.cpp
+    Hooks/DarkSouls2/DS2_MultiPlayZoneProbeHook.h
+    Hooks/DarkSouls2/DS2_MultiPlayZoneProbeHook.cpp
+    Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h
+    Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.cpp
+    Hooks/DarkSouls2/DS2_MemProbeHook.h
+    Hooks/DarkSouls2/DS2_MemProbeHook.cpp
+    Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.h
+    Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.cpp
+    Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h
+    Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.cpp
+    Hooks/DarkSouls2/DS2_TraceHook.h
+    Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h

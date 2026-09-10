@@ -28,10 +28,6 @@ namespace Loader
         public string ServerGameType        { get; set; }
         public int ServerPort               { get; set; }
         public bool EnableSeperateSaveFiles { get; set; }
-        public bool DS2TraceLeaveSession    { get; set; }
-        public bool DS2PreventPvpTimerLeave { get; set; }
-        public double DS2PvpTimerMinSeconds { get; set; } = 700.0;
-        public double DS2PvpTimerMaxSeconds { get; set; } = 820.0;
         public bool DS2PatchPhantomTimers   { get; set; }
         public double DS2PhantomTimerSeconds { get; set; } = 4000.0;
 
@@ -51,20 +47,6 @@ namespace Loader
             catch (JsonException)
             {
                 config = new ServerConfig();
-                return false;
-            }
-        }
-
-        public static bool TryFromJson(string json, out InjectionConfig config)
-        {
-            try
-            {
-                config = JsonSerializer.Deserialize<InjectionConfig>(json);
-                return config != null;
-            }
-            catch (JsonException)
-            {
-                config = new InjectionConfig();
                 return false;
             }
         }

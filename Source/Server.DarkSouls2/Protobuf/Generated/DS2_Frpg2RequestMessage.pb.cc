@@ -729,7 +729,9 @@ bool SummonErrorId_IsValid(int value) {
 
 bool SignType_IsValid(int value) {
   switch(value) {
+    case 0:
     case 1:
+    case 2:
     case 3:
     case 4:
     case 6:
@@ -22006,7 +22008,7 @@ void SignData::SharedCtor() {
   player_struct_ = const_cast< ::std::string*>(&::google::protobuf::internal::GetEmptyStringAlreadyInited());
   player_steam_id_ = const_cast< ::std::string*>(&::google::protobuf::internal::GetEmptyStringAlreadyInited());
   cell_id_ = GOOGLE_LONGLONG(0);
-  sign_type_ = 1;
+  sign_type_ = 0;
   ::memset(_has_bits_, 0, sizeof(_has_bits_));
 }
 
@@ -22053,7 +22055,18 @@ SignData* SignData::New() const {
 }
 
 void SignData::Clear() {
+#define OFFSET_OF_FIELD_(f) (reinterpret_cast<char*>(      \
+  &reinterpret_cast<SignData*>(16)->f) - \
+   reinterpret_cast<char*>(16))
+
+#define ZR_(first, last) do {                              \
+    size_t f = OFFSET_OF_FIELD_(first);                    \
+    size_t n = OFFSET_OF_FIELD_(last) - f + sizeof(last);  \
+    ::memset(&first, 0, n);                                \
+  } while (0)
+
   if (_has_bits_[0 / 32] & 127) {
+    ZR_(cell_id_, sign_type_);
     if (has_sign_info()) {
       if (sign_info_ != NULL) sign_info_->::DS2_Frpg2RequestMessage::SignInfo::Clear();
     }
@@ -22071,9 +22084,11 @@ void SignData::Clear() {
         player_steam_id_->clear();
       }
     }
-    cell_id_ = GOOGLE_LONGLONG(0);
-    sign_type_ = 1;
   }
+
+#undef OFFSET_OF_FIELD_
+#undef ZR_
+
   ::memset(_has_bits_, 0, sizeof(_has_bits_));
   mutable_unknown_fields()->clear();
 }
@@ -28056,7 +28071,7 @@ bool RequestBreakInTarget::MergePartialFromCodedStream(
         break;
       }
 
-      // required .DS2_Frpg2RequestMessage.BreakInType type = 4;
+      // optional .DS2_Frpg2RequestMessage.BreakInType type = 4;
       case 4: {
         if (tag == 32) {
          parse_type:
@@ -28117,7 +28132,7 @@ void RequestBreakInTarget::SerializeWithCachedSizes(
     ::google::protobuf::internal::WireFormatLite::WriteUInt32(3, this->player_id(), output);
   }
 
-  // required .DS2_Frpg2RequestMessage.BreakInType type = 4;
+  // optional .DS2_Frpg2RequestMessage.BreakInType type = 4;
   if (has_type()) {
     ::google::protobuf::internal::WireFormatLite::WriteEnum(
       4, this->type(), output);
@@ -28153,7 +28168,7 @@ int RequestBreakInTarget::ByteSize() const {
           this->player_id());
     }
 
-    // required .DS2_Frpg2RequestMessage.BreakInType type = 4;
+    // optional .DS2_Frpg2RequestMessage.BreakInType type = 4;
     if (has_type()) {
       total_size += 1 +
         ::google::protobuf::internal::WireFormatLite::EnumSize(this->type());
@@ -28199,7 +28214,7 @@ void RequestBreakInTarget::CopyFrom(const RequestBreakInTarget& from) {
 }
 
 bool RequestBreakInTarget::IsInitialized() const {
-  if ((_has_bits_[0] & 0x0000000f) != 0x0000000f) return false;
+  if ((_has_bits_[0] & 0x00000007) != 0x00000007) return false;
 
   return true;
 }
@@ -28543,7 +28558,7 @@ bool RequestGetBreakInTargetList::MergePartialFromCodedStream(
         break;
       }
 
-      // required .DS2_Frpg2RequestMessage.BreakInType type = 5;
+      // optional .DS2_Frpg2RequestMessage.BreakInType type = 5;
       case 5: {
         if (tag == 40) {
          parse_type:
@@ -28610,7 +28625,7 @@ void RequestGetBreakInTargetList::SerializeWithCachedSizes(
       4, this->matching_parameter(), output);
   }
 
-  // required .DS2_Frpg2RequestMessage.BreakInType type = 5;
+  // optional .DS2_Frpg2RequestMessage.BreakInType type = 5;
   if (has_type()) {
     ::google::protobuf::internal::WireFormatLite::WriteEnum(
       5, this->type(), output);
@@ -28653,7 +28668,7 @@ int RequestGetBreakInTargetList::ByteSize() const {
           this->matching_parameter());
     }
 
-    // required .DS2_Frpg2RequestMessage.BreakInType type = 5;
+    // optional .DS2_Frpg2RequestMessage.BreakInType type = 5;
     if (has_type()) {
       total_size += 1 +
         ::google::protobuf::internal::WireFormatLite::EnumSize(this->type());
@@ -28702,7 +28717,7 @@ void RequestGetBreakInTargetList::CopyFrom(const RequestGetBreakInTargetList& fr
 }
 
 bool RequestGetBreakInTargetList::IsInitialized() const {
-  if ((_has_bits_[0] & 0x0000001f) != 0x0000001f) return false;
+  if ((_has_bits_[0] & 0x0000000f) != 0x0000000f) return false;
 
   if (has_matching_parameter()) {
     if (!this->matching_parameter().IsInitialized()) return false;
@@ -42647,6 +42662,7 @@ void RequestGetTotalDeathCountResponse::Swap(RequestGetTotalDeathCountResponse* 
 // ===================================================================
 
 #ifndef _MSC_VER
+const int PushRequestHeader::kPushMessageIdFieldNumber;
 #endif  // !_MSC_VER
 
 PushRequestHeader::PushRequestHeader()
@@ -42667,6 +42683,7 @@ PushRequestHeader::PushRequestHeader(const PushRequestHeader& from)
 
 void PushRequestHeader::SharedCtor() {
   _cached_size_ = 0;
+  push_message_id_ = 925;
   ::memset(_has_bits_, 0, sizeof(_has_bits_));
 }
 
@@ -42705,6 +42722,7 @@ PushRequestHeader* PushRequestHeader::New() const {
 }
 
 void PushRequestHeader::Clear() {
+  push_message_id_ = 925;
   ::memset(_has_bits_, 0, sizeof(_has_bits_));
   mutable_unknown_fields()->clear();
 }
@@ -42722,14 +42740,39 @@ bool PushRequestHeader::MergePartialFromCodedStream(
     ::std::pair< ::google::protobuf::uint32, bool> p = input->ReadTagWithCutoff(127);
     tag = p.first;
     if (!p.second) goto handle_unusual;
-  handle_unusual:
-    if (tag == 0 ||
-        ::google::protobuf::internal::WireFormatLite::GetTagWireType(tag) ==
-        ::google::protobuf::internal::WireFormatLite::WIRETYPE_END_GROUP) {
-      goto success;
+    switch (::google::protobuf::internal::WireFormatLite::GetTagFieldNumber(tag)) {
+      // required .DS2_Frpg2RequestMessage.PushMessageId push_message_id = 1;
+      case 1: {
+        if (tag == 8) {
+          int value;
+          DO_((::google::protobuf::internal::WireFormatLite::ReadPrimitive<
+                   int, ::google::protobuf::internal::WireFormatLite::TYPE_ENUM>(
+                 input, &value)));
+          if (::DS2_Frpg2RequestMessage::PushMessageId_IsValid(value)) {
+            set_push_message_id(static_cast< ::DS2_Frpg2RequestMessage::PushMessageId >(value));
+          } else {
+            unknown_fields_stream.WriteVarint32(tag);
+            unknown_fields_stream.WriteVarint32(value);
+          }
+        } else {
+          goto handle_unusual;
+        }
+        if (input->ExpectAtEnd()) goto success;
+        break;
+      }
+
+      default: {
+      handle_unusual:
+        if (tag == 0 ||
+            ::google::protobuf::internal::WireFormatLite::GetTagWireType(tag) ==
+            ::google::protobuf::internal::WireFormatLite::WIRETYPE_END_GROUP) {
+          goto success;
+        }
+        DO_(::google::protobuf::internal::WireFormatLite::SkipField(
+            input, tag, &unknown_fields_stream));
+        break;
+      }
     }
-    DO_(::google::protobuf::internal::WireFormatLite::SkipField(
-        input, tag, &unknown_fields_stream));
   }
 success:
   // @@protoc_insertion_point(parse_success:DS2_Frpg2RequestMessage.PushRequestHeader)
@@ -42743,6 +42786,12 @@ failure:
 void PushRequestHeader::SerializeWithCachedSizes(
     ::google::protobuf::io::CodedOutputStream* output) const {
   // @@protoc_insertion_point(serialize_start:DS2_Frpg2RequestMessage.PushRequestHeader)
+  // required .DS2_Frpg2RequestMessage.PushMessageId push_message_id = 1;
+  if (has_push_message_id()) {
+    ::google::protobuf::internal::WireFormatLite::WriteEnum(
+      1, this->push_message_id(), output);
+  }
+
   output->WriteRaw(unknown_fields().data(),
                    unknown_fields().size());
   // @@protoc_insertion_point(serialize_end:DS2_Frpg2RequestMessage.PushRequestHeader)
@@ -42751,6 +42800,14 @@ void PushRequestHeader::SerializeWithCachedSizes(
 int PushRequestHeader::ByteSize() const {
   int total_size = 0;
 
+  if (_has_bits_[0 / 32] & (0xffu << (0 % 32))) {
+    // required .DS2_Frpg2RequestMessage.PushMessageId push_message_id = 1;
+    if (has_push_message_id()) {
+      total_size += 1 +
+        ::google::protobuf::internal::WireFormatLite::EnumSize(this->push_message_id());
+    }
+
+  }
   total_size += unknown_fields().size();
 
   GOOGLE_SAFE_CONCURRENT_WRITES_BEGIN();
@@ -42766,6 +42823,11 @@ void PushRequestHeader::CheckTypeAndMergeFrom(
 
 void PushRequestHeader::MergeFrom(const PushRequestHeader& from) {
   GOOGLE_CHECK_NE(&from, this);
+  if (from._has_bits_[0 / 32] & (0xffu << (0 % 32))) {
+    if (from.has_push_message_id()) {
+      set_push_message_id(from.push_message_id());
+    }
+  }
   mutable_unknown_fields()->append(from.unknown_fields());
 }
 
@@ -42776,12 +42838,15 @@ void PushRequestHeader::CopyFrom(const PushRequestHeader& from) {
 }
 
 bool PushRequestHeader::IsInitialized() const {
+  if ((_has_bits_[0] & 0x00000001) != 0x00000001) return false;
 
   return true;
 }
 
 void PushRequestHeader::Swap(PushRequestHeader* other) {
   if (other != this) {
+    std::swap(push_message_id_, other->push_message_id_);
+    std::swap(_has_bits_[0], other->_has_bits_[0]);
     _unknown_fields_.swap(other->_unknown_fields_);
     std::swap(_cached_size_, other->_cached_size_);
   }

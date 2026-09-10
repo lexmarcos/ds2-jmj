@@ -54,7 +54,6 @@ namespace Loader
         BuildInfoLabel = new System.Windows.Forms.Label();
         ContinualUpdateTimer = new System.Windows.Forms.Timer(components);
         panel1 = new System.Windows.Forms.Panel();
-        VersionInfoLabel = new System.Windows.Forms.Label();
         DiscordLink = new System.Windows.Forms.LinkLabel();
         GithubLink = new System.Windows.Forms.LinkLabel();
         serverListRefreshTimer = new System.Windows.Forms.Timer(components);
@@ -94,9 +93,9 @@ namespace Loader
         ImportButton.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
         ImportButton.UseVisualStyleBackColor = true;
         ImportButton.Click += OnCreateNewServer;
-        //
+        // 
         // ImportServerButton
-        //
+        // 
         ImportServerButton.ImageKey = "add.png";
         ImportServerButton.ImageList = serverListImageList;
         ImportServerButton.Location = new System.Drawing.Point(320, 201);
@@ -108,7 +107,7 @@ namespace Loader
         ImportServerButton.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
         ImportServerButton.UseVisualStyleBackColor = true;
         ImportServerButton.Click += OnImportServer;
-        //
+        // 
         // serverListImageList
         // 
         serverListImageList.ColorDepth = System.Windows.Forms.ColorDepth.Depth32Bit;
@@ -240,20 +239,7 @@ namespace Loader
         panel1.Padding = new System.Windows.Forms.Padding(5);
         panel1.Size = new System.Drawing.Size(943, 113);
         panel1.TabIndex = 10;
-        //
-        // VersionInfoLabel
-        //
-        VersionInfoLabel.Anchor = System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
-        VersionInfoLabel.BackColor = System.Drawing.SystemColors.Control;
-        VersionInfoLabel.Font = new System.Drawing.Font("Segoe UI", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
-        VersionInfoLabel.ForeColor = System.Drawing.SystemColors.ControlDarkDark;
-        VersionInfoLabel.Location = new System.Drawing.Point(243, 117);
-        VersionInfoLabel.Name = "VersionInfoLabel";
-        VersionInfoLabel.Size = new System.Drawing.Size(682, 21);
-        VersionInfoLabel.TabIndex = 14;
-        VersionInfoLabel.Text = "Loader - #-------- | Injector - #--------";
-        VersionInfoLabel.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
-        //
+        // 
         // DiscordLink
         // 
         DiscordLink.ActiveLinkColor = System.Drawing.Color.White;
@@ -476,7 +462,6 @@ namespace Loader
         ClientSize = new System.Drawing.Size(934, 458);
         Controls.Add(panel3);
         Controls.Add(gameTabControl);
-        Controls.Add(VersionInfoLabel);
         Controls.Add(ImportServerButton);
         Controls.Add(SettingsButton);
         Controls.Add(panel2);
@@ -525,7 +510,6 @@ namespace Loader
         private System.Windows.Forms.Label BuildInfoLabel;
         private System.Windows.Forms.Timer ContinualUpdateTimer;
         private System.Windows.Forms.Panel panel1;
-        private System.Windows.Forms.Label VersionInfoLabel;
         private System.Windows.Forms.ColumnHeader columnHeader4;
         private System.Windows.Forms.Timer serverListRefreshTimer;
         private System.Windows.Forms.ImageList serverListImageList;

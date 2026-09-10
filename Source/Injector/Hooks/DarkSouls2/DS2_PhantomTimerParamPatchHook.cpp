@@ -8,7 +8,6 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h"
-#include "Injector/Hooks/DarkSouls2/DS2_SessionTraceState.h"
 #include "Injector/Config/RuntimeConfig.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
@@ -17,10 +16,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -49,43 +46,9 @@ namespace
 
     std::mutex s_patch_log_mutex;
 
-    bool IsTruthyEnvVar(const char* Name)
-    {
-        const char* Value = std::getenv(Name);
-        if (Value == nullptr)
-        {
-            return false;
-        }
-
-        std::string Text = Value;
-        std::transform(
-            Text.begin(),
-            Text.end(),
-            Text.begin(),
-            [](unsigned char Ch)
-            {
-                return (char)std::tolower(Ch);
-            });
-
-        return Text == "1" || Text == "true" || Text == "yes" || Text == "on";
-    }
-
     double ResolveTargetSeconds(const RuntimeConfig& Config)
     {
-        double TargetSeconds = Config.DS2PhantomTimerSeconds > 0.0 ? Config.DS2PhantomTimerSeconds : 4000.0;
-
-        const char* EnvValue = std::getenv("DS2_PHANTOM_TIMER_SECONDS");
-        if (EnvValue != nullptr && EnvValue[0] != '\0')
-        {
-            char* End = nullptr;
-            double Parsed = std::strtod(EnvValue, &End);
-            if (End != EnvValue && std::isfinite(Parsed) && Parsed > 0.0)
-            {
-                TargetSeconds = Parsed;
-            }
-        }
-
-        return TargetSeconds;
+        return Config.DS2PhantomTimerSeconds > 0.0 ? Config.DS2PhantomTimerSeconds : 4000.0;
     }
 
     bool IsReadableProtection(uint32_t Protect)
@@ -381,7 +344,6 @@ namespace
         void TryPatchActiveTimer(const CONTEXT& Context, DWORD ThreadId)
         {
             double Now = GetSeconds();
-            DS2_SessionTraceState::ClientTraceContext Snapshot = DS2_SessionTraceState::GetCurrentSnapshot(Now);
             size_t TimerAddress = (size_t)Context.R14 + kActiveTimerDirectOffset;
             float CurrentSeconds = 0.0f;
             if (!TryReadFloat(TimerAddress, CurrentSeconds) || !IsValidTimerValue(CurrentSeconds))
@@ -391,18 +353,18 @@ namespace
 
             if (CurrentSeconds >= m_target_seconds - 1.0f)
             {
-                MaybeLogTimerEvent("already_high_enough", Now, ThreadId, Snapshot, (size_t)Context.R14, TimerAddress, CurrentSeconds, CurrentSeconds);
+                MaybeLogTimerEvent("already_high_enough", Now, ThreadId, (size_t)Context.R14, TimerAddress, CurrentSeconds, CurrentSeconds);
                 return;
             }
 
             if (!TryWriteFloat(TimerAddress, m_target_seconds))
             {
-                MaybeLogTimerEvent("write_failed", Now, ThreadId, Snapshot, (size_t)Context.R14, TimerAddress, CurrentSeconds, CurrentSeconds);
+                MaybeLogTimerEvent("write_failed", Now, ThreadId, (size_t)Context.R14, TimerAddress, CurrentSeconds, CurrentSeconds);
                 return;
             }
 
             m_patch_count++;
-            MaybeLogTimerEvent("patched", Now, ThreadId, Snapshot, (size_t)Context.R14, TimerAddress, CurrentSeconds, m_target_seconds);
+            MaybeLogTimerEvent("patched", Now, ThreadId, (size_t)Context.R14, TimerAddress, CurrentSeconds, m_target_seconds);
         }
 
         void AppendInstallLog(const char* Result, const char* Reason)
@@ -422,7 +384,6 @@ namespace
             const char* Result,
             double Now,
             DWORD ThreadId,
-            const DS2_SessionTraceState::ClientTraceContext& Snapshot,
             size_t R14,
             size_t TimerAddress,
             float OldSeconds,
@@ -445,7 +406,7 @@ namespace
 
             AppendPatchLog(StringFormat(
                 "============================================================\n"
-                "time=%.3f event=DS2ActiveTimerPatch result=%s source=r14_plus_0xcfc probe_offset=0x%zx thread_id=%u hit_count=%zu patch_count=%zu r14=0x%016llx timer_address=0x%016llx old_seconds=%.3f new_seconds=%.3f target_seconds=%.3f client_session_id=%zu client_session_role=%s client_duration=%.3f client_reason=%s\n\n",
+                "time=%.3f event=DS2ActiveTimerPatch result=%s source=r14_plus_0xcfc probe_offset=0x%zx thread_id=%u hit_count=%zu patch_count=%zu r14=0x%016llx timer_address=0x%016llx old_seconds=%.3f new_seconds=%.3f target_seconds=%.3f\n\n",
                 Now,
                 Result,
                 kActiveTimerProbeOffset,
@@ -456,11 +417,7 @@ namespace
                 (unsigned long long)TimerAddress,
                 OldSeconds,
                 NewSeconds,
-                (double)m_target_seconds,
-                Snapshot.ClientSessionId,
-                Snapshot.ClientSessionRole.c_str(),
-                Snapshot.ClientSessionDuration,
-                Snapshot.ClientLeaveReasonHint.c_str()));
+                (double)m_target_seconds));
 
             if (!ShouldLogConsole)
             {
@@ -519,17 +476,13 @@ bool DS2_PhantomTimerParamPatchHook::Install(Injector& injector)
 {
 #if defined(_WIN32) && defined(_M_X64)
     const RuntimeConfig& Config = injector.GetConfig();
-    const bool Enabled = Config.DS2PatchPhantomTimers || IsTruthyEnvVar("DS2_PATCH_PHANTOM_TIMERS");
-    if (!Enabled)
+    if (!Config.DS2PatchPhantomTimers)
     {
         return true;
     }
 
     double TargetSeconds = ResolveTargetSeconds(Config);
-    Log("[DS2TimerParamPatch] enabled=1 target_seconds=%.3f config=%u env=%u",
-        TargetSeconds,
-        Config.DS2PatchPhantomTimers ? 1 : 0,
-        IsTruthyEnvVar("DS2_PATCH_PHANTOM_TIMERS") ? 1 : 0);
+    Log("[DS2TimerParamPatch] enabled=1 target_seconds=%.3f", TargetSeconds);
 
     return s_active_timer_manager.Install((size_t)injector.GetBaseAddress(), TargetSeconds);
 #else

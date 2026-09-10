@@ -19,11 +19,13 @@
 #include "Config/RuntimeConfig.h"
 #include "Server/Server.h"
 
-#include "Server/GameService/Utils/DS2_PvpDebug.h"
-
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DiffTracker.h"
+#include "Shared/Core/Utils/File.h"
+
+#include <cstdio>
+#include <filesystem>
 
 DS2_BreakInManager::DS2_BreakInManager(Server* InServerInstance, GameService* InGameServiceInstance)
     : ServerInstance(InServerInstance)
@@ -35,7 +37,7 @@ void DS2_BreakInManager::OnLostPlayer(GameClient* Client)
 {
 }
 
-MessageHandleResult DS2_BreakInManager::OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
+MessageHandleResult DS2_BreakInManager::OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     if (Message.Header.IsType(DS2_Frpg2ReliableUdpMessageType::RequestGetBreakInTargetList))
     {
@@ -125,7 +127,7 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
                 return false;
             }
         }
-        else
+        else if (!Config.DS2_InvadeAnywhere)
         {
             if (OtherClient->GetPlayerStateType<DS2_PlayerState>().GetCurrentArea() != (DS2_OnlineAreaId)Request->online_area_id())
             {
@@ -135,19 +137,27 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
         return CanMatchWith(Request->matching_parameter(), OtherClient, Request->type()); 
     });
 
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "ListInvasionTargets",
-        "invasion_type=%s request_area_id=%u cell_id=%u max_targets=%u matched_target_count=%u soul_memory=%u ignore_area_filter=%u",
-        DS2PvpDebug::BreakInTypeName(Request->type()),
-        Request->online_area_id(),
-        Request->cell_id(),
-        Request->max_targets(),
-        (uint32_t)PotentialTargets.size(),
-        Request->matching_parameter().soul_memory(),
-        Config.IgnoreInvasionAreaFilter ? 1 : 0);
-
     DS2_Frpg2RequestMessage::RequestGetBreakInTargetListResponse Response;
     Response.set_cell_id(Request->cell_id());
     Response.set_online_area_id(Request->online_area_id());
+
+    // Same reasoning as the sign poll diagnostic: an invader who never asks and
+    // an invader who asks and is offered nothing look identical from outside.
+    LogS(Client->GetName().c_str(), "Break-in target list: type %u, area 0x%08x cell 0x%08x, %zu candidates of %zu clients.",
+        (uint32_t)Request->type(), Request->online_area_id(), Request->cell_id(),
+        PotentialTargets.size(), GameServiceInstance->GetClients().size());
+
+    for (const std::shared_ptr<GameClient>& Other : GameServiceInstance->GetClients())
+    {
+        if (Other.get() == Client)
+        {
+            continue;
+        }
+        auto& OtherState = Other->GetPlayerStateType<DS2_PlayerState>();
+        LogS(Client->GetName().c_str(), "  candidate '%s': area 0x%08x, activity area %d, invadable %s.",
+            Other->GetName().c_str(), (uint32_t)OtherState.GetCurrentArea(),
+            OtherState.GetCurrentOnlineActivityArea(), OtherState.GetIsInvadable() ? "yes" : "no");
+    }
 
     int CountToSend = std::min((int)Request->max_targets(), (int)PotentialTargets.size());
     for (int i = 0; i < CountToSend; i++)
@@ -171,18 +181,20 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
 MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     ServerDatabase& Database = ServerInstance->GetDatabase();
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestBreakInTarget* Request = (DS2_Frpg2RequestMessage::RequestBreakInTarget*)Message.Protobuf.get();
 
-    bool bSuccess = true;
+    // Ground truth for what the client considers a valid area and cell here.
+    // Worth having whenever a real orb is used, since the debug path can only
+    // guess at these.
+    LogS(Client->GetName().c_str(), "Break-in target request: target %u, type %u, area %u (0x%08x), cell %u (0x%08x).",
+        Request->player_id(), (uint32_t)Request->type(),
+        Request->online_area_id(), Request->online_area_id(),
+        Request->cell_id(), Request->cell_id());
 
-    DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRequest",
-        "invasion_type=%s target_profile_id=%u request_area_id=%u cell_id=%u",
-        DS2PvpDebug::BreakInTypeName(Request->type()),
-        Request->player_id(),
-        Request->online_area_id(),
-        Request->cell_id());
+    bool bSuccess = true;
 
     // Check client still exists.
     std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());
@@ -200,25 +212,43 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
         PushMessage.set_player_id(Player.GetPlayerId());
         PushMessage.set_steam_id(Player.GetSteamId());
         PushMessage.set_type(Request->type());
-        PushMessage.set_cell_id(Request->cell_id());
-        PushMessage.set_online_area_id(Request->online_area_id());
+        // Normally invader and target stand in the same place, so the request's
+        // own location is the target's too. Once an invasion can cross areas it
+        // is not, and the target has to be told about its own ground.
+        if (Config.DS2_InvadeAnywhere)
+        {
+            auto& Target = TargetClient->GetPlayerStateType<DS2_PlayerState>();
+
+            uint32_t Area = InvadeAreaMode == 1 ? (uint32_t)Target.GetCurrentArea()
+                                                : Request->online_area_id();
+            uint32_t Cell = Request->cell_id();
+            if (InvadeCellMode == 1)
+            {
+                Cell = (uint32_t)Target.GetCurrentOnlineActivityArea();
+            }
+            else if (InvadeCellMode == 2)
+            {
+                Cell = Target.GetCurrentCellId();
+            }
+
+            PushMessage.set_cell_id(Cell);
+            PushMessage.set_online_area_id(Area);
+
+            LogS(Client->GetName().c_str(), "Invading '%s' across areas. Invader says area %u cell %u; target is in area %u, activity area %d, packed cell 0x%08x. Sending area %u cell %u.",
+                TargetClient->GetName().c_str(), Request->online_area_id(), Request->cell_id(),
+                (uint32_t)Target.GetCurrentArea(), Target.GetCurrentOnlineActivityArea(), Target.GetCurrentCellId(),
+                Area, Cell);
+        }
+        else
+        {
+            PushMessage.set_cell_id(Request->cell_id());
+            PushMessage.set_online_area_id(Request->online_area_id());
+        }
 
         if (!TargetClient->MessageStream->Send(&PushMessage))
         {
             WarningS(Client->GetName().c_str(), "Failed to send PushRequestBreakInTarget to target of invasion.");
             bSuccess = false;
-        }
-        else
-        {
-            DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRequestForwarded",
-                "invasion_type=%s target_profile_id=%u target_steam_id_masked=%s target_character_id=%d target_area_id=%u request_area_id=%u cell_id=%u",
-                DS2PvpDebug::BreakInTypeName(Request->type()),
-                TargetClient->GetPlayerState().GetPlayerId(),
-                DS2PvpDebug::MaskIdentifier(TargetClient->GetPlayerState().GetSteamId()).c_str(),
-                TargetClient->GetPlayerState().GetCharacterId(),
-                TargetClient->GetPlayerState().GetCurrentAreaId(),
-                Request->online_area_id(),
-                Request->cell_id());
         }
 
         std::string TypeStatisticKey = StringFormat("BreakIn/TotalInvasionsRequested");
@@ -226,7 +256,7 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
         Database.AddPlayerStatistic(TypeStatisticKey, Player.GetPlayerId(), 1);
     }
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestBreakInTargetResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))
@@ -238,14 +268,6 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
     // Otherwise send rejection to client.
     if (!bSuccess)
     {
-        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejected",
-            "invasion_type=%s target_profile_id=%u target_found=%u request_area_id=%u cell_id=%u",
-            DS2PvpDebug::BreakInTypeName(Request->type()),
-            Request->player_id(),
-            TargetClient ? 1 : 0,
-            Request->online_area_id(),
-            Request->cell_id());
-
         DS2_Frpg2RequestMessage::PushRequestRejectBreakInTarget PushMessage;
         PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestRejectBreakInTarget);
         PushMessage.set_player_id(Player.GetPlayerId());
@@ -268,23 +290,137 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
     return MessageHandleResult::Handled;
 }
 
+void DS2_BreakInManager::Poll()
+{
+    PollInvadeMode();
+    PollDebugInvadeRequest();
+}
+
+void DS2_BreakInManager::PollInvadeMode()
+{
+    std::filesystem::path Path = ServerInstance->GetSavedPath() / "invade_mode.txt";
+    std::string Contents;
+    if (!std::filesystem::exists(Path) || !ReadTextFromFile(Path, Contents))
+    {
+        return;
+    }
+
+    int Area = InvadeAreaMode, Cell = InvadeCellMode;
+    if (sscanf(Contents.c_str(), "%d %d", &Area, &Cell) == 2)
+    {
+        if (Area != InvadeAreaMode || Cell != InvadeCellMode)
+        {
+            InvadeAreaMode = Area;
+            InvadeCellMode = Cell;
+            LogS("BreakIn", "Invade mode is now area %d, cell %d.", InvadeAreaMode, InvadeCellMode);
+        }
+    }
+}
+
+void DS2_BreakInManager::PollDebugInvadeRequest()
+{
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
+    if (!Config.DS2_InvadeAnywhere)
+    {
+        return;
+    }
+
+    // Cheap enough, but there is no reason to stat a file every tick.
+    double Now = GetSeconds();
+    if (Now < NextDebugPollTime)
+    {
+        return;
+    }
+    NextDebugPollTime = Now + 1.0;
+
+    std::filesystem::path RequestPath = ServerInstance->GetSavedPath() / "debug_invade.req";
+    if (!std::filesystem::exists(RequestPath))
+    {
+        return;
+    }
+
+    std::string Contents;
+    if (!ReadTextFromFile(RequestPath, Contents))
+    {
+        WarningS("BreakIn", "Could not read %s.", RequestPath.string().c_str());
+        std::filesystem::remove(RequestPath);
+        return;
+    }
+    std::filesystem::remove(RequestPath);
+
+    // "<invader player id> <target player id> [type] [online area id] [cell id]"
+    //
+    // Area and cell default to what the target reports about itself. They are
+    // overridable because the protocol notes disagree with what the client
+    // sends: the push's cell_id is documented as looking like 101910, the same
+    // shape as an online activity area, and nothing like the packed value that
+    // arrives in player_location. Guessing costs a rebuild; a parameter does not.
+    uint32_t InvaderId = 0, TargetId = 0, Type = (uint32_t)DS2_Frpg2RequestMessage::BreakInType_RedEyeOrb;
+    long long AreaOverride = -1, CellOverride = -1;
+    if (sscanf(Contents.c_str(), "%u %u %u %lld %lld", &InvaderId, &TargetId, &Type, &AreaOverride, &CellOverride) < 2)
+    {
+        WarningS("BreakIn", "debug_invade.req wants '<invader> <target> [type] [area] [cell]', got '%s'.", Contents.c_str());
+        return;
+    }
+
+    std::shared_ptr<GameClient> InvaderClient = GameServiceInstance->FindClientByPlayerId(InvaderId);
+    std::shared_ptr<GameClient> TargetClient = GameServiceInstance->FindClientByPlayerId(TargetId);
+    if (!InvaderClient || !TargetClient)
+    {
+        WarningS("BreakIn", "debug_invade.req names player %u invading %u; %s not connected.",
+            InvaderId, TargetId, !InvaderClient ? "invader is" : "target is");
+        return;
+    }
+
+    auto& Target = TargetClient->GetPlayerStateType<DS2_PlayerState>();
+
+    DS2_Frpg2RequestMessage::PushRequestBreakInTarget PushMessage;
+    PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestBreakInTarget);
+    PushMessage.set_player_id(InvaderClient->GetPlayerState().GetPlayerId());
+    PushMessage.set_steam_id(InvaderClient->GetPlayerState().GetSteamId());
+    PushMessage.set_type((DS2_Frpg2RequestMessage::BreakInType)Type);
+    uint32_t PushArea = AreaOverride >= 0 ? (uint32_t)AreaOverride : (uint32_t)Target.GetCurrentArea();
+    uint32_t PushCell = CellOverride >= 0 ? (uint32_t)CellOverride : (uint32_t)Target.GetCurrentOnlineActivityArea();
+
+    PushMessage.set_cell_id(PushCell);
+    PushMessage.set_online_area_id(PushArea);
+
+    LogS("BreakIn", "Debug invade: '%s' -> '%s', type %u. Target reports area 0x%08x (%u), activity area %d, location cell 0x%08x, invadable %s.",
+        InvaderClient->GetName().c_str(), TargetClient->GetName().c_str(), Type,
+        (uint32_t)Target.GetCurrentArea(), (uint32_t)Target.GetCurrentArea(),
+        Target.GetCurrentOnlineActivityArea(), Target.GetCurrentCellId(),
+        Target.GetIsInvadable() ? "yes" : "no");
+    LogS("BreakIn", "Debug invade: sending area %u (0x%08x), cell %u (0x%08x).",
+        PushArea, PushArea, PushCell, PushCell);
+
+    if (!TargetClient->MessageStream->Send(&PushMessage))
+    {
+        WarningS("BreakIn", "Debug invade: failed to send PushRequestBreakInTarget.");
+        return;
+    }
+
+    LogS("BreakIn", "Debug invade: push sent. Whether the client acts on it is the thing being measured.");
+}
+
 MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestRejectBreakInTarget* Request = (DS2_Frpg2RequestMessage::RequestRejectBreakInTarget*)Message.Protobuf.get();
 
+    // The target refusing an invasion says why, and says which area and cell it
+    // believes the invasion was for. That is the only place the client tells us
+    // what it expected, so it is worth all of it.
+    LogS(Client->GetName().c_str(), "Rejecting break-in from player %lld: reason %lld, area %lld, cell %lld, unknown_5 %lld.",
+        (long long)Request->player_id(), (long long)Request->unknown_2(),
+        (long long)Request->online_area_id(), (long long)Request->cell_id(),
+        (long long)Request->unknown_5());
+
     // Get client who initiated the invasion.
     std::shared_ptr<GameClient> InvaderClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());
     if (!InvaderClient)
     {
         WarningS(Client->GetName().c_str(), "Client rejected breakin from unknown (or disconnected) client %i.", Request->player_id());
-        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejectRequest",
-            "invader_profile_id=%lld result=missing_invader request_area_id=%lld cell_id=%lld reason=%lld",
-            (long long)Request->player_id(),
-            (long long)Request->online_area_id(),
-            (long long)Request->cell_id(),
-            (long long)Request->unknown_2());
         return MessageHandleResult::Handled;
     }
 
@@ -300,19 +436,8 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameCl
     {
         WarningS(Client->GetName().c_str(), "Failed to send PushRequestRejectBreakInTarget to invader client %s.", InvaderClient->GetName().c_str());
     }
-    else
-    {
-        DS2PvpDebug::LogEvent(ServerInstance, Client, "InvasionRejectRequest",
-            "invader_profile_id=%u invader_steam_id_masked=%s invader_character_id=%d request_area_id=%lld cell_id=%lld reason=%lld",
-            InvaderClient->GetPlayerState().GetPlayerId(),
-            DS2PvpDebug::MaskIdentifier(InvaderClient->GetPlayerState().GetSteamId()).c_str(),
-            InvaderClient->GetPlayerState().GetCharacterId(),
-            (long long)Request->online_area_id(),
-            (long long)Request->cell_id(),
-            (long long)Request->unknown_2());
-    }
 
-    // Empty response, not sure what purpose this serves really other than saying message-recieved. Client
+    // Empty response, not sure what purpose this serves really other than saying message-received. Client
     // doesn't work without it though.
     DS2_Frpg2RequestMessage::RequestRejectBreakInTargetResponse Response;
     if (!Client->MessageStream->Send(&Response, &Message))

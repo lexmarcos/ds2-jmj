@@ -23,5 +23,11 @@
     <Setting Name="ds3_exe_location" Type="System.String" Scope="User">
       <Value Profile="(Default)" />
     </Setting>
+    <Setting Name="ds2_patch_phantom_timers" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="ds2_phantom_timer_seconds" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">4000</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

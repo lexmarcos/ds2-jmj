@@ -2,6 +2,12 @@
 
 This document centralizes the findings about Dark Souls II PvP session endings, especially the difference between a normal kill-based leave and the client-side phantom timer leave.
 
+> **Historical record.** The instrumentation named below (`DS2PvpDebugLogging`
+> on the server and `DS2TraceLeaveSession` in the injector) was scaffolding
+> used to reach these findings and is not part of this branch. The findings
+> themselves still hold and are what
+> [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md) is built on.
+
 ## Instrumentation used
 
 Observed with:

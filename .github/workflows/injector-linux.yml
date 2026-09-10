@@ -1,0 +1,109 @@
+name: Injector for Linux
+
+# Builds the two binaries the Linux loader needs but cannot produce itself:
+#
+#   Injector.dll  needs MSVC, because it uses Detours
+#   Injector.exe  plain Win32, cross-compiled with mingw-w64
+#
+# Download the "injector" artifact from a finished run, unpack it anywhere, and
+# point the loader at that directory in Settings.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Source/Injector/**'
+      - 'Source/InjectorLauncher/**'
+      - 'Source/Shared/**'
+      - 'Source/ThirdParty/detours/**'
+      - '.github/workflows/injector-linux.yml'
+
+jobs:
+  dll:
+    name: Injector.dll (MSVC)
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Configuring the tree reaches the Loader's CMakeLists, which requires a
+      # .NET SDK even though this job never builds the Loader itself.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Configure
+        run: cmake -S . -B intermediate/vs2022 -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Injector
+        run: cmake --build intermediate/vs2022 --config Release --target Injector
+
+      # Collect by searching rather than by a fixed path: if the output layout
+      # ever moves, this reports where the file actually landed instead of
+      # failing with nothing to go on.
+      - name: Collect
+        shell: bash
+        run: |
+          echo "tree under bin/"
+          find bin -type f | sort
+          mkdir -p staging
+          found=$(find bin -name Injector.dll -print -quit)
+          if [ -z "$found" ]; then
+            echo "::error::Injector.dll was not produced; see the tree above"
+            exit 1
+          fi
+          echo "found $found"
+          cp "$found" staging/
+          pdb=$(find bin -name Injector.pdb -print -quit)
+          [ -n "$pdb" ] && cp "$pdb" staging/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: injector-dll
+          if-no-files-found: error
+          path: staging/
+
+  exe:
+    name: Injector.exe (mingw-w64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Build
+        run: ./Source/InjectorLauncher/build.sh
+
+      - name: Check the output is a Windows binary
+        run: file Source/InjectorLauncher/Injector.exe | grep -q 'PE32+'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: injector-exe
+          if-no-files-found: error
+          path: Source/InjectorLauncher/Injector.exe
+
+  bundle:
+    name: Bundle
+    runs-on: ubuntu-latest
+    needs: [dll, exe]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: injector-*
+          merge-multiple: true
+          path: injector
+
+      - name: List what came out
+        run: ls -l injector
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: injector
+          if-no-files-found: error
+          path: injector

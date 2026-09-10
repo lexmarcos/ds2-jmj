@@ -14,7 +14,6 @@
 #include "Server/Streams/Frpg2ReliableUdpMessage.h"
 
 #include "Server/Server.h"
-#include "Server.DarkSouls2/Server/GameService/Utils/DS2_PvpDebug.h"
 
 #include "Shared/Platform/Platform.h"
 
@@ -32,7 +31,7 @@ GameClient::GameClient(GameService* OwningService, std::shared_ptr<NetConnection
     , Connection(InConnection)
     , AuthToken(InAuthToken)
 {
-    LastMessageRecievedTime = GetSeconds();
+    LastMessageReceivedTime = GetSeconds();
 
     MessageStream = std::make_shared<Frpg2ReliableUdpMessageStream>(InConnection, CwcKey, AuthToken, false, &Service->GetServer()->GetGameInterface());
 
@@ -45,8 +44,6 @@ bool GameClient::Poll()
     if (DisconnectTime > 0.0 && GetSeconds() > DisconnectTime)
     {
         WarningS(GetName().c_str(), "Disconnecting client (due to flagged delayed disconnect).");
-        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
-            "reason=delayed_disconnect connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
@@ -54,15 +51,11 @@ bool GameClient::Poll()
     if (Connection->Pump())
     {
         WarningS(GetName().c_str(), "Disconnecting client as connection was in an error state.");
-        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
-            "reason=connection_error connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
     if (!Connection->IsConnected())
     {
         LogS(GetName().c_str(), "Client disconnected.");
-        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
-            "reason=connection_closed connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
@@ -70,24 +63,18 @@ bool GameClient::Poll()
     if (MessageStream->Pump())
     {
         WarningS(GetName().c_str(), "Disconnecting client as message stream closed.");
-        DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
-            "reason=message_stream_closed connection_duration=%.3f", GetConnectionDuration());
         return true;
     }
 
     // Process all packets.
     Frpg2ReliableUdpMessage Message;
-    while (MessageStream->Recieve(&Message))
+    while (MessageStream->Receive(&Message))
     {
         if (HandleMessage(Message))
         {
             if (BuildConfig::DISCONNECT_ON_UNHANDLED_MESSAGE)
             {
                 WarningS(GetName().c_str(), "Disconnecting client as failed to handle message.");
-                DS2PvpDebug::LogEvent(Service->GetServer(), this, "Disconnect",
-                    "reason=unhandled_message message_type=%s connection_duration=%.3f",
-                    Message.Protobuf ? Message.Protobuf->GetTypeName().c_str() : "Unknown",
-                    GetConnectionDuration());
                 return true;
             }
             else
@@ -100,19 +87,14 @@ bool GameClient::Poll()
         MessageStream->HandledPacket(Message.AckSequenceIndex);
     }
 
-    // Update lat recieved time.
-    LastMessageRecievedTime = MessageStream->GetLastActivityTime();
+    // Update lat received time.
+    LastMessageReceivedTime = MessageStream->GetLastActivityTime();
 
     // Has this client timed out?
-    double TimeSinceLastMessage = GetSeconds() - LastMessageRecievedTime;
+    double TimeSinceLastMessage = GetSeconds() - LastMessageReceivedTime;
     if (TimeSinceLastMessage >= BuildConfig::CLIENT_TIMEOUT)
     {
         WarningS(GetName().c_str(), "Client timed out.");
-        DS2PvpDebug::LogEvent(Service->GetServer(), this, "ClientTimeout",
-            "time_since_last_message=%.3f timeout=%.3f connection_duration=%.3f",
-            TimeSinceLastMessage,
-            BuildConfig::CLIENT_TIMEOUT,
-            GetConnectionDuration());
         return true;
     }
 
@@ -124,12 +106,22 @@ bool GameClient::Poll()
 
 bool GameClient::HandleMessage(const Frpg2ReliableUdpMessage& Message)
 {
-    //WarningS(GetName().c_str(), "-> %s", Message.Protobuf->GetTypeName().c_str());
+    // Which subsystems a client uses where it is standing is the thing under
+    // investigation, and it is invisible unless the server says what arrives.
+    // Once per type per client keeps it to a short, readable census.
+    if (Service->GetServer()->GetConfig().LogFirstMessageOfEachType)
+    {
+        std::string TypeName = Message.Protobuf->GetTypeName();
+        if (SeenMessageTypes.insert(TypeName).second)
+        {
+            LogS(GetName().c_str(), "First %s.", TypeName.c_str());
+        }
+    }
 
     const std::vector<std::shared_ptr<GameManager>>& Managers = Service->GetManagers();
     for (auto& Manager : Managers)
     {
-        MessageHandleResult Result = Manager->OnMessageRecieved(this, Message);
+        MessageHandleResult Result = Manager->OnMessageReceived(this, Message);
         if (Result == MessageHandleResult::Error)
         {
             return true;

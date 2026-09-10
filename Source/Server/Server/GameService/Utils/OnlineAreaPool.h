@@ -226,6 +226,40 @@ public:
         return Result;
     }
 
+    // Same as GetRecentSet but sweeps every area rather than one. Only worth
+    // using when the caller has no usable area key of its own.
+    std::vector<std::shared_ptr<ValueType>> GetRecentSetGlobal(int MaxCount, std::function<bool(std::shared_ptr<ValueType>)> FilterCallback)
+    {
+        std::vector<std::shared_ptr<ValueType>> Result;
+
+        int RemainingCount = MaxCount;
+
+        for (auto& AreaPair : AreaMap)
+        {
+            std::shared_ptr<Area> AreaInstance = AreaPair.second;
+
+            for (int i = 0; i < AreaInstance->RemoveOrderQueue.size() && RemainingCount > 0; i++)
+            {
+                EntryId Id = AreaInstance->RemoveOrderQueue[i];
+                if (auto Iter = AreaInstance->Entries.find(Id); Iter != AreaInstance->Entries.end())
+                {
+                    if (FilterCallback(Iter->second))
+                    {
+                        Result.push_back(Iter->second);
+                        RemainingCount--;
+                    }
+                }
+            }
+
+            if (RemainingCount <= 0)
+            {
+                break;
+            }
+        }
+
+        return Result;
+    }
+
     bool Contains(IdType AreaId, EntryId Id)
     {
         return Find(AreaId, Id) != nullptr;

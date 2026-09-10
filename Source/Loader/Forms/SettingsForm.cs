@@ -25,6 +25,8 @@ namespace Loader
         {
             DoNotSaveSettings = true;
             UseSeperateSavesCheckbox.Checked = ProgramSettings.Default.use_seperate_saves;
+            PatchPhantomTimersCheckbox.Checked = ProgramSettings.Default.ds2_patch_phantom_timers;
+            PhantomTimerSecondsInput.Value = ClampToInputRange(ProgramSettings.Default.ds2_phantom_timer_seconds);
             DoNotSaveSettings = false;
 
             UpdateState();
@@ -33,6 +35,25 @@ namespace Loader
         private void UpdateState()
         {
             CopySavesButton.Enabled = ProgramSettings.Default.use_seperate_saves;
+
+            PhantomTimerSecondsLabel.Enabled = ProgramSettings.Default.ds2_patch_phantom_timers;
+            PhantomTimerSecondsInput.Enabled = ProgramSettings.Default.ds2_patch_phantom_timers;
+        }
+
+        // Settings can hold a value from an older build that the input no longer accepts.
+        private decimal ClampToInputRange(double Seconds)
+        {
+            if (double.IsNaN(Seconds) || Seconds <= 0.0)
+            {
+                return PhantomTimerSecondsInput.Value;
+            }
+
+            decimal Value = (decimal)Math.Clamp(
+                Seconds,
+                (double)PhantomTimerSecondsInput.Minimum,
+                (double)PhantomTimerSecondsInput.Maximum);
+
+            return Value;
         }
 
         private void CopySavesClicked(object sender, EventArgs e)
@@ -84,6 +105,8 @@ namespace Loader
             }
 
             ProgramSettings.Default.use_seperate_saves = UseSeperateSavesCheckbox.Checked;
+            ProgramSettings.Default.ds2_patch_phantom_timers = PatchPhantomTimersCheckbox.Checked;
+            ProgramSettings.Default.ds2_phantom_timer_seconds = (double)PhantomTimerSecondsInput.Value;
             ProgramSettings.Default.Save();
 
             UpdateState();
