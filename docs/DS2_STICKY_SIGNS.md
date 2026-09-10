@@ -277,3 +277,64 @@ An invasion needs the invader's own client to be in an invading state.
 Nothing the server sends can fake that. The debug trigger is kept for
 poking at a client that is already engaged, but it cannot start
 anything, and it is not evidence on its own.
+
+## The control: a same-area invasion works completely
+
+Both players moved to Heide's Tower of Flame, same orb, same server.
+
+    Samuel  RequestBreakInTarget   target 3, area 10310000, cell 103110
+    server  push                   area 10310000, cell 103110
+    result  Samuel is a red phantom in Chico's world
+
+The orb count went from 99 to 98, so the item was consumed, and the
+invader is standing in a part of Heide the host had walked to, not where
+the invader used the orb. The peer-to-peer session between these two
+instances holds perfectly.
+
+That settles the earlier ambiguity. The disconnect on the cross-area
+invasion is not the setup, not Steam, not the two local clients. It is
+the invasion crossing areas.
+
+One more thing fell out of the move, unasked. The moment Chico arrived
+in Heide, the log printed:
+
+    3:Chico   First DS2_Frpg2RequestMessage.RequestGetSignList
+
+Same client, same session, same character. It asks for signs in Heide
+and never asks in Majula. The census result was not an artefact of two
+different clients or two different logins.
+
+## Where the wall actually is
+
+Three facts, all measured, that together draw the boundary:
+
+1. A player standing in Majula **can** be invaded. The client accepts
+   the push, answers it, and joins a session.
+2. A player standing in Majula **cannot** start anything. The Cracked
+   Red Eye Orb is refused there exactly as the Red Sign Soapstone is,
+   with no prompt at all, away from any bonfire.
+3. An invasion whose invader and target are in different areas starts
+   and then drops on the invader's side.
+
+So the target half of multiplayer is already open in Majula. The
+initiating half is not, and it is the same gate the whole area
+investigation has been circling: item use.
+
+The invader is in a correct invading state when the session drops, so
+the invader's client is not refusing to invade. It is refusing to arrive
+somewhere other than where it asked to invade. The server cannot tell it
+otherwise: `RequestBreakInTargetResponse` is empty and, in the protocol
+notes, never received at all. The destination reaches the invader over
+the peer-to-peer session, not from us.
+
+That leaves two ways forward, both client-side:
+
+- Make the invader's client accept a session in an area other than its
+  own. It already has the session; it just will not stay.
+- Make the invader's client report Majula as its area while it stands
+  somewhere the orb works, so the invasion it asks for and the session
+  it gets agree. The area id's location in memory is already known from
+  the area probe work.
+
+The second is closer to what already exists and does not need the
+disconnect's cause pinned down first.
