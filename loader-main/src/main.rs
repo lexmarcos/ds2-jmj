@@ -1,58 +1,32 @@
+// No console window behind the loader on Windows. Kept in debug builds so
+// --doctor still prints somewhere.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod app;
 mod launch;
 mod paths;
 mod pinned;
 mod preflight;
 mod settings;
+mod theme;
 mod watch;
 
-fn main() {
-    let settings = settings::Settings::load();
-
-    if std::env::args().any(|arg| arg == "--launch") {
-        return start(&settings);
+fn main() -> iced::Result {
+    // A report anyone can paste, without needing the window to come up.
+    if std::env::args().any(|arg| arg == "--doctor") {
+        preflight::doctor(&settings::Settings::load());
+        return Ok(());
     }
 
-    preflight::doctor(&settings);
-}
-
-/// Starts the game and reports what the injector says, without a window.
-/// The interface will do the same thing with the same pieces.
-fn start(settings: &settings::Settings) {
-    let ready = match preflight::run(settings) {
-        Ok(ready) => ready,
-        Err(problem) => {
-            println!("bloqueado: {}", problem.message());
-            std::process::exit(1);
-        }
-    };
-
-    let mut watcher = watch::Watcher::new();
-    let mut child = match launch::start(&ready) {
-        Ok(child) => child,
-        Err(error) => {
-            println!("{error}");
-            std::process::exit(1);
-        }
-    };
-    println!("iniciado, pid {}", child.id());
-
-    loop {
-        for signal in watcher.poll() {
-            println!("  {signal:?}");
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                println!("o jogo fechou ({status})");
-                for signal in watcher.poll() {
-                    println!("  {signal:?}");
-                }
-                return;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(500)),
-            Err(error) => {
-                println!("perdi o jogo de vista: {error}");
-                return;
-            }
-        }
-    }
+    iced::application(app::App::boot, app::App::update, app::App::view)
+        .title(app::App::title)
+        .theme(app::App::theme)
+        .subscription(app::App::subscription)
+        .window_size((760.0, 440.0))
+        .resizable(false)
+        .centered()
+        .font(theme::FONT_REGULAR)
+        .font(theme::FONT_LIGHT)
+        .font(theme::FONT_MEDIUM)
+        .run()
 }

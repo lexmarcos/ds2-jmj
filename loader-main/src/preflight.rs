@@ -18,7 +18,9 @@
 //! takes an exclusive lock on the prefix with no timeout. A second launch
 //! does not fail; it hangs with nothing on screen.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use ds2os_core::{exe, process, proton, GameInstall, GameType, ProtonBuild, Steam};
 
@@ -110,7 +112,7 @@ pub fn run(settings: &Settings) -> Report {
             sha256: String::new(),
         });
     }
-    let taken = exe::fingerprint(&game_exe).map_err(|_| Problem::GameMissing)?;
+    let taken = fingerprint_cached(&game_exe).map_err(|_| Problem::GameMissing)?;
     if taken != exe::DS2_SOTFS_1_03 {
         return Err(Problem::WrongBuild {
             size: taken.size,
@@ -150,6 +152,32 @@ pub fn run(settings: &Settings) -> Report {
         proton,
         injector_source,
     })
+}
+
+/// Hashing 28 MB costs tens of milliseconds, and the checks re-run every few
+/// seconds so that starting Steam enables the button without a restart. Keyed
+/// on what a replaced file would change.
+fn fingerprint_cached(path: &Path) -> std::io::Result<exe::Fingerprint> {
+    static CACHE: Mutex<Option<(PathBuf, u64, Option<SystemTime>, exe::Fingerprint)>> =
+        Mutex::new(None);
+
+    let meta = std::fs::metadata(path)?;
+    let size = meta.len();
+    let modified = meta.modified().ok();
+
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((cached_path, cached_size, cached_time, taken)) = cache.as_ref() {
+            if cached_path == path && *cached_size == size && *cached_time == modified {
+                return Ok(*taken);
+            }
+        }
+    }
+
+    let taken = exe::fingerprint(path)?;
+    if let Ok(mut cache) = CACHE.lock() {
+        *cache = Some((path.to_path_buf(), size, modified, taken));
+    }
+    Ok(taken)
 }
 
 /// The game, from Steam or from an override the player typed in.

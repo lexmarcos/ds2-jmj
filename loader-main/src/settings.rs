@@ -49,12 +49,6 @@ impl Settings {
         }
         std::fs::write(path, serde_json::to_vec_pretty(self)?)
     }
-
-    /// Whether anything is overridden, which is worth saying in the interface
-    /// so a player who set something and forgot can see it.
-    pub fn has_overrides(&self) -> bool {
-        self.steam_root.is_some() || self.game_dir.is_some() || self.proton_dir.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -64,7 +58,9 @@ mod tests {
     #[test]
     fn defaults_detect_everything() {
         let settings = Settings::default();
-        assert!(!settings.has_overrides());
+        assert!(settings.steam_root.is_none());
+        assert!(settings.game_dir.is_none());
+        assert!(settings.proton_dir.is_none());
     }
 
     #[test]
