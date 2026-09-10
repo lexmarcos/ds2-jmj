@@ -431,11 +431,7 @@ namespace
 bool DS2_MemProbeHook::Install(Injector& injector)
 {
 #ifdef _WIN32
-    if (injector.GetConfig().GameType != GameType::DarkSouls2)
-    {
-        return true;
-    }
-
+    // Registration in Injector.cpp already limits this to Dark Souls II.
     s_base = (uintptr_t)injector.GetBaseAddress();
     s_log_path = injector.GetDllPath() / "DS2_MemProbe.log";
     s_request_path = injector.GetDllPath() / "DS2_MemProbe.req";
