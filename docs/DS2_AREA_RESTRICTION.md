@@ -182,17 +182,35 @@ Each trial was verified rather than eyeballed:
 - the refusal detector was calibrated on both outcomes: pressing Y to two-hand
   moves 7.0% of the character's pixels, a refused soapstone moves under 1.1%
 
+## The control passed
+
+The same automated trial was then run in Heide's Tower of Flame, on a character
+standing at the bonfire with the same item equipped:
+
+| Where | Pixels of the character that moved | Outcome |
+| --- | --- | --- |
+| Heide | 21.9% | sign placed, game printed **"Check your Summon Sign"** |
+| Majula, zone forced | 1.1% | nothing |
+| Majula, pressing Y to two-hand (calibration) | 7.0% | animation played |
+
+So the trial does press the button, the item does work, and **Majula's refusal
+is real**. Nothing about the measurement is in question any more.
+
+One thing that is worth knowing before trusting it: **the server is not a
+witness for this.** DS3OS logged no sign at all for the Heide placement that
+plainly worked, so "the server logged nothing" says nothing about whether the
+item fired. The animation is the signal; on success the game also prints
+"Check your Summon Sign".
+
 ## Still open
 
-The obvious remaining hypothesis is that the permission is computed **once when
-the map loads** and cached somewhere else. Forcing the zone after the fact would
-never reach such a cache. Testing it needs the zone forced before the map is
-built, which means patching `[block+0x20]` from the injector rather than from
-outside - at the breakpoint on `+0x250e5b`, `rcx` already holds the block.
+The permission is most likely computed **once when the map loads** and cached
+somewhere the per-frame zone state never reaches. Forcing the zone afterwards
+would never touch such a cache, which fits every measurement so far.
 
-The control experiment that has not been run is the same automated trial in
-Heide. Until it passes there, "refused" cannot be fully separated from a flaw in
-how the trial presses the button.
+The next test is a memory diff of the same character in both places - Heide
+where the item works, Majula where it does not - which is now possible because
+one character can travel between them by bonfire.
 
 `+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
 shows `FUN_1400f2690` builds display text, formatting the area name for the
