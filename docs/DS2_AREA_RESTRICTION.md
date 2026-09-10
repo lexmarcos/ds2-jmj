@@ -128,27 +128,71 @@ reading the zone id from `ebx` and the permission byte from `edi`:
 | Majula, where a sign is refused | `-1` | `0x00` |
 | Heide, where a sign is placed | `103110` | `0x00` |
 
-The permission byte is the same in both, so it decides nothing. **The zone id is
-the whole check.** Majula is `-1`, meaning the player is not inside any multiplay
-zone at all; Heide is inside one.
+The permission byte is the same in both, so it decides nothing. Majula is `-1`,
+meaning the player is not inside any multiplay zone at all; Heide is inside one.
 
 The zone id is read a few instructions earlier:
 
 ```asm
-140250e58:  mov    ebx,DWORD PTR [rcx+0x20]   ; the zone the player is in
-140250e7d:  test   ebx,ebx
+140250e50:  mov    rax,[rbx+0x30]
+140250e54:  mov    rcx,[rax+0x70]             ; the map block record
+140250e58:  mov    ebx,[rcx+0x20]             ; the zone the block is in
+140250e5b:  cmp    ebx,[rsi+0x10]
+...
 140250e7f:  jle    0x140250e93                ; <= 0, no zone, skip the lookup
 140250e83:  call   0x1402aab40                ; otherwise look the zone up
 ```
 
-So the patch is to substitute a real zone id whenever the game reports none:
-break at `+0x250e58`, and if `ebx` comes back non-positive, write a zone id that
-is known to permit summoning. The game then believes the player is always
-standing inside a multiplay zone, wherever they are.
+**`[block+0x20]` is the source; everything else is a derived copy.** The struct
+at `rsi` is rebuilt from it every frame, so patching `rsi` fixes only what that
+one struct's readers see.
 
-This has the same shape as
-[DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md): a breakpoint at a
-known offset, a value read, a value written.
+## Forcing the zone is not enough
+
+This was tested directly, by writing `103110` into `[block+0x20]` in the running
+game (see [DS2_LIVE_MEMORY_ACCESS.md](DS2_LIVE_MEMORY_ACCESS.md)). The write
+held, the game stayed up, and the whole derived state became what standing in
+Heide produces:
+
+```text
++0x10 zone id       = 103110      forced
++0x14 last valid    = 103110
++0x18 zone group    = 103100      the lookup SUCCEEDED
++0x20 permissions   = 0
+```
+
+That `+0x18` is the important one. The zone table is **global, not per map**:
+looking up Heide's zone from inside Majula returns its record. An earlier guess
+that the lookup would fail was wrong.
+
+**The Red Sign Soapstone was still refused.** No animation, no sign, nothing
+sent to the server, across four trials: at the original spot, on flat ground
+elsewhere, and with `[block+0x12]` forced to `0` and to `1`.
+
+So the earlier conclusion in this document - that the zone id is the whole
+check - is wrong. Every value the zone system produces can be made identical to
+Heide's and the item is still refused. **The gate that stops the soapstone does
+not read the multiplay zone.**
+
+Each trial was verified rather than eyeballed:
+
+- the client was confirmed logged in (`4:Chico` on the server, one player)
+- the gamepad was confirmed reaching the game (Start opened the menu; the right
+  stick turned the camera)
+- the refusal detector was calibrated on both outcomes: pressing Y to two-hand
+  moves 7.0% of the character's pixels, a refused soapstone moves under 1.1%
+
+## Still open
+
+The obvious remaining hypothesis is that the permission is computed **once when
+the map loads** and cached somewhere else. Forcing the zone after the fact would
+never reach such a cache. Testing it needs the zone forced before the map is
+built, which means patching `[block+0x20]` from the injector rather than from
+outside - at the breakpoint on `+0x250e5b`, `rcx` already holds the block.
+
+The control experiment that has not been run is the same automated trial in
+Heide. Until it passes there, "refused" cannot be fully separated from a flaw in
+how the trial presses the button.
 
 `+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
 shows `FUN_1400f2690` builds display text, formatting the area name for the
