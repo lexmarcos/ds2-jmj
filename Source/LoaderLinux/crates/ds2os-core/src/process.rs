@@ -27,7 +27,14 @@ pub fn steam_logged_in() -> Option<bool> {
 /// Process ids of anything that looks like the game or its launcher.
 ///
 /// Under Proton these are ordinary Linux processes whose command line names
-/// the Windows executable, so matching on the name finds them.
+/// the Windows executable, so that is what has to be matched — `/proc/<pid>/exe`
+/// points at the Wine loader, not at the game.
+///
+/// The match is on a whole argument ending in the name, not on the name
+/// appearing anywhere in the command line. The loose version finds a text
+/// editor with the file open, a shell that merely mentions it, and this
+/// process's own parent, and every one of those would wrongly disable the
+/// button.
 pub fn game_processes(exe_names: &[&str]) -> Vec<u32> {
     platform::game_processes(exe_names)
 }
@@ -82,12 +89,21 @@ mod platform {
                 continue;
             };
 
-            // NUL separated, so read it raw rather than as a string.
+            if pid == std::process::id() {
+                continue;
+            }
+
+            // NUL separated, so read it raw and split rather than treating the
+            // whole thing as one string.
             let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
                 continue;
             };
-            let line = String::from_utf8_lossy(&raw);
-            if exe_names.iter().any(|needle| line.contains(needle)) {
+            let matches = raw.split(|byte| *byte == 0).any(|argument| {
+                let argument = String::from_utf8_lossy(argument);
+                let argument = argument.trim_end_matches(['"', '\'']);
+                exe_names.iter().any(|needle| argument.ends_with(needle))
+            });
+            if matches {
                 found.push(pid);
             }
         }
@@ -145,5 +161,27 @@ mod tests {
     #[test]
     fn nothing_matches_an_impossible_name() {
         assert!(game_processes(&["definitely-not-a-real-executable-name.exe"]).is_empty());
+    }
+
+    /// A shell that merely mentions the game is not the game. This caught a
+    /// real false positive: the scan matched the very command that launched
+    /// it, because the name appeared inside a long `-c` argument.
+    #[test]
+    #[cfg(unix)]
+    fn a_command_line_mentioning_the_game_is_not_the_game() {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("echo DarkSoulsII.exe > /dev/null; sleep 2")
+            .spawn()
+            .expect("spawn a shell");
+
+        let found = game_processes(&["DarkSoulsII.exe"]);
+        child.kill().ok();
+        child.wait().ok();
+
+        assert!(
+            !found.contains(&child.id()),
+            "matched a shell that only names the game: {found:?}"
+        );
     }
 }
