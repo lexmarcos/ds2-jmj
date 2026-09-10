@@ -95,7 +95,16 @@ namespace
 
         const DWORD ThreadId = GetCurrentThreadId();
 
-        if (Code == EXCEPTION_BREAKPOINT && (uintptr_t)Context->Rip == s_address + 1)
+        // Wine does not always leave Rip past the int3 the way Windows does, so
+        // the exception record's address is checked as well. Getting this wrong
+        // means returning CONTINUE_SEARCH on our own breakpoint, and the game
+        // dies on an int3 nobody claimed.
+        const uintptr_t Rip = (uintptr_t)Context->Rip;
+        const uintptr_t Candidate = Rip > 0 ? Rip - 1 : 0;
+        const uintptr_t Reported = (uintptr_t)Exception->ExceptionRecord->ExceptionAddress;
+        const bool IsOurs = Candidate == s_address || Reported == s_address;
+
+        if (Code == EXCEPTION_BREAKPOINT && IsOurs)
         {
             {
                 std::scoped_lock lock(s_state_mutex);
