@@ -11,6 +11,7 @@
 mod env;
 mod game;
 mod logs;
+mod pad;
 mod paths;
 mod proc;
 mod screen;
@@ -71,6 +72,11 @@ enum Command {
         #[command(subcommand)]
         action: GameAction,
     },
+    /// The virtual gamepad the harness drives the game with
+    Pad {
+        #[command(subcommand)]
+        action: PadAction,
+    },
     /// The second Steam client, which gives instance 2 its own account
     Steam2 {
         #[command(subcommand)]
@@ -89,6 +95,66 @@ enum Command {
         /// Keep printing as the log grows
         #[arg(short = 'f', long)]
         follow: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PadAction {
+    /// Creates the device and serves commands until stopped
+    Start {
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+        /// Stay in the foreground instead of detaching
+        #[arg(long)]
+        foreground: bool,
+    },
+    /// Stops the daemon and removes the device
+    Stop {
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
+    /// Presses a button: a b x y lb rb back start guide l3 r3
+    Press {
+        button: String,
+        /// How long to hold it, in milliseconds
+        #[arg(long, default_value_t = 90)]
+        ms: u64,
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
+    /// Presses a direction on the d-pad: up down left right
+    Dpad {
+        direction: String,
+        #[arg(long, default_value_t = 90)]
+        ms: u64,
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
+    /// Holds a trigger: lt or rt
+    Trigger {
+        side: String,
+        #[arg(long, default_value_t = 90)]
+        ms: u64,
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
+    /// Holds a stick away from centre, then releases it
+    Stick {
+        /// l or r
+        side: String,
+        /// -1.0 to 1.0
+        x: f32,
+        /// -1.0 to 1.0, negative is up
+        y: f32,
+        #[arg(long, default_value_t = 400)]
+        ms: u64,
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
+    /// Says whether the device is up
+    Status {
+        #[arg(long, default_value_t = 1)]
+        index: u8,
     },
 }
 
@@ -266,6 +332,7 @@ fn run(command: Command) -> Result<(), String> {
             }
             GameAction::Shot { out } => shot(out),
         },
+        Command::Pad { action } => pad_command(action),
         Command::Steam2 { action } => steam2(action),
         Command::Logs { which, lines, grep, follow } => {
             let path = log_path(&environment, which)
@@ -298,6 +365,65 @@ fn announce_account(home: Option<&std::path::Path>) {
         None => println!(
             "  conta: a mesma da primeira instância — as duas não vão conseguir se conectar\n             \x20        rode `ds2os-dev steam2 init` para usar a segunda conta"
         ),
+    }
+}
+
+fn pad_command(action: PadAction) -> Result<(), String> {
+    let report = |index: u8, command: String| -> Result<(), String> {
+        pad::send(index, &command).map(|_| println!("  ok"))
+    };
+
+    match action {
+        PadAction::Start { index, foreground } => {
+            if pad::running(index) {
+                println!("  o pad {index} já está rodando");
+                return Ok(());
+            }
+            if foreground {
+                return pad::serve(index);
+            }
+            // Detached, so the device outlives this invocation. Without that
+            // the game would see a controller appear and vanish per command.
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let log = paths::log_dir().join(format!("pad-{index}.log"));
+            crate::proc::spawn(
+                &exe,
+                &["pad", "start", "--foreground", "--index", &index.to_string()],
+                &paths::state_dir(),
+                &[],
+                &log,
+                &paths::state_dir().join(format!("pad-{index}.pid")),
+                false,
+            )
+            .map_err(|e| format!("não consegui iniciar o pad: {e}"))?;
+
+            for _ in 0..40 {
+                if pad::running(index) {
+                    println!("  pad {index} no ar");
+                    println!("  log {}", log.display());
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            Err(format!("o pad {index} não subiu; veja {}", log.display()))
+        }
+        PadAction::Stop { index } => {
+            if !pad::running(index) {
+                println!("  o pad {index} não está rodando");
+                return Ok(());
+            }
+            pad::send(index, "quit").map(|_| println!("  parado"))
+        }
+        PadAction::Press { button, ms, index } => report(index, format!("press {button} {ms}")),
+        PadAction::Dpad { direction, ms, index } => report(index, format!("dpad {direction} {ms}")),
+        PadAction::Trigger { side, ms, index } => report(index, format!("trigger {side} {ms}")),
+        PadAction::Stick { side, x, y, ms, index } => {
+            report(index, format!("stick {side} {x} {y} {ms}"))
+        }
+        PadAction::Status { index } => {
+            println!("  pad {index}: {}", if pad::running(index) { "no ar" } else { "parado" });
+            Ok(())
+        }
     }
 }
 
