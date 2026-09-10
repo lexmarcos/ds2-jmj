@@ -139,6 +139,7 @@ enum PadAction {
         index: u8,
     },
     /// Holds a stick away from centre, then releases it
+    #[command(allow_negative_numbers = true)]
     Stick {
         /// l or r
         side: String,
@@ -203,6 +204,11 @@ enum GameAction {
     Stop,
     /// Prints the line to paste into Steam's launch options
     Options,
+    /// Brings one instance's window to the front so it receives input
+    Focus {
+        /// 1 or 2, in the order the windows are listed
+        window: usize,
+    },
     /// Captures each game window to a PNG
     Shot {
         /// Where to write them; defaults to the harness log directory
@@ -331,6 +337,15 @@ fn run(command: Command) -> Result<(), String> {
                 Ok(())
             }
             GameAction::Shot { out } => shot(out),
+            GameAction::Focus { window } => {
+                let windows = screen::windows()?;
+                let target = windows
+                    .get(window.saturating_sub(1))
+                    .ok_or_else(|| format!("só existem {} janelas", windows.len()))?;
+                screen::focus(target)?;
+                println!("  foco em {} ({})", target.id, window);
+                Ok(())
+            }
         },
         Command::Pad { action } => pad_command(action),
         Command::Steam2 { action } => steam2(action),

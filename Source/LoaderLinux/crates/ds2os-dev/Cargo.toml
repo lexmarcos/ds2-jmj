@@ -16,3 +16,4 @@ serde_json.workspace = true
 clap.workspace = true
 png.workspace = true
 evdev.workspace = true
+x11rb.workspace = true

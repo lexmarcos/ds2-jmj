@@ -16,7 +16,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
+use evdev::uinput::VirtualDevice;
 use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, EventType, InputEvent, InputId, KeyCode,
     UinputAbsSetup,
@@ -77,7 +77,7 @@ fn build_device(index: u8) -> Result<VirtualDevice, String> {
     let hat = AbsInfo::new(0, -1, 1, 0, 0, 0);
 
     let name = format!("ds2os virtual pad {index}");
-    let mut builder = VirtualDeviceBuilder::new()
+    let mut builder = VirtualDevice::builder()
         .map_err(|e| format!("não consegui abrir /dev/uinput: {e}"))?
         .name(&name)
         .input_id(InputId::new(evdev::BusType::BUS_USB, VENDOR_MICROSOFT, PRODUCT_XBOX360, 0x0114))
