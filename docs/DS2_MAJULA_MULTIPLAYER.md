@@ -141,17 +141,37 @@ Three areas have now been tested with one build, spanning the whole
 range of the permission mask: Things Betwixt at `0`, Majula at `4`,
 Heide at `7`. All three place, summon and deliver.
 
+### Invasion across areas works too
+
+    15:09:29  Break-in target list: area 0x009d5170, 1 candidate of 2 clients
+    15:09:29    candidate '3:Chico': area 0x0098e4a0, invadable yes
+    15:09:29  Invading '3:Chico' across areas. Sending area 10020000 cell 103110
+
+An invader in Heide reached a target in Things Betwixt, and the session
+held. This had dropped every time before the block patch, and nothing
+about the invasion path was touched to fix it.
+
+That confirms what the counters predicted rather than merely agreeing
+with it. One accept controller serves both signs and invasions, it reads
+the **host's** `+9`, and the host was the player in a closed area in
+every case that failed. Two symptoms, one cause, and one patch closed
+both.
+
+`DS2_InvadeAnywhere` is what lets the target list offer a player
+standing in another area; without it the server filters them out before
+the client ever sees them.
+
 The join handshake lines do not repeat in that run, because the server's
 census logs only the first of each message type per client and they had
 already fired. Their absence there is expected and is not a failure.
 
 ## What is not done
 
-- Cross-area invasion, an invader in Heide reaching a target in Majula,
-  still dropped the session when last tested. That test predates the
-  block patch and is worth repeating: the host's `+9` was the cause
-  there too, so it may already be fixed.
-- The server flags `DS2_StickySigns` and `DS2_InvadeAnywhere` are not
-  needed for any of this. Sticky signs are retired, since the client
-  asks for itself once the mask is right. `DS2_InvadeAnywhere` only
-  matters for the cross-area case above.
+- Heide reads `7`, with bit 3 clear, and accepts a sign anyway. Every
+  measured area now behaves, so this blocks nothing, but it means the
+  permission bit is not the whole story and the model is incomplete.
+- The root cause is untouched. `FUN_1403c0890` fails because Majula has
+  no per-map multiplay record; filling that record in would be cleaner
+  than patching the condition, and would explain rather than override.
+- `DS2_StickySigns` is retired. The client asks for signs itself once
+  the mask is right, so the server never needs to fabricate a list.
