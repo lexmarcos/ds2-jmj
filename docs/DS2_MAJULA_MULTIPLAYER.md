@@ -31,6 +31,11 @@ This document is the reference. The investigation that got here,
 including three approaches that failed and why, is in
 [DS2_STICKY_SIGNS.md](DS2_STICKY_SIGNS.md).
 
+**Read [DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md) before treating this as
+finished.** "Works" currently means two players, on one machine, with
+two item types, in three of the game's thirty-one areas, up to the
+moment the phantom appears. The duel itself has never been played out.
+
 ## Three things are required, and none is enough alone
 
 The game refuses multiplayer in Majula in three independent places. All
