@@ -118,15 +118,35 @@ is standing**, copied from a byte at offset 12 of the zone record, and
 `iVar8 <= 0` means no zone at all. That field is what the rest of the game
 consults, and it is the natural place to intervene.
 
-## Where the next attempt should start
+## What the game actually checks
 
-The next question is what the permission byte actually holds. Log it in Heide,
-where a sign can be placed, and in Majula, where it cannot. Two values, and the
-mod is forcing one into the other.
+Measured in a live session, with a breakpoint at `DarkSoulsII.exe+0x250e93`
+reading the zone id from `ebx` and the permission byte from `edi`:
 
-`FUN_140250dc0` is where to read it, and the interesting values are `iVar8` (the
-zone id, non-positive outside any zone) and the byte the lookup returns. From
-there the patch has the same shape as
+| Where | Zone id | Permission byte |
+| --- | --- | --- |
+| Majula, where a sign is refused | `-1` | `0x00` |
+| Heide, where a sign is placed | `103110` | `0x00` |
+
+The permission byte is the same in both, so it decides nothing. **The zone id is
+the whole check.** Majula is `-1`, meaning the player is not inside any multiplay
+zone at all; Heide is inside one.
+
+The zone id is read a few instructions earlier:
+
+```asm
+140250e58:  mov    ebx,DWORD PTR [rcx+0x20]   ; the zone the player is in
+140250e7d:  test   ebx,ebx
+140250e7f:  jle    0x140250e93                ; <= 0, no zone, skip the lookup
+140250e83:  call   0x1402aab40                ; otherwise look the zone up
+```
+
+So the patch is to substitute a real zone id whenever the game reports none:
+break at `+0x250e58`, and if `ebx` comes back non-positive, write a zone id that
+is known to permit summoning. The game then believes the player is always
+standing inside a multiplay zone, wherever they are.
+
+This has the same shape as
 [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md): a breakpoint at a
 known offset, a value read, a value written.
 
