@@ -697,7 +697,17 @@ fn up(
         return Err("o ambiente não está pronto; rode `ds2os-dev doctor`".into());
     }
 
-    println!("servidor");
+    // The game enumerates controllers once, at startup, and never looks again,
+    // so the virtual pad has to exist before anyone presses Play. Getting that
+    // order wrong looks exactly like a pad that does not work.
+    println!("gamepad");
+    if pad::running(1) {
+        println!("  já no ar");
+    } else {
+        pad_command(PadAction::Start { index: 1, foreground: false })?;
+    }
+
+    println!("\nservidor");
     let status = server::up(environment)?;
     print_server(&status);
 
@@ -717,6 +727,7 @@ fn up(
         println!("  2. cole a linha da conta 2 nas opções de lançamento da OUTRA Steam");
         println!("     (abra-a com: ds2os-dev steam2 run)");
         println!("  3. dê Play nas duas");
+    println!("     (o gamepad virtual já está no ar, então os jogos vão enxergá-lo)");
     }
     println!("  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
     Ok(())
