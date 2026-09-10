@@ -601,3 +601,47 @@ which dumps sixteen bytes of the object; the decision is byte 8. If it
 differs between the two areas, poke it to zero in Majula and try the
 summon. If it does not differ, the branch above is not the one being
 taken and the other rejection, code 2, is worth arming instead.
+
+### Measured, and it is the gate
+
+    Majula   +0x000  b06d3f00 00000000  01 01 00 01
+    Heide    +0x000  b06d3f00 00000000  00 00 00 01
+
+Same object, same address, `0x7ffffe479200`, one variable. Byte `+8` is
+`0x01` in Majula and `0x00` in Heide, exactly as the branch predicts.
+
+Writing `0x00` over it in Majula, with the expected byte declared so a
+wrong guess would be refused, held across a re-read and across placing a
+sign. The summon was then **accepted**:
+
+    13:30:09  Samuel  Sign 1006 created: area 0x009932c0
+    13:31:04  Chico   Summoning sign 1006
+    13:31:10  Samuel  Sign 1006 removed by its owner
+
+No rejection, and the sign consumed, which is the signature of the
+successful Heide summon rather than of a refusal.
+
+## What is left: sessions involving Majula start and drop
+
+The failure moved one stage later rather than disappearing. The summoner
+now sees a bare "Summoning failed." with no reason, and the sign's owner
+sees **"Disconnected from multiplayer session."**
+
+That is the same wall the cross-area invasion hit, and the two now
+converge:
+
+| case | outcome |
+| --- | --- |
+| invasion, both in Heide | session holds, phantom arrives, orb consumed |
+| red sign, both in Heide | session holds, phantom arrives, sign consumed |
+| invasion, target in Majula | accepted, session starts, disconnects |
+| red sign, owner in Majula | accepted, session starts, disconnects |
+
+Two independent paths, one shared symptom, and it appears exactly when a
+phantom has to arrive in Majula. That is worth treating as one problem
+rather than two, and it means a single fix may close both.
+
+The route is the same one that worked here: Ghidra has the call graph,
+so find what runs between accepting a session and tearing it down, and
+compare Heide against Majula at that point. The tracer confirms which
+branch is live; the probe reads and pokes the value it turns on.
