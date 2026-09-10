@@ -550,3 +550,54 @@ rather than a guess. Arm `29e5ed`, provoke a rejection in Majula, read
 
 Arm a hot address such as `250e50` alongside every time. A breakpoint
 that does not fire proves nothing without one.
+
+## The decision, found
+
+Ghidra answered in minutes what the linear disassembly could not. The
+project at `~/tools/proj` already holds an analysed `DarkSoulsII.exe`,
+and it has real cross references, so the unwind-split chunks that made
+`objdump` a dead end stop mattering.
+
+`0x14029e5ed` sits in `FUN_14029e590`, which the decompiler identifies
+from its own RTTI as
+`NetSvrSummonSignInterface::RejectSummonSign`. It has no callers,
+because it is virtual: its address is stored at `0x1410d5dd8`, which is
+`0x20` past the interface's vtable, so every call to it is
+`call [obj+0x20]`.
+
+Searching for that indirect call near the manager global `0x141616cf8`
+gives nine candidates, and `FUN_1402a0ff0` is the one that handles the
+incoming summon push. Its two rejections are the two the player sees:
+
+```c
+// reject 2, SignHasDisappeared
+if ((*(char *)(param_1 + 0xe8) == '\0') || (*(char *)(param_1 + 0x10) == '\0') ||
+    (*(int *)(param_1 + 0x18) != param_2[0x12])) { ... reject(2) ... }
+
+// and the one we are hitting
+uVar11 = 0;
+if (DAT_141616cf8 != 0) uVar11 = *(ulonglong *)(DAT_141616cf8 + 0x18);
+if (*(char *)(uVar11 + 8) == '\0') {
+    ... accept, the summon proceeds ...
+} else {
+    ... reject(0)   // NoLongerBeSummonable
+}
+```
+
+**The whole decision is one byte: `[[0x141616cf8 + 0x18] + 8]`.** Zero
+accepts the summon; anything else refuses it with code 0, which is
+exactly the error the server has been logging and the player has been
+reading as "Player can no longer be summoned."
+
+### What to measure next
+
+Read that byte in Heide, where the summon is accepted, and in Majula,
+where it is refused. A probe request is already queued and will run on
+the next launch:
+
+    chain summonflag 1616cf8 18 16
+
+which dumps sixteen bytes of the object; the decision is byte 8. If it
+differs between the two areas, poke it to zero in Majula and try the
+summon. If it does not differ, the branch above is not the one being
+taken and the other rejection, code 2, is worth arming instead.
