@@ -344,7 +344,15 @@ fn run(command: Command) -> Result<(), String> {
         },
         Command::Game { action } => match action {
             GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads } => {
-                prepare(&environment, timer_seconds, !no_timer, probe_area || watch_reads, watch_reads)
+                // The timer patch installs its own exception handler and single
+                // steps through a software breakpoint. Two handlers competing
+                // for the same exception would muddy what the watch reports, so
+                // the patch stays off while probing.
+                let timer = !no_timer && !watch_reads;
+                if watch_reads && !no_timer {
+                    println!("  timer desligado enquanto o watch estiver ligado");
+                }
+                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads)
             }
             GameAction::Launch { steam_home } => {
                 let home = resolve_second_steam(steam_home)?;

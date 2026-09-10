@@ -122,12 +122,20 @@ namespace
 
     std::mutex s_access_mutex;
     std::unordered_map<uintptr_t, Access> s_accesses;
+
+    // Counters so silence can be told apart from a handler that never runs.
+    std::atomic_uint64_t s_exceptions_seen{0};
+    std::atomic_uint64_t s_single_steps{0};
+    std::atomic_uint64_t s_dr6_matched{0};
+    std::atomic_uint64_t s_dr6_empty{0};
     std::atomic_uintptr_t s_watched{0};
     PVOID s_watch_handler = nullptr;
     uintptr_t s_module_base = 0;
 
     LONG CALLBACK WatchHandler(EXCEPTION_POINTERS* Exception)
     {
+        s_exceptions_seen++;
+
         if (Exception->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
         {
             return EXCEPTION_CONTINUE_SEARCH;
@@ -137,10 +145,22 @@ namespace
             return EXCEPTION_CONTINUE_SEARCH;
         }
 
+        s_single_steps++;
         CONTEXT* Context = Exception->ContextRecord;
 
-        // Bit 0 of Dr6 says our watchpoint is the one that fired.
-        if ((Context->Dr6 & 0x1ull) == 0)
+        // Bit 0 of Dr6 says our watchpoint is the one that fired. Wine does not
+        // always fill Dr6 in, so an empty one is counted and taken as ours
+        // rather than dropped: with the trap flag unused here, a single step we
+        // did not ask for has nowhere else to come from.
+        if ((Context->Dr6 & 0x1ull) != 0)
+        {
+            s_dr6_matched++;
+        }
+        else if (Context->Dr6 == 0)
+        {
+            s_dr6_empty++;
+        }
+        else
         {
             return EXCEPTION_CONTINUE_SEARCH;
         }
@@ -230,6 +250,18 @@ namespace
             std::scoped_lock lock(s_access_mutex);
             Sorted.assign(s_accesses.begin(), s_accesses.end());
         }
+        // Always report, even with nothing to show: an empty report says the
+        // loop is alive, which silence does not.
+        Append(StringFormat(
+            "time=%.3f event=DS2AreaWatch result=counters exceptions=%llu single_steps=%llu "
+            "dr6_matched=%llu dr6_empty=%llu readers=%zu\n",
+            GetSeconds(),
+            (unsigned long long)s_exceptions_seen.load(),
+            (unsigned long long)s_single_steps.load(),
+            (unsigned long long)s_dr6_matched.load(),
+            (unsigned long long)s_dr6_empty.load(),
+            Sorted.size()));
+
         if (Sorted.empty())
         {
             return;
