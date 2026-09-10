@@ -51,9 +51,9 @@ enum Command {
         /// Leave the phantom timer patch off
         #[arg(long)]
         no_timer: bool,
-        /// Prepare everything but do not start the second instance
+        /// Turn on the exploratory probe that locates the area id in memory
         #[arg(long)]
-        no_second: bool,
+        probe_area: bool,
     },
     /// Stops the server and the second instance
     Down,
@@ -213,6 +213,9 @@ enum GameAction {
         timer_seconds: f64,
         #[arg(long)]
         no_timer: bool,
+        /// Turn on the exploratory probe that locates the area id in memory
+        #[arg(long)]
+        probe_area: bool,
     },
     /// Starts the second instance in its own Proton prefix
     Launch {
@@ -304,8 +307,8 @@ fn run(command: Command) -> Result<(), String> {
 
     match command {
         Command::Doctor { json } => doctor(&environment, json),
-        Command::Up { timer_seconds, no_timer, no_second } => {
-            up(&environment, timer_seconds, !no_timer, !no_second)
+        Command::Up { timer_seconds, no_timer, probe_area } => {
+            up(&environment, timer_seconds, !no_timer, probe_area)
         }
         Command::Down => {
             let stopped_game = game::stop_second();
@@ -337,8 +340,8 @@ fn run(command: Command) -> Result<(), String> {
             }
         },
         Command::Game { action } => match action {
-            GameAction::Prepare { timer_seconds, no_timer } => {
-                prepare(&environment, timer_seconds, !no_timer)
+            GameAction::Prepare { timer_seconds, no_timer, probe_area } => {
+                prepare(&environment, timer_seconds, !no_timer, probe_area)
             }
             GameAction::Launch { steam_home } => {
                 let home = resolve_second_steam(steam_home)?;
@@ -645,17 +648,25 @@ fn row<T: std::fmt::Debug>(label: &str, value: Option<T>) {
     }
 }
 
-fn prepare(environment: &Environment, timer_seconds: f64, timer_patch: bool) -> Result<(), String> {
+fn prepare(
+    environment: &Environment,
+    timer_seconds: f64,
+    timer_patch: bool,
+    probe_area: bool,
+) -> Result<(), String> {
     if environment.installs.is_empty() {
         return Err("nenhuma instalação do Dark Souls II encontrada".into());
     }
 
     for install in &environment.installs {
-        let prepared = game::prepare(environment, install, timer_seconds, timer_patch)?;
+        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area)?;
         println!("  conta {}", prepared.account);
         println!("    pasta   {}", prepared.game_dir.display());
         if !prepared.copied.is_empty() {
             println!("    copiado {}", prepared.copied.join(", "));
+        }
+        if prepared.probe_area {
+            println!("    probe   ligado (DS2_AreaProbe.log na pasta do jogo)");
         }
         println!(
             "    timer   {}",
@@ -687,7 +698,7 @@ fn up(
     environment: &Environment,
     timer_seconds: f64,
     timer_patch: bool,
-    _start_second: bool,
+    probe_area: bool,
 ) -> Result<(), String> {
     let problems = environment.problems();
     if !problems.is_empty() {
@@ -712,7 +723,7 @@ fn up(
     print_server(&status);
 
     println!("\njogo");
-    prepare(environment, timer_seconds, timer_patch)?;
+    prepare(environment, timer_seconds, timer_patch, probe_area)?;
 
     println!("\nopções de lançamento");
     print_launch_options(environment);

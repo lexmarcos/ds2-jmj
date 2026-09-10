@@ -43,6 +43,10 @@ public:
     // Value written to the active session timer when the patch is enabled.
     double DS2PhantomTimerSeconds = 4000.0;
 
+    // DS2-only exploratory probe: finds where the game keeps the id of the
+    // area the player is in. Writes DS2_AreaProbe.log and changes nothing.
+    bool DS2ProbeArea = false;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

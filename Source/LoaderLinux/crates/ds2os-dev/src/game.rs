@@ -21,6 +21,7 @@ const BINARIES: [&str; 2] = ["Injector.dll", "Injector.exe"];
 #[serde(rename_all = "camelCase")]
 pub struct Prepared {
     pub account: u8,
+    pub probe_area: bool,
     pub game_dir: PathBuf,
     pub launch_options: String,
     pub injector_config: PathBuf,
@@ -39,6 +40,7 @@ pub fn prepare(
     install: &crate::env::Install,
     timer_seconds: f64,
     timer_patch: bool,
+    probe_area: bool,
 ) -> Result<Prepared, String> {
     let game_dir = install.game_dir.clone();
     let server_paths = environment
@@ -73,6 +75,7 @@ pub fn prepare(
         EnableSeperateSaveFiles: true,
         DS2PatchPhantomTimers: timer_patch,
         DS2PhantomTimerSeconds: timer_seconds,
+        DS2ProbeArea: probe_area,
     };
     let injector_config = config
         .write_to(&game_dir)
@@ -87,6 +90,7 @@ pub fn prepare(
 
     Ok(Prepared {
         account: install.account,
+        probe_area,
         launch_options: format!("{} %command%", shell_quote(&script)),
         game_dir,
         injector_config,

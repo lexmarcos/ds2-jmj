@@ -26,6 +26,9 @@ pub struct InjectorConfig {
     pub EnableSeperateSaveFiles: bool,
     pub DS2PatchPhantomTimers: bool,
     pub DS2PhantomTimerSeconds: f64,
+    /// Exploratory probe that locates the current area id in memory.
+    #[serde(default)]
+    pub DS2ProbeArea: bool,
 }
 
 impl InjectorConfig {
@@ -105,6 +108,7 @@ impl LoaderSettings {
             EnableSeperateSaveFiles: self.separate_saves,
             DS2PatchPhantomTimers: is_ds2 && self.patch_phantom_timers,
             DS2PhantomTimerSeconds: self.phantom_timer_seconds,
+            DS2ProbeArea: false,
         }
     }
 }

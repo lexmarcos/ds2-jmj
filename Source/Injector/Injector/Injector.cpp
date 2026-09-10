@@ -23,6 +23,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_AreaProbeHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -153,6 +154,11 @@ bool Injector::Init()
             if (Config.DS2PatchPhantomTimers)
             {
                 Hooks.push_back(std::make_unique<DS2_PhantomTimerParamPatchHook>());
+            }
+
+            if (Config.DS2ProbeArea)
+            {
+                Hooks.push_back(std::make_unique<DS2_AreaProbeHook>());
             }
             break;
         }
