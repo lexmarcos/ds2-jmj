@@ -645,3 +645,69 @@ The route is the same one that worked here: Ghidra has the call graph,
 so find what runs between accepting a session and tearing it down, and
 compare Heide against Majula at that point. The tracer confirms which
 branch is live; the probe reads and pokes the value it turns on.
+
+## Solved: a duel in Majula
+
+2026-09-10.
+
+    14:37:42  Samuel  Sign 1007 created: type 4, area 0x009932c0
+    14:37:56  Chico   Summoning sign 1007
+    14:38:01  Samuel  Sign 1007 removed by its owner
+    14:38:07  Chico   First RequestNotifyJoinGuestPlayer
+    14:38:09  Samuel  First RequestNotifyJoinSession
+
+A red phantom is standing in Majula. Those last two messages are the
+result, not the absence of an error: they are the join handshake, they
+had never once appeared in this project, and they arrive within seconds
+of the sign being consumed exactly as they do in Heide.
+
+### What the byte actually was
+
+It is not a flag. `+8` and `+9` of the object at
+`[[0x141616cf8+0x18]]` are two saturating counters, raised and lowered
+by one per-frame updater that edge-tracks `FUN_1403c0890`. Majula reads
+`01 01`, Heide `00 00`.
+
+Three places consume them, and each is a different failure the player
+sees:
+
+| site | reads | on failure |
+| --- | --- | --- |
+| `FUN_1402a0ff0`, the summon push handler | the owner's `+8` | reject code 0, "Player can no longer be summoned" |
+| `FUN_1402c2a80`, the guest's join controller | the guest's `+8` | error 0x13 |
+| `FUN_1402bf440`, the **host's** accept controller, at `0x1402bf46d` | the host's `+9` | error 6, the session drops |
+
+Poking `+8` on one client cleared the first and moved the failure to the
+third, which is why the rejection turned into a disconnect. The host's
+`+9` had never been touched, and the host is the player in Majula in
+exactly the two rows of the table that failed. One controller serves
+both signs and invasions, so both rows always had the same cause.
+
+### The fix
+
+Three bytes, at the source rather than on the counters:
+
+    pokemod blockcond 3c0890 b001c3 48895c
+
+`FUN_1403c0890` returns true, and the edge logic zeroes both counters
+within a frame on its own. Verified by reading them back on both
+clients: `00 00 00 01`, the Heide signature, where Majula had read
+`01 01 00 01`.
+
+Patching the source beats poking the counters, because the object
+holding the edge flag can be rebuilt when a client loads into another
+world, which would re-raise a poked counter mid-session.
+
+### Still to do
+
+- Ship it as an injector hook, off by default, alongside the mask and
+  the forced zone. All three are required together and none is enough
+  alone.
+- Run the control: the same patch active in Heide, and confirm a summon
+  there still holds. Nothing has yet checked that this does not break
+  what already worked.
+- Record which term of `FUN_1403c0890` Majula fails. It looks up a
+  per-map record by packed map id and wants a non-zero first byte and
+  `[block+0x16] == 0`. Majula's `+0x16` is already 0, so the per-map
+  record is the failing term, which means Majula simply has no multiplay
+  data in that table. That is the real "why" and it is still unwritten.
