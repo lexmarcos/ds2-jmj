@@ -340,6 +340,11 @@ public:
     // player; only the dead-area rule is lifted.
     bool DS2_InvadeAnywhere = false;
 
+    // If enabled the server logs the first time each client sends each kind of
+    // message. One line per client per message type, so it stays readable, and
+    // it maps which online subsystems a client actually uses where it stands.
+    bool LogFirstMessageOfEachType = false;
+
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
     float PlayerStatusUploadInterval = 15.0f;

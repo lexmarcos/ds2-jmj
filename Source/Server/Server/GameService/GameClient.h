@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 class GameService;
 class NetConnection;
@@ -61,6 +62,9 @@ public:
     double DisconnectTime = 0.0f;
 
     bool Banned = false;
+
+    // Message type names this client has already sent, so each is reported once.
+    std::unordered_set<std::string> SeenMessageTypes;
 
 protected:
 

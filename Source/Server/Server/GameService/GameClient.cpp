@@ -106,7 +106,17 @@ bool GameClient::Poll()
 
 bool GameClient::HandleMessage(const Frpg2ReliableUdpMessage& Message)
 {
-    //WarningS(GetName().c_str(), "-> %s", Message.Protobuf->GetTypeName().c_str());
+    // Which subsystems a client uses where it is standing is the thing under
+    // investigation, and it is invisible unless the server says what arrives.
+    // Once per type per client keeps it to a short, readable census.
+    if (Service->GetServer()->GetConfig().LogFirstMessageOfEachType)
+    {
+        std::string TypeName = Message.Protobuf->GetTypeName();
+        if (SeenMessageTypes.insert(TypeName).second)
+        {
+            LogS(GetName().c_str(), "First %s.", TypeName.c_str());
+        }
+    }
 
     const std::vector<std::shared_ptr<GameManager>>& Managers = Service->GetManagers();
     for (auto& Manager : Managers)
