@@ -244,7 +244,7 @@ The `DS2ForceMultiPlayZone` patch is therefore not the fix for Majula. It is
 kept because it is correct about what it does and is likely still needed for
 phantoms to see each other, but on its own it changes nothing here.
 
-## What the gate actually reads: the online area id
+## The online area id: what that experiment really showed
 
 Found by elimination, and confirmed in both directions on a character standing
 at the Heide bonfire where the item works:
@@ -254,28 +254,46 @@ at the Heide bonfire where the item works:
 | Every copy of the online area id changed from Heide's `0x009d5170` to Majula's `0x009932c0` | **refused** (0.8%) |
 | The same copies changed back to `0x009d5170` | **works** (9.3%, sign placed) |
 
-Nothing else about the game changed between those two runs. **The online area
-id is the input the refusal is computed from** - the same id the server uses for
-matchmaking, out of `OnlineAreaId.inc`, and not the map id and not the multiplay
-zone.
+Nothing else about the game changed between those two runs.
 
-This is the first positive identification in this investigation. Everything
-before it was an elimination.
+**This was over-read at the time and the conclusion has since been corrected.**
+Narrowing by halves found the copy that decides, and it turned out to be the row
+key of `NETWORK_AREA_PARAM` - a param table, found by its own name in memory,
+holding one 28-byte row per online area. Changing that key makes the lookup for
+the current area **fail**, and a failed lookup refuses the item.
 
-### Which copy
+So what the experiment actually established is real but narrower: **the code
+that places a sign consults NETWORK_AREA_PARAM for the current area, and
+refuses if there is no row.** It does not follow that the area id or the row is
+what separates Majula from Heide, and it is not.
 
-There were 32 copies in 956MB. Narrowing by halves, the one that decides is
-**not** the documented `+0x1d0` field that follows the player - changing that
-alone leaves the item working. It is one of a cluster sitting at `+0x00`,
-`+0x20`, `+0x24`, `+0x30` and `+0x50` of a structure, which has the shape of a
-list rather than a single current-area field.
+### NETWORK_AREA_PARAM, and why it is not the answer either
 
-That fits the behaviour: if the game holds a list of online areas that permit
-summoning and asks whether the current one is in it, then overwriting the
-entries with Majula's id would refuse in Heide, which is exactly what happened.
+The param is heap memory that moves between runs and is found by searching for
+its own type name. Its header carries the row count at `+0x0a` and the name at
+`+0x0c`; the row index starts at `+0x48` with 24-byte entries of
+`{ dataOffset, nameOffset, rowId }`, and the row id is the online area id. Rows
+are 28 bytes: three floats, twelve zero bytes, and a trailing bitmask.
 
-The exact addresses are not reusable between runs, so the structure has to be
-identified by what reads it rather than by where it sat.
+Read out of a live game, that mask looked exactly like the answer:
+
+```text
+Things Betwixt   0    000000
+Majula           4    000100
+Heide            7    000111
+most of the game 63   111111
+```
+
+Majula is the only area in the game below 7 apart from the tutorial. It was
+not the answer. An injector hook now raises every mask to 63 before any area
+loads - the log confirms `area=0x009932c0 antes=4 agora=63`, applied once and
+never reverted - and Majula still refuses. Setting the one remaining differing
+field, the second float, from 20 to 30 makes Majula's row **byte-identical to
+Heide's**, and it still refuses.
+
+`NETWORK_AREA_PARAM` is consulted, and it is not the discriminator. The hook is
+kept because opening every area is wanted anyway and it is correct about what
+it does.
 
 ### A warning about how to test this
 
@@ -288,8 +306,21 @@ had been saved through the menu - but the loop costs several minutes each time.
 
 ## Still open
 
-Finding the code that reads the id, so the fix can be a patch rather than a
-list of addresses that changes every run.
+Nothing found so far separates Majula from Heide. Ruled out by direct
+measurement, in both directions where possible: the multiplay zone and every
+value derived from it, the map id, the whole of `NETWORK_AREA_PARAM`, and
+`SignEventAreaManager`'s list test at `+0x20c820`, which changes nothing when
+forced to either answer.
+
+What is known about the gate: it runs on the client before anything reaches the
+network, it consults `NETWORK_AREA_PARAM` on the way, and it produces no
+animation and no message.
+
+The tooling to keep going is in place and is the part worth keeping: reads,
+writes, scans and code patches into the running game from inside it, an oracle
+that separates a used item from a refused one by 7% against 1% of the
+character's pixels, and menu automation that can quit, relaunch, load a
+character and travel between areas.
 
 `+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
 shows `FUN_1400f2690` builds display text, formatting the area name for the
