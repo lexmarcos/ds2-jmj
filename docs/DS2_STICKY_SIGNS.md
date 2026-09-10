@@ -488,6 +488,23 @@ refuse.
 It is now off. If the summon succeeds with it off, the workaround was
 the obstacle.
 
+**It was not, and turning it off broke placement.** With the forced zone
+off and the mask still 63, the Red Sign Soapstone is refused in Majula
+again and no sign can be put down at all. So the two are both load
+bearing and neither alone is enough:
+
+| forced zone | mask bit 3 | soapstone in Majula |
+| --- | --- | --- |
+| on | clear (7) | refused — the state this project sat in for a long time |
+| off | set (63) | refused |
+| on | set (63) | **works** |
+
+That fits the code. The item-use path consults the multiplay zone the
+player is standing in, which Majula does not have natively — the earlier
+probe read it as `-1`, meaning no zone at all — and it separately tests
+bit 3 of the area's param row. The hook supplies the first, the mask
+supplies the second, and the game wants both. Turned back on.
+
 ### The control, if it does not
 
 Run the identical test in Heide: owner places a red sign there, searcher
