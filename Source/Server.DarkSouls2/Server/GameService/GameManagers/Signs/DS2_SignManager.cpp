@@ -157,12 +157,49 @@ bool DS2_SignManager::CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParame
 
 MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestGetSignList* Request = (DS2_Frpg2RequestMessage::RequestGetSignList*)Message.Protobuf.get();
     DS2_Frpg2RequestMessage::RequestGetSignListResponse Response;
 
     int RemainingSignCount = (int)Request->max_signs();
+
+    // Signs already put in this response. The sticky pass sweeps every area, so
+    // without this it could offer a sign the normal pass has already sent.
+    std::unordered_set<uint32_t> SentSignIds;
+
+    // Writes one sign into the response. ReportedAreaId/ReportedCellId are what
+    // the searching client is told the sign lives in, which is normally where it
+    // really is but is overridden by the sticky pass below.
+    auto AppendSign = [&](const std::shared_ptr<SummonSign>& Sign, const std::unordered_set<uint32_t>& ClientExistingSignId, uint32_t ReportedAreaId, uint64_t ReportedCellId)
+    {
+        // If client already has sign data we only need to return a limited set of data.
+        if (ClientExistingSignId.count(Sign->SignId) > 0)
+        {
+            DS2_Frpg2RequestMessage::SignInfo* SignInfo = Response.add_sign_info();
+            SignInfo->set_player_id(Sign->PlayerId);
+            SignInfo->set_sign_id(Sign->SignId);
+        }
+        else
+        {
+            DS2_Frpg2RequestMessage::SignData* SignData = Response.add_sign_data();
+            SignData->mutable_sign_info()->set_player_id(Sign->PlayerId);
+            SignData->mutable_sign_info()->set_sign_id(Sign->SignId);
+            SignData->set_online_area_id(ReportedAreaId);
+            SignData->mutable_matching_parameter()->CopyFrom(static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters));
+            SignData->set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
+            SignData->set_player_steam_id(Sign->PlayerSteamId);
+            SignData->set_cell_id(ReportedCellId);
+            SignData->set_sign_type((DS2_Frpg2RequestMessage::SignType)Sign->Type);
+        }
+
+        // Make sure user is marked as aware of the sign so we can clear up when the sign is removed.
+        Sign->AwarePlayerIds.insert(Player.GetPlayerId());
+
+        SentSignIds.insert(Sign->SignId);
+        RemainingSignCount--;
+    };
 
     // Grab as many recent signs as we can from the cache that match our matching criteria.
     for (int i = 0; i < Request->search_areas_size() && RemainingSignCount > 0; i++)
@@ -191,30 +228,73 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
 
         for (std::shared_ptr<SummonSign>& Sign : AreaSigns)
         {
-            // If client already has sign data we only need to return a limited set of data.
-            if (ClientExistingSignId.count(Sign->SignId) > 0)
-            {
-                DS2_Frpg2RequestMessage::SignInfo* SignInfo = Response.add_sign_info();
-                SignInfo->set_player_id(Sign->PlayerId);
-                SignInfo->set_sign_id(Sign->SignId);
-            }
-            else
-            {
-                DS2_Frpg2RequestMessage::SignData* SignData = Response.add_sign_data();
-                SignData->mutable_sign_info()->set_player_id(Sign->PlayerId);
-                SignData->mutable_sign_info()->set_sign_id(Sign->SignId);
-                SignData->set_online_area_id((uint32_t)Sign->OnlineAreaId);
-                SignData->mutable_matching_parameter()->CopyFrom(static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters));
-                SignData->set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
-                SignData->set_player_steam_id(Sign->PlayerSteamId);
-                SignData->set_cell_id(Sign->CellId);
-                SignData->set_sign_type((DS2_Frpg2RequestMessage::SignType)Sign->Type);
-            }
+            AppendSign(Sign, ClientExistingSignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId);
 
-            // Make sure user is marked as aware of the sign so we can clear up when the sign is removed.
-            Sign->AwarePlayerIds.insert(Player.GetPlayerId());
+            if (RemainingSignCount <= 0)
+            {
+                break;
+            }
+        }
+    }
 
-            RemainingSignCount--;
+    // Sticky signs: the client reports online activity area 0 for the areas the
+    // game refuses to place a sign in, Majula among them. A player standing
+    // there can never see a sign, because no sign is ever filed under a cell
+    // they search. So offer them signs from anywhere, reported under a cell and
+    // area they are actually searching, which is what makes the client render
+    // them. The sign itself is left filed where its owner placed it, so the
+    // owner's client and the server stay in agreement about where it is.
+    if (Config.DS2_StickySigns &&
+        RemainingSignCount > 0 &&
+        Request->search_areas_size() > 0 &&
+        Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentOnlineActivityArea() == 0)
+    {
+        // The client asking at all is itself the thing to confirm, so say so
+        // even when nothing comes of it. Throttled, this runs on every poll.
+        double Now = GetSeconds();
+        if (double& Last = LastStickyLogTime[Player.GetPlayerId()]; Now - Last > 10.0)
+        {
+            Last = Now;
+            LogS(Client->GetName().c_str(), "Sticky pass: area 0x%08x, %d search cells (first 0x%016llx), room for %d, %zu signs cached.",
+                Request->online_area_id(), Request->search_areas_size(), (uint64_t)Request->search_areas(0).cell_id(),
+                RemainingSignCount, LiveCache.GetTotalEntries());
+        }
+
+        // Union of everything the client says it already holds.
+        std::unordered_set<uint32_t> ClientExistingSignId;
+        for (int i = 0; i < Request->search_areas_size(); i++)
+        {
+            const DS2_Frpg2RequestMessage::SignCellInfo& Area = Request->search_areas(i);
+            for (int j = 0; j < Area.local_signs_size(); j++)
+            {
+                ClientExistingSignId.insert(Area.local_signs(j).sign_id());
+            }
+        }
+
+        uint32_t ReportedAreaId = Request->online_area_id();
+        uint64_t ReportedCellId = Request->search_areas(0).cell_id();
+
+        uint32_t SelfPlayerId = Player.GetPlayerId();
+
+        std::vector<std::shared_ptr<SummonSign>> StickySigns = LiveCache.GetRecentSetGlobal(RemainingSignCount, [this, &Request, &SentSignIds, SelfPlayerId](const std::shared_ptr<SummonSign>& Sign) {
+            if (Sign->PlayerId == SelfPlayerId || SentSignIds.count(Sign->SignId) > 0)
+            {
+                return false;
+            }
+            return CanMatchWith(
+                Request->matching_parameter(),
+                static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters.get()),
+                Sign->Type
+            );
+        });
+
+        for (std::shared_ptr<SummonSign>& Sign : StickySigns)
+        {
+            LogS(Client->GetName().c_str(), "Sticky sign %u (owner area 0x%08x cell 0x%016llx) offered as area 0x%08x cell 0x%016llx.",
+                Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId, ReportedAreaId, ReportedCellId);
+
+            AppendSign(Sign, ClientExistingSignId, ReportedAreaId, ReportedCellId);
+
             if (RemainingSignCount <= 0)
             {
                 break;
@@ -366,6 +446,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestUpdateSign(GameClient* Client
 MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     ServerDatabase& Database = ServerInstance->GetDatabase();
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestSummonSign* Request = (DS2_Frpg2RequestMessage::RequestSummonSign*)Message.Protobuf.get();
@@ -391,6 +472,20 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_info().sign_id());
+
+    // A sticky sign was offered under the summoner's own cell and area, not the
+    // one it is filed under, so the lookup above cannot find it. The sign id is
+    // unique across the whole cache, so fall back to that.
+    if (!Sign && Config.DS2_StickySigns)
+    {
+        Sign = LiveCache.Find(Request->sign_info().sign_id());
+        if (Sign)
+        {
+            LogS(Client->GetName().c_str(), "Summoning sticky sign %u, filed under area 0x%08x cell 0x%016llx.",
+                Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId);
+        }
+    }
+
     if (!Sign)
     {
         WarningS(Client->GetName().c_str(), "Client attempted to use invalid summon sign, sending back rejection, %i.", Request->sign_info().sign_id());
@@ -470,12 +565,21 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
 
 MessageHandleResult DS2_SignManager::Handle_RequestRejectSign(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
+
     DS2_Frpg2RequestMessage::RequestRejectSign* Request = (DS2_Frpg2RequestMessage::RequestRejectSign*)Message.Protobuf.get();
 
     DS2_CellAndAreaId LocationId = { (uint64_t)Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_id());
+
+    // Same fallback as the summon path, for the same reason.
+    if (!Sign && Config.DS2_StickySigns)
+    {
+        Sign = LiveCache.Find(Request->sign_id());
+    }
+
     if (!Sign)
     {
         WarningS(Client->GetName().c_str(), "Client attempted to reject summoning for invalid sign (or sign cancelled), %i.", Request->sign_id());

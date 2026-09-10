@@ -322,6 +322,15 @@ public:
     // Without this the client hides the area on a low population server.
     bool DS2IncludeCurrentAreaInRightMatchingArea = false;
 
+    // If enabled DS2 summon signs are offered to players standing in areas
+    // where no sign of their own can be placed (Majula and the other hub
+    // areas). The sign keeps living in the cell its owner placed it in; it is
+    // only reported to the searcher under the searcher's own cell and area so
+    // the client accepts it as local. Summon and reject then fall back to a
+    // lookup by sign id alone, because the searcher reports a location the
+    // sign was never filed under.
+    bool DS2_StickySigns = false;
+
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
     float PlayerStatusUploadInterval = 15.0f;

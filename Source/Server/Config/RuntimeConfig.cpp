@@ -322,6 +322,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(IgnoreInvasionAreaFilter);
     SERIALIZE_VAR(AllowDuplicateSteamIds);
     SERIALIZE_VAR(DS2IncludeCurrentAreaInRightMatchingArea);
+    SERIALIZE_VAR(DS2_StickySigns);
     SERIALIZE_VAR(PlayerStatusUploadInterval);
     SERIALIZE_VAR(PlayerCharacterUpdateSendDelay);
     SERIALIZE_VAR(PlayerStatusUploadSendDelay);
