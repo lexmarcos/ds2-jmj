@@ -399,6 +399,50 @@ namespace
         Candidates.swap(Kept);
     }
 
+    /// Arms the watch on an address the caller already knows, if it currently
+    /// holds a known area id.
+    ///
+    /// This is retried rather than checked once: twenty seconds after injection
+    /// the player is usually still at the menu and the value is zero, which
+    /// says nothing about whether the address is right.
+    bool TryArmFromHint(const std::string& Hint)
+    {
+        if (Hint.empty())
+        {
+            return false;
+        }
+
+        const uintptr_t Address = (uintptr_t)strtoull(Hint.c_str(), nullptr, 0);
+        if (Address == 0 || (Address & 0x3) != 0)
+        {
+            return false;
+        }
+
+        uint32_t Value = 0;
+        if (!TryReadU32(Address, Value) || AreaName(Value) == nullptr)
+        {
+            return false;
+        }
+
+        s_watch_handler = AddVectoredExceptionHandler(1, WatchHandler);
+        s_watched.store(Address);
+        const bool Guarded = ArmGuardPage(Address);
+
+        Append(StringFormat(
+            "time=%.3f event=DS2AreaWatch result=armed_from_hint address=0x%016llx "
+            "value=0x%08x area=%s guard=%d module_base=0x%016llx\n",
+            GetSeconds(),
+            (unsigned long long)Address,
+            Value,
+            AreaName(Value),
+            Guarded ? 1 : 0,
+            (unsigned long long)s_module_base));
+        Log("[DS2AreaWatch] usando o endereco informado 0x%016llx (%s)",
+            (unsigned long long)Address,
+            AreaName(Value));
+        return true;
+    }
+
     void ProbeThread()
     {
         // Let the game finish loading before walking its address space.
@@ -412,41 +456,41 @@ namespace
                             GetSeconds(),
                             Watch ? 1 : 0));
 
-        // A hint skips the scan entirely, which matters because identifying
-        // the address otherwise costs a trip between two areas every run. It is
-        // only trusted if it currently holds a known area id.
-        const std::string& Hint = Injector::Instance().GetConfig().DS2AreaAddress;
-        if (Watch && !Hint.empty())
+        const std::string Hint =
+            Watch ? Injector::Instance().GetConfig().DS2AreaAddress : std::string();
+
+        // Give the hint a while to become valid before paying for a scan.
+        for (int Attempt = 0; Attempt < 60 && !Hint.empty() && s_watched.load() == 0; Attempt++)
         {
-            const uintptr_t Address = (uintptr_t)strtoull(Hint.c_str(), nullptr, 0);
-            uint32_t Value = 0;
-            if (Address != 0 && (Address & 0x3) == 0 && TryReadU32(Address, Value) && AreaName(Value) != nullptr)
+            if (TryArmFromHint(Hint))
             {
-                s_watch_handler = AddVectoredExceptionHandler(1, WatchHandler);
-                s_watched.store(Address);
-                const bool Guarded = ArmGuardPage(Address);
-                Append(StringFormat(
-                    "time=%.3f event=DS2AreaWatch result=armed_from_hint address=0x%016llx "
-                    "value=0x%08x area=%s guard=%d module_base=0x%016llx\n",
-                    GetSeconds(),
-                    (unsigned long long)Address,
-                    Value,
-                    AreaName(Value),
-                    Guarded ? 1 : 0,
-                    (unsigned long long)s_module_base));
-                Log("[DS2AreaWatch] usando o endereco informado 0x%016llx (%s)",
-                    (unsigned long long)Address,
-                    AreaName(Value));
+                break;
             }
-            else
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+
+        if (s_watched.load() != 0)
+        {
+            // Armed from the hint; the loop below only reports from here on.
+            double LastReport = 0.0;
+            double LastRearm = 0.0;
+            while (s_running.load())
             {
-                Append(StringFormat(
-                    "time=%.3f event=DS2AreaWatch result=hint_rejected address=0x%016llx value=0x%08x\n",
-                    GetSeconds(),
-                    (unsigned long long)Address,
-                    Value));
-                Log("[DS2AreaWatch] endereco informado nao vale; vou varrer");
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                const double Now = GetSeconds();
+                if (Now - LastRearm >= 15.0)
+                {
+                    ArmGuardPage(s_watched.load());
+                    LastRearm = Now;
+                }
+                if (Now - LastReport >= 15.0)
+                {
+                    ReportAccesses();
+                    LastReport = Now;
+                }
             }
+            ReportAccesses();
+            return;
         }
 
         std::vector<Candidate> Candidates = ScanEverything();
