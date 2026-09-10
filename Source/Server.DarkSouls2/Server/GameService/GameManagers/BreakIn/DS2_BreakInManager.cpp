@@ -218,12 +218,26 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
         if (Config.DS2_InvadeAnywhere)
         {
             auto& Target = TargetClient->GetPlayerStateType<DS2_PlayerState>();
-            PushMessage.set_cell_id(Target.GetCurrentCellId());
-            PushMessage.set_online_area_id((uint32_t)Target.GetCurrentArea());
 
-            LogS(Client->GetName().c_str(), "Invading '%s' across areas: invader in 0x%08x cell 0x%08x, target in 0x%08x cell 0x%08x.",
+            uint32_t Area = InvadeAreaMode == 1 ? (uint32_t)Target.GetCurrentArea()
+                                                : Request->online_area_id();
+            uint32_t Cell = Request->cell_id();
+            if (InvadeCellMode == 1)
+            {
+                Cell = (uint32_t)Target.GetCurrentOnlineActivityArea();
+            }
+            else if (InvadeCellMode == 2)
+            {
+                Cell = Target.GetCurrentCellId();
+            }
+
+            PushMessage.set_cell_id(Cell);
+            PushMessage.set_online_area_id(Area);
+
+            LogS(Client->GetName().c_str(), "Invading '%s' across areas. Invader says area %u cell %u; target is in area %u, activity area %d, packed cell 0x%08x. Sending area %u cell %u.",
                 TargetClient->GetName().c_str(), Request->online_area_id(), Request->cell_id(),
-                (uint32_t)Target.GetCurrentArea(), Target.GetCurrentCellId());
+                (uint32_t)Target.GetCurrentArea(), Target.GetCurrentOnlineActivityArea(), Target.GetCurrentCellId(),
+                Area, Cell);
         }
         else
         {
@@ -278,7 +292,29 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
 
 void DS2_BreakInManager::Poll()
 {
+    PollInvadeMode();
     PollDebugInvadeRequest();
+}
+
+void DS2_BreakInManager::PollInvadeMode()
+{
+    std::filesystem::path Path = ServerInstance->GetSavedPath() / "invade_mode.txt";
+    std::string Contents;
+    if (!std::filesystem::exists(Path) || !ReadTextFromFile(Path, Contents))
+    {
+        return;
+    }
+
+    int Area = InvadeAreaMode, Cell = InvadeCellMode;
+    if (sscanf(Contents.c_str(), "%d %d", &Area, &Cell) == 2)
+    {
+        if (Area != InvadeAreaMode || Cell != InvadeCellMode)
+        {
+            InvadeAreaMode = Area;
+            InvadeCellMode = Cell;
+            LogS("BreakIn", "Invade mode is now area %d, cell %d.", InvadeAreaMode, InvadeCellMode);
+        }
+    }
 }
 
 void DS2_BreakInManager::PollDebugInvadeRequest()
@@ -371,6 +407,14 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestRejectBreakInTarget(GameCl
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestRejectBreakInTarget* Request = (DS2_Frpg2RequestMessage::RequestRejectBreakInTarget*)Message.Protobuf.get();
+
+    // The target refusing an invasion says why, and says which area and cell it
+    // believes the invasion was for. That is the only place the client tells us
+    // what it expected, so it is worth all of it.
+    LogS(Client->GetName().c_str(), "Rejecting break-in from player %lld: reason %lld, area %lld, cell %lld, unknown_5 %lld.",
+        (long long)Request->player_id(), (long long)Request->unknown_2(),
+        (long long)Request->online_area_id(), (long long)Request->cell_id(),
+        (long long)Request->unknown_5());
 
     // Get client who initiated the invasion.
     std::shared_ptr<GameClient> InvaderClient = GameServiceInstance->FindClientByPlayerId(Request->player_id());

@@ -48,10 +48,21 @@ private:
     // be asked without first solving how the invader gets an orb.
     void PollDebugInvadeRequest();
 
+    // Which location the invasion push claims. Read from a file so the choice
+    // can be changed without a restart, because a restart costs every
+    // connected client its auth token and a relaunch of the game.
+    void PollInvadeMode();
+
 private:
     Server* ServerInstance;
     GameService* GameServiceInstance;
 
     double NextDebugPollTime = 0.0;
+
+    // 0 = pass the invader's value through, 1 = use the target's.
+    int InvadeAreaMode = 1;
+    // 0 = the invader's cell, 1 = the target's online activity area,
+    // 2 = the packed cell from the target's player_location.
+    int InvadeCellMode = 1;
 
 };
