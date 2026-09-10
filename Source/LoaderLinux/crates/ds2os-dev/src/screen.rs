@@ -66,6 +66,10 @@ pub fn windows() -> Result<Vec<GameWindow>, String> {
         });
     }
 
+    // xwininfo lists in stacking order, which changes the moment a window is
+    // focused. Sorting by id gives each instance a stable index, so "window 1"
+    // means the same window across calls.
+    found.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(found)
 }
 

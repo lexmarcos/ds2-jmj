@@ -152,6 +152,26 @@ enum PadAction {
         #[arg(long, default_value_t = 1)]
         index: u8,
     },
+    /// Runs several inputs in one go, so a menu walk costs one command
+    ///
+    /// Steps are separated by ";" and are the same verbs used above, plus
+    /// "wait <ms>". Example:
+    ///   pad seq "press start; wait 900; dpad right; wait 250; press a"
+    #[command(allow_negative_numbers = true)]
+    Seq {
+        script: String,
+        /// Focus this instance's window first
+        #[arg(long)]
+        focus: Option<usize>,
+        /// Capture both windows when the sequence ends
+        #[arg(long)]
+        shot: bool,
+        /// Pause inserted between steps that do not say otherwise
+        #[arg(long, default_value_t = 250)]
+        gap: u64,
+        #[arg(long, default_value_t = 1)]
+        index: u8,
+    },
     /// Says whether the device is up
     Status {
         #[arg(long, default_value_t = 1)]
@@ -435,6 +455,37 @@ fn pad_command(action: PadAction) -> Result<(), String> {
         PadAction::Stick { side, x, y, ms, index } => {
             report(index, format!("stick {side} {x} {y} {ms}"))
         }
+        PadAction::Seq { script, focus, shot, gap, index } => {
+            if let Some(which) = focus {
+                let windows = screen::windows()?;
+                let target = windows
+                    .get(which.saturating_sub(1))
+                    .ok_or_else(|| format!("só existem {} janelas", windows.len()))?;
+                screen::focus(target)?;
+                println!("  foco em {}", target.id);
+            }
+
+            for step in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                let parts: Vec<&str> = step.split_whitespace().collect();
+                // A wait is handled here rather than in the daemon, so the
+                // device is never held open doing nothing.
+                if let ["wait", ms] = parts.as_slice() {
+                    let ms: u64 = ms.parse().map_err(|_| format!("espera inválida: {ms}"))?;
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    println!("    esperei {ms}ms");
+                    continue;
+                }
+
+                pad::send(index, step).map_err(|e| format!("passo \"{step}\": {e}"))?;
+                println!("    {step}");
+                std::thread::sleep(std::time::Duration::from_millis(gap));
+            }
+
+            if shot {
+                shot_into(None)?;
+            }
+            Ok(())
+        }
         PadAction::Status { index } => {
             println!("  pad {index}: {}", if pad::running(index) { "no ar" } else { "parado" });
             Ok(())
@@ -514,6 +565,10 @@ fn steam2(action: Steam2Action) -> Result<(), String> {
 /// between calls, so a later capture overwrites the earlier one rather than
 /// filling the directory.
 fn shot(out: Option<PathBuf>) -> Result<(), String> {
+    shot_into(out)
+}
+
+fn shot_into(out: Option<PathBuf>) -> Result<(), String> {
     let dir = out.unwrap_or_else(paths::log_dir);
     let windows = screen::windows()?;
 
