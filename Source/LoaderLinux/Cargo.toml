@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ds2os-core", "crates/ds2os-dev", "src-tauri"]
+members = ["crates/ds2os-core", "crates/ds2os-dev"]
 resolver = "2"
 
 [workspace.package]
