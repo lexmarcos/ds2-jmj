@@ -60,6 +60,14 @@ public:
     // and the permissions it carries. Writes DS2_MultiPlayZone.log.
     bool DS2ProbeMultiPlayZone = false;
 
+    // DS2-only: make the game believe the player is always inside a multiplay
+    // zone, so summon signs and invasions work where they normally cannot.
+    bool DS2ForceMultiPlayZone = false;
+
+    // Zone substituted when the game reports none. 103110 is Heide's Tower of
+    // Flame, measured as a zone that permits summoning.
+    int DS2ForcedZoneId = 103110;
+
 public:
 
     bool Save(const std::filesystem::path& Path);

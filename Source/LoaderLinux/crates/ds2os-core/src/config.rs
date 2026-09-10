@@ -38,6 +38,12 @@ pub struct InjectorConfig {
     /// Reports the multiplay zone and its permissions.
     #[serde(default)]
     pub DS2ProbeMultiPlayZone: bool,
+    /// Believe the player is always inside a multiplay zone.
+    #[serde(default)]
+    pub DS2ForceMultiPlayZone: bool,
+    /// Zone substituted when the game reports none.
+    #[serde(default)]
+    pub DS2ForcedZoneId: i32,
 }
 
 impl InjectorConfig {
@@ -121,6 +127,8 @@ impl LoaderSettings {
             DS2WatchAreaReads: false,
             DS2AreaAddress: String::new(),
             DS2ProbeMultiPlayZone: false,
+            DS2ForceMultiPlayZone: false,
+            DS2ForcedZoneId: 103110,
         }
     }
 }

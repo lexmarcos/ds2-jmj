@@ -44,6 +44,7 @@ pub fn prepare(
     watch_reads: bool,
     area_address: Option<String>,
     probe_zone: bool,
+    force_zone: bool,
 ) -> Result<Prepared, String> {
     let game_dir = install.game_dir.clone();
     let server_paths = environment
@@ -82,6 +83,8 @@ pub fn prepare(
         DS2WatchAreaReads: watch_reads,
         DS2AreaAddress: area_address.unwrap_or_default(),
         DS2ProbeMultiPlayZone: probe_zone,
+        DS2ForceMultiPlayZone: force_zone,
+        DS2ForcedZoneId: 103110,
     };
     let injector_config = config
         .write_to(&game_dir)

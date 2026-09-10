@@ -225,6 +225,9 @@ enum GameAction {
         /// Report the multiplay zone the player is in and what it permits
         #[arg(long)]
         probe_zone: bool,
+        /// Allow summoning anywhere by always reporting a real multiplay zone
+        #[arg(long)]
+        force_zone: bool,
     },
     /// Starts the second instance in its own Proton prefix
     Launch {
@@ -355,7 +358,7 @@ fn run(command: Command) -> Result<(), String> {
             }
         },
         Command::Game { action } => match action {
-            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone } => {
+            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone } => {
                 // The timer patch installs its own exception handler and single
                 // steps through a software breakpoint. Two handlers competing
                 // for the same exception would muddy what the watch reports, so
@@ -364,7 +367,7 @@ fn run(command: Command) -> Result<(), String> {
                 if watch_reads && !no_timer {
                     println!("  timer desligado enquanto o watch estiver ligado");
                 }
-                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone)
+                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone)
             }
             GameAction::Launch { steam_home } => {
                 let home = resolve_second_steam(steam_home)?;
@@ -691,17 +694,21 @@ fn prepare(
     watch_reads: bool,
     area_address: Option<String>,
     probe_zone: bool,
+    force_zone: bool,
 ) -> Result<(), String> {
     if environment.installs.is_empty() {
         return Err("nenhuma instalação do Dark Souls II encontrada".into());
     }
 
     for install in &environment.installs {
-        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads, area_address.clone(), probe_zone)?;
+        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads, area_address.clone(), probe_zone, force_zone)?;
         println!("  conta {}", prepared.account);
         println!("    pasta   {}", prepared.game_dir.display());
         if !prepared.copied.is_empty() {
             println!("    copiado {}", prepared.copied.join(", "));
+        }
+        if force_zone {
+            println!("    zona    FORCADA para 103110 (multiplayer em qualquer lugar)");
         }
         if probe_zone {
             println!("    zona    ligada (DS2_MultiPlayZone.log na pasta do jogo)");
@@ -767,7 +774,7 @@ fn up(
     print_server(&status);
 
     println!("\njogo");
-    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false)?;
+    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, false)?;
 
     println!("\nopções de lançamento");
     print_launch_options(environment);
