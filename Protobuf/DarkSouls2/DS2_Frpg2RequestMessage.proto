@@ -529,11 +529,13 @@ message RequestGetSignListResponse {
 }
 
 message RequestRejectSign {
-	required int64 online_area_id = 1;  // 10190000
-	required int64 sign_id = 2;         // 1001
-	required SummonErrorId error = 3;   // 2
-	required int64 unknown_4 = 4;       // 2
-	required int64 cell_id = 5;         // 4294966272
+	// All optional: the client sends fewer of these than were once assumed,
+	// and a missing required field costs the whole message under proto2.
+	optional int64 online_area_id = 1;  // 10190000
+	optional int64 sign_id = 2;         // 1001
+	optional SummonErrorId error = 3;   // 2
+	optional int64 unknown_4 = 4;       // 2
+	optional int64 cell_id = 5;         // 4294966272
 }
 
 message RequestRejectSignResponse {
