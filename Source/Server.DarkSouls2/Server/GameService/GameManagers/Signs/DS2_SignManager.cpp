@@ -244,21 +244,31 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
     // area they are actually searching, which is what makes the client render
     // them. The sign itself is left filed where its owner placed it, so the
     // owner's client and the server stay in agreement about where it is.
-    if (Config.DS2_StickySigns &&
-        RemainingSignCount > 0 &&
-        Request->search_areas_size() > 0 &&
-        Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentOnlineActivityArea() == 0)
+    int OnlineActivityArea = Client->GetPlayerStateType<DS2_PlayerState>().GetCurrentOnlineActivityArea();
+    bool StickyEligible = (OnlineActivityArea == 0);
+
+    // Report this outside the gate. That the client polls for signs at all, and
+    // what it claims about the area it stands in, are both things being
+    // measured here, and a gate that quietly never fires looks identical to a
+    // client that refuses the response. Throttled, this runs on every poll.
+    if (Config.DS2_StickySigns)
     {
-        // The client asking at all is itself the thing to confirm, so say so
-        // even when nothing comes of it. Throttled, this runs on every poll.
         double Now = GetSeconds();
         if (double& Last = LastStickyLogTime[Player.GetPlayerId()]; Now - Last > 10.0)
         {
             Last = Now;
-            LogS(Client->GetName().c_str(), "Sticky pass: area 0x%08x, %d search cells (first 0x%016llx), room for %d, %zu signs cached.",
-                Request->online_area_id(), Request->search_areas_size(), (uint64_t)Request->search_areas(0).cell_id(),
-                RemainingSignCount, LiveCache.GetTotalEntries());
+            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s.",
+                Request->online_area_id(), OnlineActivityArea, Request->search_areas_size(),
+                Request->search_areas_size() > 0 ? (uint64_t)Request->search_areas(0).cell_id() : 0ull,
+                RemainingSignCount, LiveCache.GetTotalEntries(), StickyEligible ? "eligible" : "skipped");
         }
+    }
+
+    if (Config.DS2_StickySigns &&
+        StickyEligible &&
+        RemainingSignCount > 0 &&
+        Request->search_areas_size() > 0)
+    {
 
         // Union of everything the client says it already holds.
         std::unordered_set<uint32_t> ClientExistingSignId;
