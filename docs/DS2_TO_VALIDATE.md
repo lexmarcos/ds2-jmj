@@ -68,10 +68,14 @@ try first and it has never been run once.
 
 ### Two players only
 
-Never tested with three or more. DS2 allows more than one phantom, the
-server has a max-player cap that the original brief wants removed, and
-the counters this project patches are per-client. Nothing is known about
+Never tested with three or more, and on this machine it cannot be: two
+Steam accounts, one box. DS2 allows more than one phantom and the
+counters this project patches are per-client, so nothing is known about
 how they behave with a crowd.
+
+The cap itself is not on the server. It is the client's, and it is
+structural rather than a constant — see
+[DS2_SESSION_SLOTS.md](DS2_SESSION_SLOTS.md).
 
 ### The hook's failure and uninstall paths
 
@@ -139,4 +143,10 @@ Worth finding where that table lives and what a present record contains.
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena
-selection in the loader, and removing the max-player cap.
+selection in the loader.
+
+Raising the six-player cap is now mapped but not started, and it is a
+larger job than it sounded:
+[DS2_SESSION_SLOTS.md](DS2_SESSION_SLOTS.md). One question decides
+whether it is feasible at all — whether the world manager stores its
+players in a fixed array the same way the netcode does.
