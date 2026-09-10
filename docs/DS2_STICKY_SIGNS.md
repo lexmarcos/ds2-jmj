@@ -231,3 +231,49 @@ This skips the item, the target list and every matching rule, so it
 proves nothing about whether an ordinary invasion would be allowed. It
 asks one question only: with the push delivered, does the client
 standing in Majula act on it.
+
+## The Majula client accepts an invasion
+
+Measured on 2026-09-10, with a real Cracked Red Eye Orb rather than a
+fabricated push. Invader in Heide's Tower of Flame, target in Majula.
+
+The first attempt sent the packed `player_location` cell, `0xffc003ff`,
+as the push's cell id. The target answered `RequestRejectBreakInTarget`.
+
+The second sent `103110`, the target's online activity area, the shape
+the client itself uses in `RequestBreakInTarget`. The target did not
+reject. It sent `RequestSendMessageToPlayers`, which is how a client
+reaches its peer, and the invader's screen went from nothing to
+**"Disconnected from multiplayer session."**
+
+That is the first time anything in this investigation got a client in
+Majula to take part. The sequence, end to end:
+
+    Samuel   RequestGetBreakInTargetList     1 candidate of 2 clients
+    server   candidate '3:Chico'             area 0x009932c0, invadable yes
+    Samuel   RequestBreakInTarget            target 3, area 10310000, cell 103110
+    server   push rewritten                  area 10040000, cell 103110
+    Chico    RequestSendMessageToPlayers     the target reaching for its peer
+    Samuel   "Disconnected from multiplayer session."
+
+Two things had to be true for the candidate line to appear at all, and
+both are `DS2_InvadeAnywhere`: the same-area filter had to go, and the
+push had to name the target's own ground.
+
+A session started and then dropped. What has not been established is
+whether a session between these two instances has *ever* held, so the
+disconnect is not yet attributable to Majula. The control is to put both
+players in the same area and invade again.
+
+### What the rejection taught, and what it cost to learn
+
+A fabricated push, sent from a request file with no orb involved,
+produced nothing against Majula. It also produced nothing against a
+player in Heide, where invasions plainly work. The control ran before
+the conclusion, which is the only reason the first result was not read
+as "Majula refuses invasions".
+
+An invasion needs the invader's own client to be in an invading state.
+Nothing the server sends can fake that. The debug trigger is kept for
+poking at a client that is already engaged, but it cannot start
+anything, and it is not evidence on its own.
