@@ -15,6 +15,7 @@
 #include "Shared/Platform/Platform.h"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -259,6 +260,86 @@ namespace
         return true;
     }
 
+    // Walks the process's committed, readable, non-guard regions looking for a
+    // value. This is what finds an object when only its contents are known -
+    // an area id, a vtable pointer - and it is the one thing the outside view
+    // through /proc/<pid>/mem could do that reading single addresses cannot.
+    void Scan(const std::string& Label, const uint8_t* Needle, size_t Width, size_t MaxHits)
+    {
+        SYSTEM_INFO Info = {};
+        GetSystemInfo(&Info);
+
+        uintptr_t At = (uintptr_t)Info.lpMinimumApplicationAddress;
+        const uintptr_t End = (uintptr_t)Info.lpMaximumApplicationAddress;
+
+        std::vector<uint8_t> Buffer;
+        std::vector<uintptr_t> Hits;
+        size_t Scanned = 0;
+
+        while (At < End && Hits.size() < MaxHits)
+        {
+            MEMORY_BASIC_INFORMATION Region = {};
+            if (VirtualQuery((LPCVOID)At, &Region, sizeof(Region)) == 0)
+            {
+                break;
+            }
+
+            const uintptr_t Next = (uintptr_t)Region.BaseAddress + Region.RegionSize;
+
+            const bool Readable =
+                Region.State == MEM_COMMIT &&
+                (Region.Protect & PAGE_GUARD) == 0 &&
+                (Region.Protect & PAGE_NOACCESS) == 0;
+
+            if (Readable && Region.RegionSize <= 512u * 1024u * 1024u)
+            {
+                // A megabyte at a time: reading a whole region at once was what
+                // hung the game the first time this was tried.
+                const size_t Chunk = 1024 * 1024;
+                if (Buffer.size() < Chunk)
+                {
+                    Buffer.resize(Chunk);
+                }
+
+                size_t Done = 0;
+                while (Done < Region.RegionSize && Hits.size() < MaxHits)
+                {
+                    const size_t Take = (std::min)(Chunk, Region.RegionSize - Done);
+                    const uintptr_t From = (uintptr_t)Region.BaseAddress + Done;
+                    if (TryRead((const void*)From, Buffer.data(), Take))
+                    {
+                        Scanned += Take;
+                        for (size_t i = 0; i + Width <= Take; i += Width)
+                        {
+                            if (memcmp(Buffer.data() + i, Needle, Width) == 0)
+                            {
+                                Hits.push_back(From + i);
+                                if (Hits.size() >= MaxHits)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Done += Take;
+                }
+            }
+
+            if (Next <= At)
+            {
+                break;
+            }
+            At = Next;
+        }
+
+        Append(StringFormat("\n=== varredura %s: %zu ocorrencias em %.1f MB ===\n",
+            Label.c_str(), Hits.size(), (double)Scanned / 1048576.0));
+        for (uintptr_t Hit : Hits)
+        {
+            Append(StringFormat("    0x%016llx\n", (unsigned long long)Hit));
+        }
+    }
+
     // A request file holds one command per line. Reads:
     //   abs   <label> <hex address> <length>
     //   mod   <label> <hex offset from the module base> <length>
@@ -299,6 +380,28 @@ namespace
             Parts >> Kind >> Label >> Where;
             if (Kind.empty() || Label.empty() || Where.empty())
             {
+                continue;
+            }
+
+            if (Kind == "scan")
+            {
+                // scan <label> <hex value> <width 1|2|4|8> [max hits]
+                size_t Width = 4;
+                size_t MaxHits = 200;
+                Parts >> std::dec >> Width >> MaxHits;
+                if (Width != 1 && Width != 2 && Width != 4 && Width != 8)
+                {
+                    Width = 4;
+                }
+                if (MaxHits == 0 || MaxHits > 4000)
+                {
+                    MaxHits = 200;
+                }
+
+                const uint64_t Value = strtoull(Where.c_str(), nullptr, 16);
+                uint8_t Needle[8] = {};
+                memcpy(Needle, &Value, sizeof(Value));
+                Scan(Label, Needle, Width, MaxHits);
                 continue;
             }
 
