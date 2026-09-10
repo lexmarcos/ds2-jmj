@@ -1,7 +1,31 @@
 # DS2 Phantom Timer Patch
 
-Removes the client-side timer that ends Dark Souls II PvP sessions after
-roughly 12 minutes.
+Removes the client-side timer that ends Dark Souls II PvP sessions.
+
+## What the timer actually is
+
+Confirmed by watching a live session, not inferred:
+
+- The float at `R14 + 0xCFC` is **time remaining**, and it counts **down**.
+- A session starts it at **900.0** seconds, so an untouched session ends after
+  15 minutes.
+- It runs on the **phantom's** side only. The host's log shows the hook
+  installing and never firing; every patch event comes from the guest.
+- The breakpoint is hit roughly once a second while a session is live.
+
+That makes the patch a refill rather than a one-time write. The hook keeps the
+value at or above the target:
+
+```text
+old_seconds=900.000   new_seconds=4000.000    first write, session start
+old_seconds=3998.998  new_seconds=4000.000
+old_seconds=3998.985  new_seconds=4000.000    ~1 refill per second
+```
+
+**A target below 900 does nothing.** The hook only writes when the current
+value is under the target, so setting, say, 60 to make a session end quickly
+produces `already_high_enough` forever and the session runs its normal 900
+seconds. That reads as a broken patch and is not one.
 
 ## How to enable it
 
@@ -27,12 +51,17 @@ environment variable overrides.
 
 ## Confirming it works
 
-The hook writes `DS2_TimerParamPatch.log` next to `Injector.dll`. A working
-session looks like:
+The hook writes `DS2_TimerParamPatch.log` next to `Injector.dll`. Count the
+results in it; a working PvP session on the phantom's side looks like this:
 
 ```text
-event=DS2ActiveTimerPatch result=patched source=r14_plus_0xcfc
+   106  result=patched
+  6069  result=already_high_enough
+     1  result=installed
 ```
+
+`installed` alone means the hook loaded but no session ever reached it. On the
+host that is expected. On the phantom it means no PvP session happened.
 
 The console also shows, once per session and then at most once a minute:
 
@@ -95,7 +124,9 @@ the timer from ever reaching that path is the safe option.
 
 Cheat Engine located a live float timer at `7FF447B49A9C` while `R14` held
 `0x00007ff447b48da0`, which is where the `R14 + 0xCFC` relationship comes
-from. See [DS2_PVP_LEAVE_SESSIONS.md](DS2_PVP_LEAVE_SESSIONS.md) for the
+from. The original investigation timed the leave at 763 to 766 seconds; a live
+session later showed the counter starting at 900, so those earlier numbers were
+measured from somewhere after the session began rather than from its start. See [DS2_PVP_LEAVE_SESSIONS.md](DS2_PVP_LEAVE_SESSIONS.md) for the
 full investigation and [DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md)
 for the kill-leave comparison.
 
