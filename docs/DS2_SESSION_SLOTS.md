@@ -204,6 +204,22 @@ writes nothing if one disagrees, because a half-applied layout change
 would leave the game reading its players out of two different places. If
 a write fails partway it rolls back what it already did.
 
+### What was checked before committing
+
+Not a substitute for playing it, but not nothing either:
+
+- all 141 expected byte sequences match the shipped executable
+- the table applied to a copy of the executable, then every site
+  disassembled in both: all 141 decode to the same instruction with the
+  same operand shape, only the constant differing. Nothing was mangled
+  and no instruction changed length
+- the classifier run again over the patched copy, looking for the *new*
+  ranges: it finds every site it found the first time, in the same
+  function, with the same meaning. The only two it no longer sees are
+  the two writes through the multiplay-state pointer, which were
+  deliberately left at `+0x5b8`
+- the injector builds under MSVC on CI with the table in it
+
 ## What can and cannot be verified here
 
 Two Steam accounts on one machine. Three or more players cannot be
