@@ -84,6 +84,10 @@ namespace
         return nullptr;
     }
 
+    // Enough to scan efficiently, small enough that the allocation is never
+    // something the game notices.
+    constexpr size_t kChunkBytes = 1u << 20;
+
     struct Candidate
     {
         uintptr_t Address;
@@ -310,7 +314,7 @@ namespace
     std::vector<Candidate> ScanEverything()
     {
         std::vector<Candidate> Found;
-        std::vector<uint8_t> Buffer;
+        std::vector<uint8_t> Buffer(kChunkBytes);
         MEMORY_BASIC_INFORMATION Info = {};
         uintptr_t Cursor = 0;
 
@@ -321,19 +325,24 @@ namespace
 
             if (IsScannable(Info))
             {
-                // Read the region once into our own memory and scan that. One
-                // guarded copy per region is both faster than guarding every
-                // read and safe if the region goes away mid-scan.
-                Buffer.resize(Info.RegionSize);
-                if (TryCopy(Base, Info.RegionSize, Buffer.data()))
+                // Copy in fixed chunks rather than whole regions. A region can
+                // be gigabytes, and allocating that much to scan it starved the
+                // game badly enough to hang it.
+                for (uintptr_t Chunk = Base; Chunk < End; Chunk += kChunkBytes)
                 {
-                    const size_t Count = Info.RegionSize / sizeof(uint32_t);
+                    const size_t Size = (size_t)std::min<uintptr_t>(kChunkBytes, End - Chunk);
+                    if (!TryCopy(Chunk, Size, Buffer.data()))
+                    {
+                        continue;
+                    }
+
+                    const size_t Count = Size / sizeof(uint32_t);
                     const uint32_t* Values = (const uint32_t*)Buffer.data();
                     for (size_t Index = 0; Index < Count; Index++)
                     {
                         if (AreaName(Values[Index]) != nullptr)
                         {
-                            Found.push_back({ Base + Index * sizeof(uint32_t), Values[Index], 0 });
+                            Found.push_back({ Chunk + Index * sizeof(uint32_t), Values[Index], 0 });
                             if (Found.size() > 200000)
                             {
                                 return Found;
@@ -341,6 +350,9 @@ namespace
                         }
                     }
                 }
+
+                // Scanning is background work; leave the game some air.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
             if (End <= Cursor)
@@ -490,7 +502,7 @@ namespace
                 // player loads into the world. Scanning before that happens
                 // finds only constants, and no amount of travelling will move
                 // them, so start over rather than wait forever.
-                if (PassesWithoutMovement >= 20)
+                if (PassesWithoutMovement >= 60)
                 {
                     PassesWithoutMovement = 0;
                     Candidates = ScanEverything();
