@@ -391,3 +391,60 @@ The next measurement is therefore small and specific: in Heide, human,
 not invaded, arm `1401a8f70` and `14024f350`, press the soapstone, and
 confirm a `RequestCreateSign` reaches the server in the same moment.
 Only then does the absence of `14024f350` mean anything.
+
+## Solved: the bit was the answer
+
+2026-09-10. With `kTargetMask` changed from 7 to 63, so that bit 3 of
+the `NETWORK_AREA_PARAM` row byte at `+0x18` is finally set, a character
+standing in Majula:
+
+    12:33:03  1:Marcos  Sign poll: area 0x009932c0, activity area 103110, 27 search cells
+    12:33:33  1:Marcos  First DS2_Frpg2RequestMessage.RequestCreateSign
+
+and a Red Sign Soapstone sits on the ground in Majula with the prompt
+"Check your Summon Sign".
+
+Both halves opened at once, which is the strongest evidence that this is
+the real gate rather than a coincidence:
+
+- The client now **polls** for signs in Majula. Every previous census
+  showed `RequestGetSignList` sent in Heide and never in Majula. It now
+  arrives naming Majula's own area id.
+- The client now **places** a sign there. The item is no longer refused.
+
+### Why this was missed for so long
+
+The hook that exists to open areas was writing 7. Two sites in the game
+test bit 3 of that byte and refuse the item when it is clear, and 7
+leaves bit 3 clear. So every run of the unlock hook wrote a value that
+could not satisfy the test it was written to satisfy, and every negative
+result gathered with the hook enabled was measuring the wrong thing.
+
+The constant said 7 for a documented reason that turned out to be void:
+forcing 63 was believed to break Heide, and that observation came from a
+hollow character, which is refused the soapstone in every area. It was
+never re-run on a human.
+
+The freshly patched row list shows bit 3 is ordinary, not exotic. Areas
+carrying 8 and 15 before patching exist in the same table:
+
+    0x0098e4a0  0 -> 63      0x013aa2e0   7 -> 63
+    0x009932c0  4 -> 63      0x013ac9f0  15 -> 63
+    0x009a1d20  7 -> 63      0x01ccaa14  15 -> 63
+    0x009d2a60  7 -> 63      0x0262cf30   8 -> 63
+    0x009d5170  7 -> 63      0x030047b0  15 -> 63
+    0x0132dab0  7 -> 63
+
+Heide reads 7, with bit 3 clear, and accepts a sign. That still is not
+explained and remains the one loose end: either Heide reaches the
+permission by another route, or the byte the earlier decode read is not
+the byte the running game consults for that area. It does not block
+anything now, but it should not be written down as understood.
+
+### What this retires
+
+The sticky-sign server code is no longer needed for Majula, since the
+client asks for itself. Leave it off. `DS2_InvadeAnywhere` is likewise
+not needed to reach a player in Majula by sign; keep it only for the
+separate goal of invading across areas, which still drops on the
+invader's side.

@@ -9,7 +9,7 @@ server.
 | [DS2_PVP_LEAVE_SESSIONS.md](DS2_PVP_LEAVE_SESSIONS.md) | How PvP sessions end, and how the timer leave differs from a normal one |
 | [DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md) | The kill-based leave sequence, and why the leave message cannot simply be blocked |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas, and what has been ruled out |
-| [DS2_STICKY_SIGNS.md](DS2_STICKY_SIGNS.md) | Why serving signs into Majula fails, and the invasion route it points to |
+| [DS2_STICKY_SIGNS.md](DS2_STICKY_SIGNS.md) | How multiplayer was opened in Majula, and the two dead ends that led there |
 | [DS2_LIVE_MEMORY_ACCESS.md](DS2_LIVE_MEMORY_ACCESS.md) | Reading and writing the running game from Linux, which replaces the build-and-relaunch loop |
 | [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md) | The probe, the tracer and the oracle, and what they cost to learn |
 | [DS2_SOUL_MEMORY_MATCHMAKING.md](DS2_SOUL_MEMORY_MATCHMAKING.md) | Soul Memory matchmaking tiers and how to open them up |
