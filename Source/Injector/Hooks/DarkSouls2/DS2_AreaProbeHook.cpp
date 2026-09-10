@@ -90,6 +90,19 @@ namespace
         int Changes;
     };
 
+    std::mutex s_log_mutex;
+
+    void Append(const std::string& Text)
+    {
+        std::scoped_lock lock(s_log_mutex);
+        std::filesystem::path Path = Injector::Instance().GetDllPath() / "DS2_AreaProbe.log";
+        std::ofstream Stream(Path, std::ios::app);
+        if (Stream.is_open())
+        {
+            Stream << Text;
+        }
+    }
+
     // ---- phase two: who reads the address we found --------------------------
     //
     // A hardware watchpoint, the same thing Cheat Engine's "find what accesses
@@ -252,19 +265,6 @@ namespace
 
     std::atomic_bool s_running{false};
     std::thread s_thread;
-    std::mutex s_log_mutex;
-
-    void Append(const std::string& Text)
-    {
-        std::scoped_lock lock(s_log_mutex);
-        std::filesystem::path Path = Injector::Instance().GetDllPath() / "DS2_AreaProbe.log";
-        std::ofstream Stream(Path, std::ios::app);
-        if (Stream.is_open())
-        {
-            Stream << Text;
-        }
-    }
-
     bool IsScannable(const MEMORY_BASIC_INFORMATION& Info)
     {
         if (Info.State != MEM_COMMIT)
