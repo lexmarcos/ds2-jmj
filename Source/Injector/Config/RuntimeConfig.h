@@ -51,6 +51,11 @@ public:
     // watchpoint, and report which instructions touch it.
     bool DS2WatchAreaReads = false;
 
+    // Address of the current area id, if already known. Skips the scan, which
+    // otherwise needs a trip between two areas to identify it. Ignored unless
+    // it currently holds a known area id.
+    std::string DS2AreaAddress = "";
+
 public:
 
     bool Save(const std::filesystem::path& Path);

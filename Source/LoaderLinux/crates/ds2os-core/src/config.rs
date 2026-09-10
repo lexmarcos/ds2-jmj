@@ -32,6 +32,9 @@ pub struct InjectorConfig {
     /// With the probe on, watch reads of the address it finds.
     #[serde(default)]
     pub DS2WatchAreaReads: bool,
+    /// Address of the area id, if already known; skips the scan.
+    #[serde(default)]
+    pub DS2AreaAddress: String,
 }
 
 impl InjectorConfig {
@@ -113,6 +116,7 @@ impl LoaderSettings {
             DS2PhantomTimerSeconds: self.phantom_timer_seconds,
             DS2ProbeArea: false,
             DS2WatchAreaReads: false,
+            DS2AreaAddress: String::new(),
         }
     }
 }

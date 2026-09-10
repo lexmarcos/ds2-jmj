@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -398,6 +399,43 @@ namespace
         Append(StringFormat("time=%.3f event=DS2AreaProbe result=scan_started watch=%d\n",
                             GetSeconds(),
                             Watch ? 1 : 0));
+
+        // A hint skips the scan entirely, which matters because identifying
+        // the address otherwise costs a trip between two areas every run. It is
+        // only trusted if it currently holds a known area id.
+        const std::string& Hint = Injector::Instance().GetConfig().DS2AreaAddress;
+        if (Watch && !Hint.empty())
+        {
+            const uintptr_t Address = (uintptr_t)strtoull(Hint.c_str(), nullptr, 0);
+            uint32_t Value = 0;
+            if (Address != 0 && (Address & 0x3) == 0 && TryReadU32(Address, Value) && AreaName(Value) != nullptr)
+            {
+                s_watch_handler = AddVectoredExceptionHandler(1, WatchHandler);
+                s_watched.store(Address);
+                const bool Guarded = ArmGuardPage(Address);
+                Append(StringFormat(
+                    "time=%.3f event=DS2AreaWatch result=armed_from_hint address=0x%016llx "
+                    "value=0x%08x area=%s guard=%d module_base=0x%016llx\n",
+                    GetSeconds(),
+                    (unsigned long long)Address,
+                    Value,
+                    AreaName(Value),
+                    Guarded ? 1 : 0,
+                    (unsigned long long)s_module_base));
+                Log("[DS2AreaWatch] usando o endereco informado 0x%016llx (%s)",
+                    (unsigned long long)Address,
+                    AreaName(Value));
+            }
+            else
+            {
+                Append(StringFormat(
+                    "time=%.3f event=DS2AreaWatch result=hint_rejected address=0x%016llx value=0x%08x\n",
+                    GetSeconds(),
+                    (unsigned long long)Address,
+                    Value));
+                Log("[DS2AreaWatch] endereco informado nao vale; vou varrer");
+            }
+        }
 
         std::vector<Candidate> Candidates = ScanEverything();
         Append(StringFormat(

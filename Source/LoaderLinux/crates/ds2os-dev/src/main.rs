@@ -219,6 +219,9 @@ enum GameAction {
         /// With the probe on, report which instructions read that address
         #[arg(long)]
         watch_reads: bool,
+        /// Skip the scan and watch this address, e.g. 0x7ffff03a6f90
+        #[arg(long)]
+        area_address: Option<String>,
     },
     /// Starts the second instance in its own Proton prefix
     Launch {
@@ -343,7 +346,7 @@ fn run(command: Command) -> Result<(), String> {
             }
         },
         Command::Game { action } => match action {
-            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads } => {
+            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address } => {
                 // The timer patch installs its own exception handler and single
                 // steps through a software breakpoint. Two handlers competing
                 // for the same exception would muddy what the watch reports, so
@@ -352,7 +355,7 @@ fn run(command: Command) -> Result<(), String> {
                 if watch_reads && !no_timer {
                     println!("  timer desligado enquanto o watch estiver ligado");
                 }
-                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads)
+                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address)
             }
             GameAction::Launch { steam_home } => {
                 let home = resolve_second_steam(steam_home)?;
@@ -665,13 +668,14 @@ fn prepare(
     timer_patch: bool,
     probe_area: bool,
     watch_reads: bool,
+    area_address: Option<String>,
 ) -> Result<(), String> {
     if environment.installs.is_empty() {
         return Err("nenhuma instalação do Dark Souls II encontrada".into());
     }
 
     for install in &environment.installs {
-        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads)?;
+        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads, area_address.clone())?;
         println!("  conta {}", prepared.account);
         println!("    pasta   {}", prepared.game_dir.display());
         if !prepared.copied.is_empty() {
@@ -738,7 +742,7 @@ fn up(
     print_server(&status);
 
     println!("\njogo");
-    prepare(environment, timer_seconds, timer_patch, probe_area, false)?;
+    prepare(environment, timer_seconds, timer_patch, probe_area, false, None)?;
 
     println!("\nopções de lançamento");
     print_launch_options(environment);

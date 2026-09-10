@@ -42,6 +42,7 @@ pub fn prepare(
     timer_patch: bool,
     probe_area: bool,
     watch_reads: bool,
+    area_address: Option<String>,
 ) -> Result<Prepared, String> {
     let game_dir = install.game_dir.clone();
     let server_paths = environment
@@ -78,6 +79,7 @@ pub fn prepare(
         DS2PhantomTimerSeconds: timer_seconds,
         DS2ProbeArea: probe_area,
         DS2WatchAreaReads: watch_reads,
+        DS2AreaAddress: area_address.unwrap_or_default(),
     };
     let injector_config = config
         .write_to(&game_dir)
