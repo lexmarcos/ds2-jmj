@@ -123,7 +123,7 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
                 return false;
             }
         }
-        else
+        else if (!Config.DS2_InvadeAnywhere)
         {
             if (OtherClient->GetPlayerStateType<DS2_PlayerState>().GetCurrentArea() != (DS2_OnlineAreaId)Request->online_area_id())
             {
@@ -136,6 +136,24 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
     DS2_Frpg2RequestMessage::RequestGetBreakInTargetListResponse Response;
     Response.set_cell_id(Request->cell_id());
     Response.set_online_area_id(Request->online_area_id());
+
+    // Same reasoning as the sign poll diagnostic: an invader who never asks and
+    // an invader who asks and is offered nothing look identical from outside.
+    LogS(Client->GetName().c_str(), "Break-in target list: type %u, area 0x%08x cell 0x%08x, %zu candidates of %zu clients.",
+        (uint32_t)Request->type(), Request->online_area_id(), Request->cell_id(),
+        PotentialTargets.size(), GameServiceInstance->GetClients().size());
+
+    for (const std::shared_ptr<GameClient>& Other : GameServiceInstance->GetClients())
+    {
+        if (Other.get() == Client)
+        {
+            continue;
+        }
+        auto& OtherState = Other->GetPlayerStateType<DS2_PlayerState>();
+        LogS(Client->GetName().c_str(), "  candidate '%s': area 0x%08x, activity area %d, invadable %s.",
+            Other->GetName().c_str(), (uint32_t)OtherState.GetCurrentArea(),
+            OtherState.GetCurrentOnlineActivityArea(), OtherState.GetIsInvadable() ? "yes" : "no");
+    }
 
     int CountToSend = std::min((int)Request->max_targets(), (int)PotentialTargets.size());
     for (int i = 0; i < CountToSend; i++)
@@ -159,6 +177,7 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestGetBreakInTargetList(GameC
 MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     ServerDatabase& Database = ServerInstance->GetDatabase();
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestBreakInTarget* Request = (DS2_Frpg2RequestMessage::RequestBreakInTarget*)Message.Protobuf.get();
@@ -181,8 +200,24 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
         PushMessage.set_player_id(Player.GetPlayerId());
         PushMessage.set_steam_id(Player.GetSteamId());
         PushMessage.set_type(Request->type());
-        PushMessage.set_cell_id(Request->cell_id());
-        PushMessage.set_online_area_id(Request->online_area_id());
+        // Normally invader and target stand in the same place, so the request's
+        // own location is the target's too. Once an invasion can cross areas it
+        // is not, and the target has to be told about its own ground.
+        if (Config.DS2_InvadeAnywhere)
+        {
+            auto& Target = TargetClient->GetPlayerStateType<DS2_PlayerState>();
+            PushMessage.set_cell_id(Target.GetCurrentCellId());
+            PushMessage.set_online_area_id((uint32_t)Target.GetCurrentArea());
+
+            LogS(Client->GetName().c_str(), "Invading '%s' across areas: invader in 0x%08x cell 0x%08x, target in 0x%08x cell 0x%08x.",
+                TargetClient->GetName().c_str(), Request->online_area_id(), Request->cell_id(),
+                (uint32_t)Target.GetCurrentArea(), Target.GetCurrentCellId());
+        }
+        else
+        {
+            PushMessage.set_cell_id(Request->cell_id());
+            PushMessage.set_online_area_id(Request->online_area_id());
+        }
 
         if (!TargetClient->MessageStream->Send(&PushMessage))
         {

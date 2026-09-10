@@ -185,6 +185,8 @@ MessageHandleResult DS2_PlayerDataManager::Handle_RequestUpdatePlayerStatus(Game
             State.SetCurrentArea(AreaId);
         }
 
+        State.SetCurrentCellId(State.GetPlayerStatus().player_location().cell_id());
+
         if (State.GetPlayerStatus().player_location().has_online_activity_area_id())
         {
             int OnlineActivityAreaId = State.GetPlayerStatus().player_location().online_activity_area_id();
@@ -196,16 +198,42 @@ MessageHandleResult DS2_PlayerDataManager::Handle_RequestUpdatePlayerStatus(Game
         }
 
 //        LogS(Client->GetName().c_str(), "MapID:0x%08x CellId:0x%08x", State.GetPlayerStatus().player_location().unknown_3(), State.GetPlayerStatus().player_location().cell_id());
+
+        // What a client reports about where it stands decides what the server
+        // will offer it, so report it plainly rather than at verbose level.
+        // Throttled, this arrives with every status update.
+        {
+            double Now = GetSeconds();
+            if (double& Last = LastLocationLogTime[State.GetPlayerId()]; Now - Last > 15.0)
+            {
+                Last = Now;
+                const auto& Loc = State.GetPlayerStatus().player_location();
+                LogS(Client->GetName().c_str(), "Location: area '%s' (0x%08x), activity area %d, cell 0x%08x, position %.1f %.1f %.1f.",
+                    GetEnumString(State.GetCurrentArea()).c_str(), (uint32_t)State.GetCurrentArea(),
+                    State.GetCurrentOnlineActivityArea(), (uint32_t)Loc.cell_id(),
+                    Loc.position().x(), Loc.position().y(), Loc.position().z());
+            }
+        }
     }
 
     // Grab some matchmaking values.
     if (State.GetPlayerStatus().has_player_status())
     {
         // Grab invadability state.
+        const RuntimeConfig& Config = ServerInstance->GetConfig();
+
         bool NewState = true;
         if (State.GetPlayerStatus().player_status().sitting_at_bonfire() ||
-            State.GetPlayerStatus().player_status().human_effigy_burnt() || 
-            State.GetCurrentOnlineActivityArea() == 0)
+            State.GetPlayerStatus().player_status().human_effigy_burnt())
+        {
+            NewState = false;
+        }
+
+        // An activity area of zero is the client saying no online activity can
+        // happen where it stands. That is exactly the areas this mod exists to
+        // open up, so it stops being disqualifying. Bonfires and burnt effigies
+        // still protect a player.
+        if (State.GetCurrentOnlineActivityArea() == 0 && !Config.DS2_InvadeAnywhere)
         {
             NewState = false;
         }

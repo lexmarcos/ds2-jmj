@@ -331,6 +331,15 @@ public:
     // sign was never filed under.
     bool DS2_StickySigns = false;
 
+    // If enabled DS2 players are invadable in the areas the game treats as
+    // having no online activity, Majula among them, and the invader is not
+    // restricted to targets in their own area. The invasion push is rewritten
+    // to name the target's own area and cell, since the target has to be told
+    // something is happening where they are standing rather than where the
+    // invader is. Sitting at a bonfire and burning an effigy still protect a
+    // player; only the dead-area rule is lifted.
+    bool DS2_InvadeAnywhere = false;
+
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
     float PlayerStatusUploadInterval = 15.0f;

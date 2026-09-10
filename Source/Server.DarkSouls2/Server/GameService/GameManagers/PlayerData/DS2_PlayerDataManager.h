@@ -11,6 +11,9 @@
 
 #include "Server/GameService/GameManager.h"
 
+#include <cstdint>
+#include <unordered_map>
+
 struct Frpg2ReliableUdpMessage;
 class Server;
 
@@ -37,5 +40,8 @@ protected:
 
 private:
     Server* ServerInstance;
+
+    // Throttles the location report below, keyed on player id.
+    std::unordered_map<uint32_t, double> LastLocationLogTime;
 
 };
