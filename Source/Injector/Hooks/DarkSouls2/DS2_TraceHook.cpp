@@ -96,21 +96,32 @@ namespace
             {
                 Found = s_breakpoints.find(Candidate);
             }
-            if (Found == s_breakpoints.end() || !Found->second.Armed)
+            if (Found == s_breakpoints.end())
             {
                 return EXCEPTION_CONTINUE_SEARCH;
             }
 
             Breakpoint& Point = Found->second;
-            WriteByte(Point.Address, Point.Original);
-            Point.Armed = false;
+
+            // A second thread can reach the same address between the first
+            // thread restoring the byte and this handler running - it already
+            // fetched the 0xCC. Owning the address is what matters, not whether
+            // it is still armed: leaving it to the next handler is what killed
+            // the game when three thousand of these were armed at once.
+            if (Point.Armed)
+            {
+                WriteByte(Point.Address, Point.Original);
+                Point.Armed = false;
+                Line = StringFormat("  alcancado +0x%zx\n", Point.Offset);
+            }
 
             Exception->ContextRecord->Rip = (DWORD64)Point.Address;
-
-            Line = StringFormat("  alcancado +0x%zx\n", Point.Offset);
         }
 
-        Append(Line);
+        if (!Line.empty())
+        {
+            Append(Line);
+        }
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
