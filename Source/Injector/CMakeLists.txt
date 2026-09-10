@@ -31,6 +31,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_MultiPlayZoneProbeHook.cpp
     Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h
     Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.cpp
+    Hooks/DarkSouls2/DS2_MemProbeHook.h
+    Hooks/DarkSouls2/DS2_MemProbeHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h
