@@ -28,6 +28,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_MemProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -180,6 +181,7 @@ bool Injector::Init()
             // way to read the game's memory now that Steam reparents the
             // process out of reach of /proc/<pid>/mem.
             Hooks.push_back(std::make_unique<DS2_MemProbeHook>());
+            Hooks.push_back(std::make_unique<DS2_TraceHook>());
             break;
         }
     }
