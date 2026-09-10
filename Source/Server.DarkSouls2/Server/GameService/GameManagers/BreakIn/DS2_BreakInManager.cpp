@@ -186,6 +186,14 @@ MessageHandleResult DS2_BreakInManager::Handle_RequestBreakInTarget(GameClient* 
 
     DS2_Frpg2RequestMessage::RequestBreakInTarget* Request = (DS2_Frpg2RequestMessage::RequestBreakInTarget*)Message.Protobuf.get();
 
+    // Ground truth for what the client considers a valid area and cell here.
+    // Worth having whenever a real orb is used, since the debug path can only
+    // guess at these.
+    LogS(Client->GetName().c_str(), "Break-in target request: target %u, type %u, area %u (0x%08x), cell %u (0x%08x).",
+        Request->player_id(), (uint32_t)Request->type(),
+        Request->online_area_id(), Request->online_area_id(),
+        Request->cell_id(), Request->cell_id());
+
     bool bSuccess = true;
 
     // Check client still exists.
@@ -304,11 +312,18 @@ void DS2_BreakInManager::PollDebugInvadeRequest()
     }
     std::filesystem::remove(RequestPath);
 
-    // "<invader player id> <target player id> [<break in type>]"
+    // "<invader player id> <target player id> [type] [online area id] [cell id]"
+    //
+    // Area and cell default to what the target reports about itself. They are
+    // overridable because the protocol notes disagree with what the client
+    // sends: the push's cell_id is documented as looking like 101910, the same
+    // shape as an online activity area, and nothing like the packed value that
+    // arrives in player_location. Guessing costs a rebuild; a parameter does not.
     uint32_t InvaderId = 0, TargetId = 0, Type = (uint32_t)DS2_Frpg2RequestMessage::BreakInType_RedEyeOrb;
-    if (sscanf(Contents.c_str(), "%u %u %u", &InvaderId, &TargetId, &Type) < 2)
+    long long AreaOverride = -1, CellOverride = -1;
+    if (sscanf(Contents.c_str(), "%u %u %u %lld %lld", &InvaderId, &TargetId, &Type, &AreaOverride, &CellOverride) < 2)
     {
-        WarningS("BreakIn", "debug_invade.req wants '<invader player id> <target player id> [type]', got '%s'.", Contents.c_str());
+        WarningS("BreakIn", "debug_invade.req wants '<invader> <target> [type] [area] [cell]', got '%s'.", Contents.c_str());
         return;
     }
 
@@ -328,13 +343,19 @@ void DS2_BreakInManager::PollDebugInvadeRequest()
     PushMessage.set_player_id(InvaderClient->GetPlayerState().GetPlayerId());
     PushMessage.set_steam_id(InvaderClient->GetPlayerState().GetSteamId());
     PushMessage.set_type((DS2_Frpg2RequestMessage::BreakInType)Type);
-    PushMessage.set_cell_id(Target.GetCurrentCellId());
-    PushMessage.set_online_area_id((uint32_t)Target.GetCurrentArea());
+    uint32_t PushArea = AreaOverride >= 0 ? (uint32_t)AreaOverride : (uint32_t)Target.GetCurrentArea();
+    uint32_t PushCell = CellOverride >= 0 ? (uint32_t)CellOverride : (uint32_t)Target.GetCurrentOnlineActivityArea();
 
-    LogS("BreakIn", "Debug invade: '%s' -> '%s', type %u, target area 0x%08x cell 0x%08x, activity area %d, invadable %s.",
+    PushMessage.set_cell_id(PushCell);
+    PushMessage.set_online_area_id(PushArea);
+
+    LogS("BreakIn", "Debug invade: '%s' -> '%s', type %u. Target reports area 0x%08x (%u), activity area %d, location cell 0x%08x, invadable %s.",
         InvaderClient->GetName().c_str(), TargetClient->GetName().c_str(), Type,
-        (uint32_t)Target.GetCurrentArea(), Target.GetCurrentCellId(),
-        Target.GetCurrentOnlineActivityArea(), Target.GetIsInvadable() ? "yes" : "no");
+        (uint32_t)Target.GetCurrentArea(), (uint32_t)Target.GetCurrentArea(),
+        Target.GetCurrentOnlineActivityArea(), Target.GetCurrentCellId(),
+        Target.GetIsInvadable() ? "yes" : "no");
+    LogS("BreakIn", "Debug invade: sending area %u (0x%08x), cell %u (0x%08x).",
+        PushArea, PushArea, PushCell, PushCell);
 
     if (!TargetClient->MessageStream->Send(&PushMessage))
     {
