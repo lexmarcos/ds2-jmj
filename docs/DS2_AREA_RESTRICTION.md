@@ -535,6 +535,41 @@ established is narrower but solid: the refusal is reached through a specific,
 short path, and two of the checks along it can be patched away without
 changing the outcome.
 
+## The item can be made to fire in Majula
+
+Two byte patches, applied live, get the Red Sign Soapstone to play its
+placement animation in Majula - the kneeling gesture that had never once
+appeared there across dozens of trials.
+
+```text
+0x14032fc7b   74 0e            -> 90 90              take the flag path always
+0x14032fc7d   41 0f b7 6e 40   -> bd 2d 05 00 00     mov ebp, 0x52d
+```
+
+The second one is the interesting half. `0x14032fc7d` reads the id of the item
+being used out of `[r14+0x40]`. Measured at `0x14032fc9c`, where the value has
+reached a register:
+
+| Where | type (`rdx`) | item id (`r8`) |
+| --- | --- | --- |
+| Heide | 2 | `0x52d` |
+| Majula, first patch only | 2 | **`0xffff`** |
+
+`0xffff` is "none". **In Majula the game never registers an item as being
+used**, so everything downstream - the sign type staying 0, the item param
+lookup coming back null - follows from that one empty field. Writing the
+soapstone's own id into it makes the whole chain run.
+
+Measured: 6.4% sustained against a 1.0-2.5% refusal, and the animation is
+plainly visible in the captures.
+
+**What is not yet confirmed** is that the resulting sign is a working one. In
+Heide a successful placement also prints "Check your Summon Sign" and offers
+"Cancel summon sign?" afterwards; neither was captured in Majula, and the
+frames may simply have missed the message. The next session should check that
+before treating this as finished, and then find where `[r14+0x40]` is supposed
+to be filled, since forcing a constant is a demonstration rather than a fix.
+
 ### What is nailed down
 
 - Majula never leaves state 0 of the state machine at `0x14032fa00`.
