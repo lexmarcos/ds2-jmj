@@ -309,16 +309,23 @@ Which decodes every value measured in the running game:
 | Heide | 7 | bloodstain, message, ghost |
 | most of the game | 63 | everything |
 
-**And this confirms the negative result rather than undoing it.** Heide reads 7,
-which does *not* include `enableMultiPlay`, and a summon sign can be placed
-there. So sign placement is not governed by this field, exactly as the
-measurements said. Raising Majula to 7 or to 63 was never going to help.
+> **This paragraph was wrong, and it cost the project a long time.** It
+> read: Heide is 7, which lacks `enableMultiPlay`, and signs work there,
+> so the field decides nothing and raising Majula to 7 or 63 would never
+> help. Bit 3 of that byte is in fact tested in two places and refuses
+> the item when clear. The hook was raising rows to 7, which leaves bit
+> 3 clear, so every measurement taken with it enabled was made against a
+> value that could not work. Raising it to 63 is one of the three things
+> Majula needs. See [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md).
+>
+> Heide reading 7 and accepting a sign is still unexplained and is
+> recorded there as an open question.
 
 Row ids line up too: the community names row `10040000` "Majula" and
 `10020000` "Things Betwixt", against `10039488` and `10019488` at runtime - a
 constant offset of 512.
 
-### NETWORK_AREA_PARAM, and why it is not the answer either
+### NETWORK_AREA_PARAM, wrongly dismissed
 
 The param is heap memory that moves between runs and is found by searching for
 its own type name. Its header carries the row count at `+0x0a` and the name at
@@ -335,14 +342,22 @@ Heide            7    000111
 most of the game 63   111111
 ```
 
-Majula is the only area in the game below 7 apart from the tutorial. It was
-not the answer. An injector hook now raises every mask to 63 before any area
-loads - the log confirms `area=0x009932c0 antes=4 agora=63`, applied once and
-never reverted - and Majula still refuses. Setting the one remaining differing
-field, the second float, from 20 to 30 makes Majula's row **byte-identical to
-Heide's**, and it still refuses.
+Majula is the only area in the game below 7 apart from the tutorial.
 
-`NETWORK_AREA_PARAM` is consulted, and it is not the discriminator.
+> **The dismissal below was wrong.** The hook did not raise every mask to
+> 63 at the time; it raised them to 7, and the log line quoted here,
+> `antes=4 agora=63`, is from a later run after the constant was
+> corrected. Making Majula's row byte-identical to Heide's also could
+> not work, because Heide's own row has bit 3 clear and Heide's ability
+> to place a sign does not come from this field.
+>
+> `NETWORK_AREA_PARAM` **is** part of the answer. Bit 3 of the byte at
+> `+0x18` is tested at `0x1402a5fbb` for signs and `0x140272222` for
+> invasion orbs, and both refuse when it is clear. It is one of three
+> requirements, none of which is sufficient alone, which is why testing
+> it in isolation kept producing refusals.
+
+`NETWORK_AREA_PARAM` is consulted, and on its own it is not sufficient.
 
 `DS2_UnlockAreaMultiPlayHook` still exists and still raises shut rows to 7. It
 was written when the mask looked like the answer, and it is **not** part of the

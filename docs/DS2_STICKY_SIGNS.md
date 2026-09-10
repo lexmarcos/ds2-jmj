@@ -1,4 +1,15 @@
-# Sticky signs: serving signs to areas that refuse them
+# The road to multiplayer in Majula
+
+> **Outcome: solved.** A duel runs in Majula. The reference for what is
+> required and how to apply it is
+> [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md).
+>
+> This document is the record of getting there, kept because most of it
+> is about approaches that failed and the measurements that killed them.
+> Read it for the reasoning, not for instructions. It is chronological,
+> so earlier sections state things that later sections correct.
+
+## Sticky signs: serving signs to areas that refuse them
 
 Majula refuses the Red Sign Soapstone. [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md)
 records the hunt for why, and where it ended: the client never registers
