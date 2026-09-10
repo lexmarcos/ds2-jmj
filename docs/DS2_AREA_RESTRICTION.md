@@ -77,24 +77,63 @@ down. A four second burst did too. If this is tried again, the handler must not
 single-step or re-arm for faults that are not ours - the exact-address filter
 already knows the difference - and even then the duty cycle needs care.
 
+## What Ghidra found
+
+Recovering functions and RTTI changes the picture completely. The binary keeps
+its C++ class names, and two of them name the mechanism outright:
+
+```text
+MapAreaMultiPlayZoneCtrl
+EventConditionMap_IsPlayerInsideMultiPlayZone
+```
+
+Dark Souls II divides the world into **multiplay zones**. Whether an area allows
+summoning is not a property of the area id at all - it is whether the player
+stands inside such a zone, and what that zone permits.
+
+The chain, from the condition class down:
+
+- `FUN_14046fb80` is `IsPlayerInsideMultiPlayZone::Evaluate`. It compares the
+  zone the player is in against the one the event asks about.
+- `FUN_1402aab40(zoneId)` looks a zone up by id and returns its record. Four
+  functions call it.
+- `FUN_140250dc0` is the one that matters. It reads the current zone id, looks
+  the zone up, and takes the zone's permissions from it:
+
+```c
+iVar9 = 0;
+uVar10 = *(uint *)(param_1 + 0x20);                  // flags currently in force
+if ((0 < iVar8) && (piVar6 = FUN_1402aab40(iVar8), piVar6 != NULL)) {
+    iVar9  = *piVar6;                                 // zone's first field
+    uVar10 = (uint)*(byte *)(piVar6 + 3);             // zone's permission byte
+}
+if (uVar10 != *(uint *)(param_1 + 0x20)) {
+    FUN_140250cc0(param_1, *(uint *)(param_1 + 0x20), uVar10);   // announce change
+    *(uint *)(param_1 + 0x20) = uVar10;                          // and store it
+}
+```
+
+So **`param_1 + 0x20` holds the multiplayer permissions for wherever the player
+is standing**, copied from a byte at offset 12 of the zone record, and
+`iVar8 <= 0` means no zone at all. That field is what the rest of the game
+consults, and it is the natural place to intervene.
+
 ## Where the next attempt should start
 
-Linear disassembly has reached its limit. `objdump` sweeps straight through
-data, so function boundaries around `+0xf28fb` are unreliable and it finds no
-callers, because the call is through a vtable. Going further needs a
-recursive-descent disassembler with function recovery - Ghidra, IDA or radare2 -
-on `DarkSoulsII.exe`.
+The next question is what the permission byte actually holds. Log it in Heide,
+where a sign can be placed, and in Majula, where it cannot. Two values, and the
+mod is forcing one into the other.
 
-With one of those, the shape of the work is:
+`FUN_140250dc0` is where to read it, and the interesting values are `iVar8` (the
+zone id, non-positive outside any zone) and the byte the lookup returns. From
+there the patch has the same shape as
+[DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md): a breakpoint at a
+known offset, a value read, a value written.
 
-1. Recover the function containing `+0xf28fb` and its callers.
-2. Find the item-use path by its entry rather than by the area data: the check
-   reads the item's own restriction field and compares it against something
-   derived from the area, and may be two or three calls away from any read of
-   the area id itself.
-3. Put a single software breakpoint at that entry and compare Heide against
-   Majula. The branch that differs is the check, and the patch follows the same
-   shape as [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md).
+`+0xf28fb`, which the guard page found, turned out to be a red herring: Ghidra
+shows `FUN_1400f2690` builds display text, formatting the area name for the
+interface. It reads the area id every frame, which is exactly why a watch on
+that address found it first.
 
 ## Tooling built along the way
 
