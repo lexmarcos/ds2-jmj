@@ -61,6 +61,45 @@ namespace
     uint8_t s_original = 0;
     int s_forced_zone = 0;
 
+    // Offset of the zone id inside the map block record. rcx holds that record
+    // at the patch site, on both paths that reach it.
+    constexpr size_t kBlockZoneOffset = 0x20;
+
+    std::atomic<uint64_t> s_source_writes{ 0 };
+    std::atomic<uint64_t> s_source_faults{ 0 };
+
+    enum class BlockWriteResult
+    {
+        Skipped,
+        Written,
+        Faulted,
+    };
+
+    // Kept in its own function on purpose: the handler holds a scoped_lock, and
+    // MSVC refuses __try in any function that needs object unwinding (C2712).
+    BlockWriteResult TryForceBlockZone(uintptr_t Block, int Zone)
+    {
+        if (Block == 0)
+        {
+            return BlockWriteResult::Skipped;
+        }
+
+        __try
+        {
+            int32_t* Source = (int32_t*)(Block + kBlockZoneOffset);
+            if (*Source > 0)
+            {
+                return BlockWriteResult::Skipped;
+            }
+            *Source = (int32_t)Zone;
+            return BlockWriteResult::Written;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return BlockWriteResult::Faulted;
+        }
+    }
+
     void Append(const std::string& Text)
     {
         std::scoped_lock lock(s_log_mutex);
@@ -118,6 +157,19 @@ namespace
             if (Zone <= 0)
             {
                 Context->Rbx = (DWORD64)(uint32_t)s_forced_zone;
+
+                // Rbx is only a copy the caller is about to store into its own
+                // struct. The zone id actually lives in the map block record,
+                // which rcx points at here, and every other reader takes it
+                // from there. Fixing only the copy leaves the rest of the game
+                // still seeing "no zone", so write the source as well.
+                switch (TryForceBlockZone((uintptr_t)Context->Rcx, s_forced_zone))
+                {
+                case BlockWriteResult::Written: s_source_writes++; break;
+                case BlockWriteResult::Faulted: s_source_faults++; break;
+                default: break;
+                }
+
                 s_substitutions++;
 
                 const double Now = GetSeconds();
@@ -125,12 +177,14 @@ namespace
                 {
                     s_last_log.store(Now);
                     Append(StringFormat(
-                        "time=%.3f event=DS2ForceZone result=substituted was=%d now=%d hits=%llu subs=%llu\n",
+                        "time=%.3f event=DS2ForceZone result=substituted was=%d now=%d hits=%llu subs=%llu block_writes=%llu block_faults=%llu\n",
                         Now,
                         Zone,
                         s_forced_zone,
                         (unsigned long long)s_hits.load(),
-                        (unsigned long long)s_substitutions.load()));
+                        (unsigned long long)s_substitutions.load(),
+                        (unsigned long long)s_source_writes.load(),
+                        (unsigned long long)s_source_faults.load()));
                     Log("[DS2ForceZone] zona %d -> %d", Zone, s_forced_zone);
                 }
             }
