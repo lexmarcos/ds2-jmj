@@ -13,6 +13,7 @@ mod game;
 mod logs;
 mod paths;
 mod proc;
+mod screen;
 mod server;
 mod settings;
 
@@ -136,6 +137,12 @@ enum GameAction {
     Stop,
     /// Prints the line to paste into Steam's launch options
     Options,
+    /// Captures each game window to a PNG
+    Shot {
+        /// Where to write them; defaults to the harness log directory
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -257,6 +264,7 @@ fn run(command: Command) -> Result<(), String> {
                 print_launch_options(&environment);
                 Ok(())
             }
+            GameAction::Shot { out } => shot(out),
         },
         Command::Steam2 { action } => steam2(action),
         Command::Logs { which, lines, grep, follow } => {
@@ -359,6 +367,33 @@ fn steam2(action: Steam2Action) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+/// Writes one PNG per game window. Naming them by index keeps the paths stable
+/// between calls, so a later capture overwrites the earlier one rather than
+/// filling the directory.
+fn shot(out: Option<PathBuf>) -> Result<(), String> {
+    let dir = out.unwrap_or_else(paths::log_dir);
+    let windows = screen::windows()?;
+
+    if windows.is_empty() {
+        return Err("nenhuma janela do Dark Souls II aberta".into());
+    }
+
+    for (index, window) in windows.iter().enumerate() {
+        let path = dir.join(format!("shot-{}.png", index + 1));
+        match screen::capture(window, &path) {
+            Ok(written) => println!(
+                "  janela {} ({}x{})  {}",
+                window.id,
+                window.width,
+                window.height,
+                written.display()
+            ),
+            Err(error) => println!("  janela {}  falhou: {error}", window.id),
+        }
+    }
+    Ok(())
 }
 
 fn log_path(environment: &Environment, which: LogName) -> Option<PathBuf> {
