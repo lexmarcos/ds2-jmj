@@ -267,6 +267,57 @@ that places a sign consults NETWORK_AREA_PARAM for the current area, and
 refuses if there is no row.** It does not follow that the area id or the row is
 what separates Majula from Heide, and it is not.
 
+### The param, decoded against community data
+
+The row layout worked out here matches the community paramdef exactly, which is
+a useful independent check on the whole reverse-engineering:
+
+```xml
+<!-- Paramdex / DSMapStudio, DS2S/Defs/NETWORK_AREA_PARAM.xml -->
+f32 limitation_time_1
+f32 limitation_time_2
+f32 limitation_time_3
+f32 Unk0C   f32 Unk10   f32 Unk14
+s32 Unk18
+```
+
+28 bytes, three floats, three unknowns, a trailing int - exactly what was read
+out of memory. **The three floats are session time limits**, which is the same
+mechanism [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md) patches at
+runtime. Majula carries `30, 20, 30` and Heide `30, 30, 30`.
+
+`Unk18` - the field called "the mask" above - is undocumented for DS2. **Dark
+Souls III's paramdef names it**, and the layout is identical (three floats,
+twelve bytes of padding, the bitfield at `+0x18`):
+
+```xml
+<!-- DS3/Defs/NETWORK_AREA_PARAM_ST.xml -->
+u8 enableBloodstain:1      bit 0   = 1
+u8 enableBloodMessage:1    bit 1   = 2
+u8 enableGhost:1           bit 2   = 4
+u8 enableMultiPlay:1       bit 3   = 8
+u8 enableRingSearch:1      bit 4   = 16
+u8 enableBreakInSearch:1   bit 5   = 32
+```
+
+Which decodes every value measured in the running game:
+
+| Area | value | means |
+| --- | --- | --- |
+| Things Betwixt | 0 | nothing at all |
+| **Majula** | **4** | **ghosts only** - no bloodstains, no messages, no invasions |
+| Heide | 7 | bloodstain, message, ghost |
+| most of the game | 63 | everything |
+
+**And this confirms the negative result rather than undoing it.** Heide reads 7,
+which does *not* include `enableMultiPlay`, and a summon sign can be placed
+there. So sign placement is not governed by this field, exactly as the
+measurements said. Raising Majula to 7 or to 63 was never going to help.
+
+Row ids line up too: the community names row `10040000` "Majula" and
+`10020000` "Things Betwixt", against `10039488` and `10019488` at runtime - a
+constant offset of 512.
+
 ### NETWORK_AREA_PARAM, and why it is not the answer either
 
 The param is heap memory that moves between runs and is found by searching for
