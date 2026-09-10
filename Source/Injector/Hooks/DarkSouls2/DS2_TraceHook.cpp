@@ -46,6 +46,10 @@ namespace
     PVOID s_handler = nullptr;
     uintptr_t s_base = 0;
 
+    // The image is about 28 MB. This only has to be an upper bound, for
+    // deciding whether a stack slot looks like a code address in this module.
+    constexpr uintptr_t kModuleSpan = 0x2000000;
+
     std::mutex s_mutex;
     std::unordered_map<uintptr_t, Breakpoint> s_breakpoints;
 
@@ -129,13 +133,40 @@ namespace
                     }
                 }
 
+                // [rsp] is only a return address at a function's entry. Break
+                // in the middle of one, which is where an interesting branch
+                // usually is, and it is whatever local happened to be pushed.
+                // So scan a window of the stack and report every slot that
+                // looks like it points into this module's code: the real call
+                // chain is in there, and reading several frames beats guessing
+                // at one. Offsets, so they can be pasted into a disassembly.
+                std::string Frames;
+                {
+                    const uintptr_t* Stack = (const uintptr_t*)Exception->ContextRecord->Rsp;
+                    int Shown = 0;
+                    for (int i = 0; i < 64 && Shown < 8; i++)
+                    {
+                        uintptr_t Value = Stack[i];
+                        if (Value > s_base && Value < s_base + kModuleSpan)
+                        {
+                            Frames += StringFormat(" +0x%llx", (unsigned long long)(Value - s_base));
+                            Shown++;
+                        }
+                    }
+                    if (Frames.empty())
+                    {
+                        Frames = " (nenhum)";
+                    }
+                }
+
                 Line = StringFormat(
-                    "  alcancado +0x%zx de=+0x%llx rcx=%016llx rdx=%016llx r8=%016llx\n",
+                    "  alcancado +0x%zx de=+0x%llx rcx=%016llx rdx=%016llx r8=%016llx pilha:%s\n",
                     Point.Offset,
                     (unsigned long long)(Caller >= s_base ? Caller - s_base : Caller),
                     (unsigned long long)Exception->ContextRecord->Rcx,
                     (unsigned long long)Exception->ContextRecord->Rdx,
-                    (unsigned long long)Exception->ContextRecord->R8);
+                    (unsigned long long)Exception->ContextRecord->R8,
+                    Frames.c_str());
             }
 
             Exception->ContextRecord->Rip = (DWORD64)Point.Address;
