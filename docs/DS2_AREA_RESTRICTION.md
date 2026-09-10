@@ -577,6 +577,27 @@ runs. Finding *that* is the remaining question, and it is now a narrow one:
 something decides, before any of this, that the soapstone is not a usable item
 here.
 
+### The object, and the last open thread
+
+`r14` resolves as `[[this+0x8]+0xc8]`, and it can be read live. In Majula,
+standing there with the soapstone equipped:
+
+```text
++0x40  item id     = 0xffff   (none)
++0x42              = 0x0000
++0xfc  flags       = 0x00000000   bit 0x800 clear
+```
+
+Writing the item id in **holds** - `+0x40` stays `0x52d` across frames. Writing
+the flag does not: `+0xfc` is back to zero on the next read, so it is
+recomputed every frame from somewhere else, and with it clear the sign type
+stays 0 and the refusal stands.
+
+**So the last question is what computes `[r14+0xfc]` bit `0x800`.** It is not
+stored state that can be poked; it is derived. Everything in front of it is
+now mapped, measured and reproducible, and the two byte patches above show
+that forcing past it moves the whole chain.
+
 ### What is nailed down
 
 - Majula never leaves state 0 of the state machine at `0x14032fa00`.
