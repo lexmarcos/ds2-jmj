@@ -140,7 +140,16 @@ exec "${{args[@]}}"
 }
 
 /// Starts the second instance in its own Proton prefix, outside Steam.
-pub fn launch_second(environment: &Environment) -> Result<u32, String> {
+///
+/// `second_steam` points at a home directory holding a second Steam client. The
+/// game's session layer is peer to peer over Steam and keyed on the account's
+/// steam id, so two instances sharing one account can never connect to each
+/// other. Pointing this instance at a second logged-in client is what gives it
+/// a distinct peer identity.
+pub fn launch_second(
+    environment: &Environment,
+    second_steam: Option<&std::path::Path>,
+) -> Result<u32, String> {
     if let Some(pid) = proc::running(&paths::instance_pid(2), "Injector.exe") {
         return Ok(pid);
     }
@@ -159,8 +168,19 @@ pub fn launch_second(environment: &Environment) -> Result<u32, String> {
         return Err("Injector.exe não está na pasta do jogo; rode `ds2os-dev game prepare`".into());
     }
 
-    let env = [
-        ("STEAM_COMPAT_CLIENT_INSTALL_PATH", steam_root.display().to_string()),
+    // With a second Steam home, the client this instance talks to is the one
+    // logged in as the other account, and HOME is what steamclient follows.
+    let (client_root, home) = match second_steam {
+        Some(home) => {
+            let root = ds2os_core::steam::Steam::discover_in(home)
+                .map_err(|e| format!("não achei uma Steam em {}: {e}", home.display()))?;
+            (root.root().to_path_buf(), Some(home.to_path_buf()))
+        }
+        None => (steam_root, None),
+    };
+
+    let mut env = vec![
+        ("STEAM_COMPAT_CLIENT_INSTALL_PATH", client_root.display().to_string()),
         ("STEAM_COMPAT_DATA_PATH", prefix.display().to_string()),
         ("SteamAppId", APP_ID.to_string()),
         ("SteamGameId", APP_ID.to_string()),
@@ -168,6 +188,9 @@ pub fn launch_second(environment: &Environment) -> Result<u32, String> {
         // which it needs under Wine.
         ("WINEPREFIX", prefix.join("pfx").display().to_string()),
     ];
+    if let Some(home) = &home {
+        env.push(("HOME", home.display().to_string()));
+    }
 
     let managed = proc::spawn(
         &proton.join("proton"),

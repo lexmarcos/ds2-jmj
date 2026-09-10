@@ -89,7 +89,15 @@ impl GameInstall {
 impl Steam {
     /// Finds a Steam installation, preferring the native one over Flatpak.
     pub fn discover() -> Result<Self, SteamError> {
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+        Self::discover_in(&PathBuf::from(std::env::var("HOME").unwrap_or_default()))
+    }
+
+    /// Finds a Steam installation belonging to a particular home directory.
+    ///
+    /// A second Steam client, run with its own HOME, is a second logged-in
+    /// account: separate credentials, separate steam id, and therefore a
+    /// separate peer identity for the game's session layer.
+    pub fn discover_in(home: &Path) -> Result<Self, SteamError> {
         let candidates = [
             home.join(".steam/root"),
             home.join(".steam/steam"),

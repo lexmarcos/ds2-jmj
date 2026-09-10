@@ -69,6 +69,11 @@ enum Command {
         #[command(subcommand)]
         action: GameAction,
     },
+    /// The second Steam client, which gives instance 2 its own account
+    Steam2 {
+        #[command(subcommand)]
+        action: Steam2Action,
+    },
     /// Reads any of the logs, sanitised and greppable
     Logs {
         #[arg(value_enum, default_value_t = LogName::Server)]
@@ -83,6 +88,20 @@ enum Command {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum Steam2Action {
+    /// Creates the home for a second Steam client and explains the next steps
+    Init {
+        /// Where the second client keeps its files
+        #[arg(long, default_value = "~/steam2")]
+        home: String,
+    },
+    /// Starts the second Steam client so the other account can log in
+    Run,
+    /// Shows what is configured and whether that client is usable
+    Show,
 }
 
 #[derive(Subcommand)]
@@ -107,7 +126,11 @@ enum GameAction {
         no_timer: bool,
     },
     /// Starts the second instance in its own Proton prefix
-    Launch,
+    Launch {
+        /// Home of the second Steam client; defaults to what steam2 saved
+        #[arg(long)]
+        steam_home: Option<PathBuf>,
+    },
     /// Stops the second instance
     Stop,
     /// Prints the line to paste into Steam's launch options
@@ -126,6 +149,29 @@ enum LogName {
     Timer,
     /// Every ds2os-dev command that was run
     Cli,
+}
+
+/// Settings the harness remembers between runs.
+#[derive(Debug, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct HarnessConfig {
+    /// Home directory of a second Steam client, logged into another account.
+    second_steam_home: Option<PathBuf>,
+}
+
+impl HarnessConfig {
+    fn load() -> Self {
+        std::fs::read_to_string(paths::harness_config())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let path = paths::harness_config();
+        let body = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(&path, body).map_err(|e| format!("não consegui salvar {}: {e}", path.display()))
+    }
 }
 
 #[derive(Serialize)]
@@ -215,8 +261,10 @@ fn run(command: Command) -> Result<(), String> {
             GameAction::Prepare { timer_seconds, no_timer } => {
                 prepare(&environment, timer_seconds, !no_timer)
             }
-            GameAction::Launch => {
-                let pid = game::launch_second(&environment)?;
+            GameAction::Launch { steam_home } => {
+                let home = resolve_second_steam(steam_home)?;
+                announce_account(home.as_deref());
+                let pid = game::launch_second(&environment, home.as_deref())?;
                 println!("  segunda instância iniciada, pid {pid}");
                 println!("  log: {}", paths::instance_log(2).display());
                 Ok(())
@@ -232,11 +280,105 @@ fn run(command: Command) -> Result<(), String> {
                 Ok(())
             }
         },
+        Command::Steam2 { action } => steam2(action),
         Command::Logs { which, lines, grep, follow } => {
             let path = log_path(&environment, which)
                 .ok_or("esse log não existe neste ambiente")?;
             logs::show(&path, &logs::Options { lines, grep: grep.as_deref(), follow })
                 .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Expands a leading ~ so `--home ~/steam2` works from any shell.
+fn expand_home(raw: &str) -> PathBuf {
+    match raw.strip_prefix("~/") {
+        Some(rest) => paths::home().join(rest),
+        None => PathBuf::from(raw),
+    }
+}
+
+/// The second Steam home to use: the flag if given, otherwise what was saved.
+fn resolve_second_steam(flag: Option<PathBuf>) -> Result<Option<PathBuf>, String> {
+    if let Some(home) = flag {
+        return Ok(Some(home));
+    }
+    Ok(HarnessConfig::load().second_steam_home)
+}
+
+fn announce_account(home: Option<&std::path::Path>) {
+    match home {
+        Some(home) => println!("  conta: segunda Steam em {}", home.display()),
+        None => println!(
+            "  conta: a mesma da primeira instância — as duas não vão conseguir se conectar\n             \x20        rode `ds2os-dev steam2 init` para usar a segunda conta"
+        ),
+    }
+}
+
+fn steam2(action: Steam2Action) -> Result<(), String> {
+    match action {
+        Steam2Action::Init { home } => {
+            let home = expand_home(&home);
+            std::fs::create_dir_all(&home)
+                .map_err(|e| format!("não consegui criar {}: {e}", home.display()))?;
+
+            let mut config = HarnessConfig::load();
+            config.second_steam_home = Some(home.clone());
+            config.save()?;
+
+            println!("  home da segunda Steam: {}", home.display());
+            println!();
+            println!("  agora, uma vez só:");
+            println!("    1. ds2os-dev steam2 run");
+            println!("    2. entre com a SEGUNDA conta (é um cliente separado, não desloga o seu)");
+            println!("    3. na Steam: Configurações → Downloads → Pastas da Biblioteca");
+            println!("       adicione /mnt/ssd/SteamLibrary — o DS2 já instalado aparece como instalado");
+            println!("    4. feche o jogo se ela tentar abrir; o ds2os-dev é quem lança");
+            println!();
+            println!("  depois disso, `ds2os-dev game launch` usa essa conta sozinho");
+            Ok(())
+        }
+        Steam2Action::Run => {
+            let home = HarnessConfig::load()
+                .second_steam_home
+                .ok_or("nenhuma segunda Steam configurada; rode `ds2os-dev steam2 init`")?;
+            println!("  abrindo a Steam com HOME={}", home.display());
+            std::process::Command::new("steam")
+                .env("HOME", &home)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("não consegui abrir a Steam: {e}"))?;
+            Ok(())
+        }
+        Steam2Action::Show => {
+            let config = HarnessConfig::load();
+            match config.second_steam_home {
+                None => {
+                    println!("  nenhuma segunda Steam configurada");
+                    println!("  rode: ds2os-dev steam2 init");
+                }
+                Some(home) => {
+                    println!("  home       {}", home.display());
+                    match ds2os_core::steam::Steam::discover_in(&home) {
+                        Ok(steam) => {
+                            println!("  cliente    {}", steam.root().display());
+                            match steam.find_game(ds2os_core::steam::GameType::DarkSouls2) {
+                                Some(install) => {
+                                    println!("  ds2        {}", install.install_dir.display())
+                                }
+                                None => println!(
+                                    "  ds2        não visível para essa conta — adicione a pasta \
+                                     da biblioteca nas configurações dela"
+                                ),
+                            }
+                        }
+                        Err(_) => println!("  cliente    ainda não instalado; rode `ds2os-dev steam2 run`"),
+                    }
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -334,7 +476,9 @@ fn up(
 
     if start_second {
         println!("\nsegunda instância");
-        let pid = game::launch_second(environment)?;
+        let home = resolve_second_steam(None)?;
+        announce_account(home.as_deref());
+        let pid = game::launch_second(environment, home.as_deref())?;
         println!("  iniciada, pid {pid}");
         println!("  log {}", paths::instance_log(2).display());
     }

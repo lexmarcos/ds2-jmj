@@ -16,6 +16,11 @@ pub fn state_dir() -> PathBuf {
     base.join("ds2os-dev")
 }
 
+/// Settings the harness remembers between runs.
+pub fn harness_config() -> PathBuf {
+    state_dir().join("config.json")
+}
+
 pub fn log_dir() -> PathBuf {
     state_dir().join("logs")
 }
