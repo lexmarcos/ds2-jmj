@@ -291,9 +291,14 @@ never reverted - and Majula still refuses. Setting the one remaining differing
 field, the second float, from 20 to 30 makes Majula's row **byte-identical to
 Heide's**, and it still refuses.
 
-`NETWORK_AREA_PARAM` is consulted, and it is not the discriminator. The hook is
-kept because opening every area is wanted anyway and it is correct about what
-it does.
+`NETWORK_AREA_PARAM` is consulted, and it is not the discriminator.
+
+`DS2_UnlockAreaMultiPlayHook` still exists and still raises shut rows to 7. It
+was written when the mask looked like the answer, and it is **not** part of the
+fix: measured on a valid baseline it changes nothing. It is left in place, off
+unless `DS2ForceMultiPlayZone` is set, because it is correct about what it does
+and the two rows it touches were shut for no benefit - but nobody should read
+it as load-bearing.
 
 ### A warning about how to test this
 
