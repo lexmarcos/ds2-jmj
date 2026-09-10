@@ -329,6 +329,21 @@ taken before the death and stand.
 Before trusting any result here: confirm the item works in Heide first. That is
 the baseline, it is cheap, and without it a refusal means nothing.
 
+## Redone on a valid baseline
+
+With the character human again, and confirming the item in Heide before each
+reading:
+
+| Where | Mask | Result |
+| --- | --- | --- |
+| Heide | its own 7 | **used**, 11.0% |
+| Majula | its own 4 | refused, 1.4% |
+| Majula | forced to 7 before the area loaded | refused, 1.5% |
+
+So the restriction is real and reproducible, and **the permission mask is ruled
+out for good**: Majula carrying Heide's exact value, applied before the map is
+built, changes nothing.
+
 ## Still open
 
 Nothing found so far separates Majula from Heide. Ruled out by direct
