@@ -399,6 +399,57 @@ namespace
         Candidates.swap(Kept);
     }
 
+    // The area id sits at this offset inside a larger structure; the code that
+    // reads it also tests a flags byte nine bytes further on.
+    constexpr uintptr_t kAreaFieldOffset = 0x1d0;
+    constexpr size_t kDumpBytes = 0x400;
+
+    /// Writes the structure holding the area id as hex.
+    ///
+    /// Comparing a dump taken where an item works against one taken where it is
+    /// refused should show the difference as a changed byte, if the restriction
+    /// is a flag on this structure rather than something derived elsewhere.
+    void DumpStruct(uintptr_t AreaField)
+    {
+        const uintptr_t Base = AreaField - kAreaFieldOffset;
+        std::vector<uint8_t> Bytes(kDumpBytes);
+        if (!TryCopy(Base, kDumpBytes, Bytes.data()))
+        {
+            Append(StringFormat("time=%.3f event=DS2AreaDump result=unreadable base=0x%016llx\n",
+                                GetSeconds(),
+                                (unsigned long long)Base));
+            return;
+        }
+
+        uint32_t Area = 0;
+        memcpy(&Area, Bytes.data() + kAreaFieldOffset, sizeof(Area));
+        const char* Name = AreaName(Area);
+
+        Append(StringFormat(
+            "time=%.3f event=DS2AreaDump result=dump base=0x%016llx area=0x%08x name=%s bytes=%zu\n",
+            GetSeconds(),
+            (unsigned long long)Base,
+            Area,
+            Name != nullptr ? Name : "?",
+            kDumpBytes));
+
+        std::string Line;
+        for (size_t Offset = 0; Offset < kDumpBytes; Offset += 16)
+        {
+            Line = StringFormat("    +0x%03zx ", Offset);
+            for (size_t Index = 0; Index < 16; Index++)
+            {
+                Line += StringFormat("%02x", Bytes[Offset + Index]);
+                if (Index % 4 == 3)
+                {
+                    Line += " ";
+                }
+            }
+            Line += "\n";
+            Append(Line);
+        }
+    }
+
     /// Removes the guard so the game runs at full speed again.
     void DisarmGuardPage(uintptr_t Address)
     {
@@ -519,29 +570,12 @@ namespace
                 }
                 std::filesystem::remove(TriggerPath(), Error);
 
-                {
-                    std::scoped_lock lock(s_access_mutex);
-                    s_accesses.clear();
-                }
-                s_guard_hits.store(0);
-
-                const double Started = GetSeconds();
-                Append(StringFormat("time=%.3f event=DS2AreaWatch result=burst_started\n", Started));
-
-                // Re-arm as it fires: the guard is one-shot and the handler
-                // only restores it after stepping past the faulting access.
-                while (s_running.load() && GetSeconds() - Started < 4.0)
-                {
-                    ArmGuardPage(Address);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                }
-                DisarmGuardPage(Address);
-
-                Append(StringFormat(
-                    "time=%.3f event=DS2AreaWatch result=burst_ended seconds=%.1f\n",
-                    GetSeconds(),
-                    GetSeconds() - Started));
-                ReportAccesses();
+                // Guarding the page cost seventy thousand faults in half a
+                // minute and took the game with it, even for four seconds. A
+                // dump costs one read and answers a different, cheaper
+                // question: whether the restriction is a flag sitting next to
+                // the area id.
+                DumpStruct(Address);
             }
 
             DisarmGuardPage(Address);
