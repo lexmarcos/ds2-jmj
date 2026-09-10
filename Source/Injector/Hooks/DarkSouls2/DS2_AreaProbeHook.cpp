@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -313,11 +314,35 @@ namespace
         return (Info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
     }
 
+    /// Copies a region into a buffer, surviving the case where another thread
+    /// frees it between the protection check and the read.
+    ///
+    /// Without this the probe eventually faults inside the game and kills it,
+    /// which it did: a debug tool has no business crashing what it observes.
+    bool TryCopy(uintptr_t Address, size_t Size, void* Destination)
+    {
+        __try
+        {
+            memcpy(Destination, (const void*)Address, Size);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool TryReadU32(uintptr_t Address, uint32_t& Out)
+    {
+        return TryCopy(Address, sizeof(uint32_t), &Out);
+    }
+
     /// One full pass over writable memory, collecting every address that holds
     /// a known area id.
     std::vector<Candidate> ScanEverything()
     {
         std::vector<Candidate> Found;
+        std::vector<uint8_t> Buffer;
         MEMORY_BASIC_INFORMATION Info = {};
         uintptr_t Cursor = 0;
 
@@ -328,15 +353,23 @@ namespace
 
             if (IsScannable(Info))
             {
-                for (uintptr_t At = Base; At + sizeof(uint32_t) <= End; At += sizeof(uint32_t))
+                // Read the region once into our own memory and scan that. One
+                // guarded copy per region is both faster than guarding every
+                // read and safe if the region goes away mid-scan.
+                Buffer.resize(Info.RegionSize);
+                if (TryCopy(Base, Info.RegionSize, Buffer.data()))
                 {
-                    const uint32_t Value = *(const uint32_t*)At;
-                    if (AreaName(Value) != nullptr)
+                    const size_t Count = Info.RegionSize / sizeof(uint32_t);
+                    const uint32_t* Values = (const uint32_t*)Buffer.data();
+                    for (size_t Index = 0; Index < Count; Index++)
                     {
-                        Found.push_back({ At, Value, 0 });
-                        if (Found.size() > 200000)
+                        if (AreaName(Values[Index]) != nullptr)
                         {
-                            return Found;
+                            Found.push_back({ Base + Index * sizeof(uint32_t), Values[Index], 0 });
+                            if (Found.size() > 200000)
+                            {
+                                return Found;
+                            }
                         }
                     }
                 }
@@ -368,8 +401,8 @@ namespace
                 continue;
             }
 
-            const uint32_t Value = *(const uint32_t*)Entry.Address;
-            if (AreaName(Value) == nullptr)
+            uint32_t Value = 0;
+            if (!TryReadU32(Entry.Address, Value) || AreaName(Value) == nullptr)
             {
                 continue;
             }
