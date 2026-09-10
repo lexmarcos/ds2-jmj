@@ -563,12 +563,19 @@ soapstone's own id into it makes the whole chain run.
 Measured: 6.4% sustained against a 1.0-2.5% refusal, and the animation is
 plainly visible in the captures.
 
-**What is not yet confirmed** is that the resulting sign is a working one. In
-Heide a successful placement also prints "Check your Summon Sign" and offers
-"Cancel summon sign?" afterwards; neither was captured in Majula, and the
-frames may simply have missed the message. The next session should check that
-before treating this as finished, and then find where `[r14+0x40]` is supposed
-to be filled, since forcing a constant is a demonstration rather than a fix.
+**The sign itself does not stick.** Checked afterwards the same way Heide was
+checked: pressing the interact button offers "Cancel summon sign?" in Heide and
+offers nothing in Majula, and no sign remains on the ground. So the item is
+now *accepted* - the game runs the placement and plays the animation - but the
+sign is not registered.
+
+That is a real step and an incomplete one, and it says where the rest of the
+work is. Forcing a constant into `[r14+0x40]` gets the flow moving without
+putting the game into the state that flow expects; the field is meant to be
+filled by whatever registers an item as being used, and in Majula that never
+runs. Finding *that* is the remaining question, and it is now a narrow one:
+something decides, before any of this, that the soapstone is not a usable item
+here.
 
 ### What is nailed down
 
