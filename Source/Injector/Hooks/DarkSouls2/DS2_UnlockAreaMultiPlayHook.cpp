@@ -44,9 +44,13 @@ namespace
 
     constexpr const char* kParamName = "NETWORK_AREA_PARAM";
 
-    // Every area in the game carries one of these. The full mask is what most
-    // of the world already has; Majula is the odd one out at 4.
-    constexpr int32_t kFullMask = 63;
+    // The value to raise a shut area to. Heide carries 7 and a sign can be
+    // placed there, which makes 7 the one value known to work. 63 is what most
+    // of the world carries and it was tried first, but forcing it broke Heide:
+    // with 63 the soapstone is refused in an area that accepts it at 7. So this
+    // copies what works rather than reaching for the largest number, and only
+    // raises rows that sit below it.
+    constexpr int32_t kTargetMask = 7;
 
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
@@ -191,15 +195,15 @@ namespace
             {
                 continue;
             }
-            if (Current < 0 || Current > kFullMask || Current == kFullMask)
+            if (Current < 0 || Current >= kTargetMask)
             {
                 continue;
             }
 
-            if (TryWrite((void*)Mask, &kFullMask, sizeof(kFullMask)))
+            if (TryWrite((void*)Mask, &kTargetMask, sizeof(kTargetMask)))
             {
                 Append(StringFormat("    area=0x%08llx antes=%d agora=%d\n",
-                    (unsigned long long)RowId, (int)Current, (int)kFullMask));
+                    (unsigned long long)RowId, (int)Current, (int)kTargetMask));
                 Raised++;
             }
         }
@@ -234,7 +238,7 @@ namespace
                 {
                     Append(StringFormat(
                         "event=DS2UnlockAreas result=patched headers=%zu linhas=%d mascara=%d\n",
-                        Headers.size(), Total, (int)kFullMask));
+                        Headers.size(), Total, (int)kTargetMask));
                     Log("[DS2UnlockAreas] %d areas abertas para multiplayer", Total);
                 }
             }

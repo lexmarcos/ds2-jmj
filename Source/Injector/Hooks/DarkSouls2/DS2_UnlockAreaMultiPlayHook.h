@@ -17,8 +17,9 @@
 /// area id the server also uses, and each row ends in a bitmask of what
 /// multiplayer the area permits. Majula carries 4 and Heide carries 7, while
 /// most of the game carries 63; Things Betwixt, which allows nothing, carries
-/// 0. Raising every row to the full mask is what lets a summon sign be placed
-/// in a hub area.
+/// 0. Rows below 7 are raised to 7 - the value Heide carries, and the only one
+/// measured to accept a summon sign. Forcing 63 instead was tried and refused
+/// the item even in Heide.
 ///
 /// The param is patched once, as early as it can be found, because the value
 /// appears to be consulted when an area loads rather than when the item is
