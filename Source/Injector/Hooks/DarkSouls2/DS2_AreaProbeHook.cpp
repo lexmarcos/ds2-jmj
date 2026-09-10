@@ -375,6 +375,7 @@ namespace
         Log("[DS2AreaProbe] primeira varredura: %zu candidatos", Candidates.size());
 
         int Pass = 0;
+        int PassesWithoutMovement = 0;
         double LastReport = 0.0;
         double LastRearm = 0.0;
 
@@ -413,8 +414,27 @@ namespace
 
             if (Changed == 0)
             {
+                PassesWithoutMovement++;
+
+                // The structure holding the area id is allocated when the
+                // player loads into the world. Scanning before that happens
+                // finds only constants, and no amount of travelling will move
+                // them, so start over rather than wait forever.
+                if (PassesWithoutMovement >= 20)
+                {
+                    PassesWithoutMovement = 0;
+                    Candidates = ScanEverything();
+                    Append(StringFormat(
+                        "time=%.3f event=DS2AreaProbe result=rescan candidates=%zu\n",
+                        GetSeconds(),
+                        Candidates.size()));
+                    Log("[DS2AreaProbe] nada se moveu; varri de novo: %zu candidatos",
+                        Candidates.size());
+                }
                 continue;
             }
+
+            PassesWithoutMovement = 0;
 
             Append(StringFormat(
                 "time=%.3f event=DS2AreaProbe result=moved pass=%d remaining=%zu changed=%d\n",
