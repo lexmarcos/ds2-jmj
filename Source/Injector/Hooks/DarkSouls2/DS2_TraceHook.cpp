@@ -115,13 +115,27 @@ namespace
                 // The arguments matter as much as the fact of the call: the
                 // function that decides this looks something up by an id in
                 // rdx, and knowing which id is what the comparison needs.
+                // The return address names the caller outright. Climbing by
+                // grep does not work here: everything reaches these functions
+                // through adjustor thunks and vtables, so the static listing
+                // shows a thunk and stops.
+                uintptr_t Caller = 0;
+                if (Point.Offset != 0)
+                {
+                    const uintptr_t* Stack = (const uintptr_t*)Exception->ContextRecord->Rsp;
+                    if (Stack != nullptr)
+                    {
+                        Caller = *Stack;
+                    }
+                }
+
                 Line = StringFormat(
-                    "  alcancado +0x%zx rcx=%016llx rdx=%016llx r8=%016llx r9=%016llx\n",
+                    "  alcancado +0x%zx de=+0x%llx rcx=%016llx rdx=%016llx r8=%016llx\n",
                     Point.Offset,
+                    (unsigned long long)(Caller >= s_base ? Caller - s_base : Caller),
                     (unsigned long long)Exception->ContextRecord->Rcx,
                     (unsigned long long)Exception->ContextRecord->Rdx,
-                    (unsigned long long)Exception->ContextRecord->R8,
-                    (unsigned long long)Exception->ContextRecord->R9);
+                    (unsigned long long)Exception->ContextRecord->R8);
             }
 
             Exception->ContextRecord->Rip = (DWORD64)Point.Address;
