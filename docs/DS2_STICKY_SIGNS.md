@@ -404,6 +404,11 @@ standing in Majula:
 and a Red Sign Soapstone sits on the ground in Majula with the prompt
 "Check your Summon Sign".
 
+Marcos is a second character on Steam id `011000010afd1a3a`, the same
+account Samuel belongs to. That matters for the follow-up rather than
+for this result: the two cannot summon each other, so the other side of
+a summon test has to be Chico, on `0110000140d6d6d1`.
+
 Both halves opened at once, which is the strongest evidence that this is
 the real gate rather than a coincidence:
 
