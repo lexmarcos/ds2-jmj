@@ -37,6 +37,9 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.cpp
     Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h
     Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.cpp
+    Hooks/DarkSouls2/DS2_SessionSlotsHook.h
+    Hooks/DarkSouls2/DS2_SessionSlotsHook.cpp
+    Hooks/DarkSouls2/DS2_SessionSlotPatchTable.h
     Hooks/DarkSouls2/DS2_TraceHook.h
     Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h

@@ -23,6 +23,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomTimerParamPatchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SessionSlotsHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_AreaProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_MultiPlayZoneProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ForceMultiPlayZoneHook.h"
@@ -160,6 +161,14 @@ bool Injector::Init()
             if (Config.DS2PatchPhantomTimers)
             {
                 Hooks.push_back(std::make_unique<DS2_PhantomTimerParamPatchHook>());
+            }
+
+            // Separate from the three above on purpose. Those open the closed
+            // areas; this one changes the shape of two game objects, and a
+            // wrong table there is worse than no multiplayer at all.
+            if (Config.DS2ExpandSessionSlots)
+            {
+                Hooks.push_back(std::make_unique<DS2_SessionSlotsHook>());
             }
 
             if (Config.DS2ProbeArea)

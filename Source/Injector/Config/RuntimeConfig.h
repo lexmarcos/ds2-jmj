@@ -43,6 +43,14 @@ public:
     // Value written to the active session timer when the patch is enabled.
     double DS2PhantomTimerSeconds = 4000.0;
 
+    // DS2-only: raise the number of players a session can hold from six to
+    // twelve. The six is the size of two fixed per-player arrays inside the
+    // game's own objects, so this grows those objects and moves the arrays;
+    // see docs/DS2_SESSION_SLOTS.md. Never tested with more than two players,
+    // because two Steam accounts on one machine cannot produce a third.
+    // Disabled by default.
+    bool DS2ExpandSessionSlots = false;
+
     // DS2-only exploratory probe: finds where the game keeps the id of the
     // area the player is in. Writes DS2_AreaProbe.log and changes nothing.
     bool DS2ProbeArea = false;

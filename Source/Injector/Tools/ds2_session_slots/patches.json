@@ -1,0 +1,1130 @@
+[
+ {
+  "offset": 5323997,
+  "length": 5,
+  "expected": "b9d0020000",
+  "patched": "b920060000",
+  "note": "multiplay object size",
+  "text": "mov    $0x2d0,%ecx"
+ },
+ {
+  "offset": 5324316,
+  "length": 5,
+  "expected": "b900250000",
+  "patched": "b900750000",
+  "note": "session object size",
+  "text": "mov    $0x2500,%ecx"
+ },
+ {
+  "offset": 5352143,
+  "length": 7,
+  "expected": "488db9a8010000",
+  "patched": "488db900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rdi"
+ },
+ {
+  "offset": 5352150,
+  "length": 7,
+  "expected": "488db1b8050000",
+  "patched": "488db1f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rsi"
+ },
+ {
+  "offset": 5352255,
+  "length": 7,
+  "expected": "488d99a8010000",
+  "patched": "488d9900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rbx"
+ },
+ {
+  "offset": 5352262,
+  "length": 7,
+  "expected": "488db9b8050000",
+  "patched": "488db9f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rdi"
+ },
+ {
+  "offset": 5352382,
+  "length": 7,
+  "expected": "488d99a8010000",
+  "patched": "488d9900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rbx"
+ },
+ {
+  "offset": 5352389,
+  "length": 7,
+  "expected": "488db9b8050000",
+  "patched": "488db9f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rdi"
+ },
+ {
+  "offset": 5352495,
+  "length": 7,
+  "expected": "488db9a8010000",
+  "patched": "488db900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rdi"
+ },
+ {
+  "offset": 5352502,
+  "length": 7,
+  "expected": "488db1b8050000",
+  "patched": "488db1f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rsi"
+ },
+ {
+  "offset": 5352627,
+  "length": 7,
+  "expected": "488d99a8010000",
+  "patched": "488d9900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rbx"
+ },
+ {
+  "offset": 5352634,
+  "length": 7,
+  "expected": "488db1b8050000",
+  "patched": "488db1f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rsi"
+ },
+ {
+  "offset": 5352971,
+  "length": 3,
+  "expected": "8d7504",
+  "patched": "8d750a",
+  "note": "constructor count",
+  "text": "lea    0x4(%rbp),%esi"
+ },
+ {
+  "offset": 5352980,
+  "length": 7,
+  "expected": "488d9ffc010000",
+  "patched": "488d9f54260000",
+  "note": "member field",
+  "text": "lea    0x1fc(%rdi),%rbx"
+ },
+ {
+  "offset": 5353072,
+  "length": 7,
+  "expected": "488d8fc0050000",
+  "patched": "488d8f00300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rdi),%rcx"
+ },
+ {
+  "offset": 5353165,
+  "length": 5,
+  "expected": "bd04000000",
+  "patched": "bd0a000000",
+  "note": "constructor count",
+  "text": "mov    $0x4,%ebp"
+ },
+ {
+  "offset": 5353435,
+  "length": 7,
+  "expected": "488d9d00250000",
+  "patched": "488d9dc0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rbp),%rbx"
+ },
+ {
+  "offset": 5353475,
+  "length": 7,
+  "expected": "488d9db8050000",
+  "patched": "488d9df02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rbp),%rbx"
+ },
+ {
+  "offset": 5353750,
+  "length": 7,
+  "expected": "488d8fa8010000",
+  "patched": "488d8f00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rdi),%rcx"
+ },
+ {
+  "offset": 5353787,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5353793,
+  "length": 7,
+  "expected": "488d9fc0050000",
+  "patched": "488d9f00300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rdi),%rbx"
+ },
+ {
+  "offset": 5353800,
+  "length": 7,
+  "expected": "488dbb401f0000",
+  "patched": "488dbbc0440000",
+  "note": "peer span",
+  "text": "lea    0x1f40(%rbx),%rdi"
+ },
+ {
+  "offset": 5354407,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5354493,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5354564,
+  "length": 7,
+  "expected": "4c8db1f0010000",
+  "patched": "4c8db148260000",
+  "note": "member field",
+  "text": "lea    0x1f0(%rcx),%r14"
+ },
+ {
+  "offset": 5354593,
+  "length": 7,
+  "expected": "488d8da8010000",
+  "patched": "488d8d00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rbp),%rcx"
+ },
+ {
+  "offset": 5354713,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5354773,
+  "length": 8,
+  "expected": "488b8428e8010000",
+  "patched": "488b842840260000",
+  "note": "member field",
+  "text": "mov    0x1e8(%rax,%rbp,1),%rax"
+ },
+ {
+  "offset": 5354865,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5354920,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5355026,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5355258,
+  "length": 7,
+  "expected": "488dae00250000",
+  "patched": "488daec0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rsi),%rbp"
+ },
+ {
+  "offset": 5355265,
+  "length": 7,
+  "expected": "488d9ec0050000",
+  "patched": "488d9e00300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rsi),%rbx"
+ },
+ {
+  "offset": 5355564,
+  "length": 4,
+  "expected": "4883fb05",
+  "patched": "4883fb0b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rbx"
+ },
+ {
+  "offset": 5355570,
+  "length": 7,
+  "expected": "4881c1a8010000",
+  "patched": "4881c100260000",
+  "note": "member field",
+  "text": "add    $0x1a8,%rcx"
+ },
+ {
+  "offset": 5355612,
+  "length": 7,
+  "expected": "488d97a8010000",
+  "patched": "488d9700260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rdi),%rdx"
+ },
+ {
+  "offset": 5356045,
+  "length": 7,
+  "expected": "488d9ea8010000",
+  "patched": "488d9e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rsi),%rbx"
+ },
+ {
+  "offset": 5356062,
+  "length": 7,
+  "expected": "4881c6b8050000",
+  "patched": "4881c6f02e0000",
+  "note": "member end",
+  "text": "add    $0x5b8,%rsi"
+ },
+ {
+  "offset": 5356578,
+  "length": 7,
+  "expected": "488d8ea8010000",
+  "patched": "488d8e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rsi),%rcx"
+ },
+ {
+  "offset": 5356609,
+  "length": 3,
+  "expected": "83fb05",
+  "patched": "83fb0b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%ebx"
+ },
+ {
+  "offset": 5356618,
+  "length": 7,
+  "expected": "488d8ea8010000",
+  "patched": "488d8e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rsi),%rcx"
+ },
+ {
+  "offset": 5356637,
+  "length": 7,
+  "expected": "8b842ef4010000",
+  "patched": "8b842e4c260000",
+  "note": "member field",
+  "text": "mov    0x1f4(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356650,
+  "length": 7,
+  "expected": "8b842ef8010000",
+  "patched": "8b842e50260000",
+  "note": "member field",
+  "text": "mov    0x1f8(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356660,
+  "length": 7,
+  "expected": "8b842efc010000",
+  "patched": "8b842e54260000",
+  "note": "member field",
+  "text": "mov    0x1fc(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356670,
+  "length": 7,
+  "expected": "8b842e00020000",
+  "patched": "8b842e58260000",
+  "note": "member field",
+  "text": "mov    0x200(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356680,
+  "length": 7,
+  "expected": "8b842e04020000",
+  "patched": "8b842e5c260000",
+  "note": "member field",
+  "text": "mov    0x204(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356690,
+  "length": 7,
+  "expected": "8b842e08020000",
+  "patched": "8b842e60260000",
+  "note": "member field",
+  "text": "mov    0x208(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356700,
+  "length": 7,
+  "expected": "8b842e0c020000",
+  "patched": "8b842e64260000",
+  "note": "member field",
+  "text": "mov    0x20c(%rsi,%rbp,1),%eax"
+ },
+ {
+  "offset": 5356793,
+  "length": 8,
+  "expected": "488b942ee8010000",
+  "patched": "488b942e40260000",
+  "note": "member field",
+  "text": "mov    0x1e8(%rsi,%rbp,1),%rdx"
+ },
+ {
+  "offset": 5356812,
+  "length": 8,
+  "expected": "0fb78c2e12020000",
+  "patched": "0fb78c2e6a260000",
+  "note": "member field",
+  "text": "movzwl 0x212(%rsi,%rbp,1),%ecx"
+ },
+ {
+  "offset": 5356820,
+  "length": 7,
+  "expected": "488d9634020000",
+  "patched": "488d968c260000",
+  "note": "member field",
+  "text": "lea    0x234(%rsi),%rdx"
+ },
+ {
+  "offset": 5356834,
+  "length": 7,
+  "expected": "8b8c2e14020000",
+  "patched": "8b8c2e6c260000",
+  "note": "member field",
+  "text": "mov    0x214(%rsi,%rbp,1),%ecx"
+ },
+ {
+  "offset": 5356844,
+  "length": 9,
+  "expected": "f30f10842e18020000",
+  "patched": "f30f10842e70260000",
+  "note": "member field",
+  "text": "movss  0x218(%rsi,%rbp,1),%xmm0"
+ },
+ {
+  "offset": 5356878,
+  "length": 7,
+  "expected": "8b8c2e30020000",
+  "patched": "8b8c2e88260000",
+  "note": "member field",
+  "text": "mov    0x230(%rsi,%rbp,1),%ecx"
+ },
+ {
+  "offset": 5356935,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5356948,
+  "length": 6,
+  "expected": "4805a8010000",
+  "patched": "480500260000",
+  "note": "member base (add)",
+  "text": "add    $0x1a8,%rax"
+ },
+ {
+  "offset": 5356989,
+  "length": 7,
+  "expected": "4881c1e8010000",
+  "patched": "4881c140260000",
+  "note": "member field",
+  "text": "add    $0x1e8,%rcx"
+ },
+ {
+  "offset": 5357013,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5357032,
+  "length": 6,
+  "expected": "4805a8010000",
+  "patched": "480500260000",
+  "note": "member base (add)",
+  "text": "add    $0x1a8,%rax"
+ },
+ {
+  "offset": 5357253,
+  "length": 7,
+  "expected": "498d8ea8010000",
+  "patched": "498d8e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%r14),%rcx"
+ },
+ {
+  "offset": 5357289,
+  "length": 7,
+  "expected": "498d8ea8010000",
+  "patched": "498d8e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%r14),%rcx"
+ },
+ {
+  "offset": 5357326,
+  "length": 3,
+  "expected": "83fb05",
+  "patched": "83fb0b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%ebx"
+ },
+ {
+  "offset": 5357572,
+  "length": 7,
+  "expected": "488db9f0010000",
+  "patched": "488db948260000",
+  "note": "member field",
+  "text": "lea    0x1f0(%rcx),%rdi"
+ },
+ {
+  "offset": 5357596,
+  "length": 7,
+  "expected": "488d96a8010000",
+  "patched": "488d9600260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rsi),%rdx"
+ },
+ {
+  "offset": 5357626,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5357632,
+  "length": 7,
+  "expected": "488d9ec0050000",
+  "patched": "488d9e00300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rsi),%rbx"
+ },
+ {
+  "offset": 5357639,
+  "length": 7,
+  "expected": "488dbb401f0000",
+  "patched": "488dbbc0440000",
+  "note": "peer span",
+  "text": "lea    0x1f40(%rbx),%rdi"
+ },
+ {
+  "offset": 5357839,
+  "length": 7,
+  "expected": "488d99c0050000",
+  "patched": "488d9900300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rcx),%rbx"
+ },
+ {
+  "offset": 5357849,
+  "length": 7,
+  "expected": "488dbb401f0000",
+  "patched": "488dbbc0440000",
+  "note": "peer span",
+  "text": "lea    0x1f40(%rbx),%rdi"
+ },
+ {
+  "offset": 5357887,
+  "length": 7,
+  "expected": "488d9ee8010000",
+  "patched": "488d9e40260000",
+  "note": "member field",
+  "text": "lea    0x1e8(%rsi),%rbx"
+ },
+ {
+  "offset": 5357953,
+  "length": 3,
+  "expected": "83ff05",
+  "patched": "83ff0b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%edi"
+ },
+ {
+  "offset": 5358051,
+  "length": 7,
+  "expected": "4c8da1a8010000",
+  "patched": "4c8da100260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%r12"
+ },
+ {
+  "offset": 5358058,
+  "length": 7,
+  "expected": "488db9b8050000",
+  "patched": "488db9f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rdi"
+ },
+ {
+  "offset": 5358308,
+  "length": 7,
+  "expected": "488d9da8010000",
+  "patched": "488d9d00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rbp),%rbx"
+ },
+ {
+  "offset": 5358315,
+  "length": 7,
+  "expected": "488db5b8050000",
+  "patched": "488db5f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rbp),%rsi"
+ },
+ {
+  "offset": 5358359,
+  "length": 7,
+  "expected": "488d9dc0050000",
+  "patched": "488d9d00300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rbp),%rbx"
+ },
+ {
+  "offset": 5358366,
+  "length": 7,
+  "expected": "488db500250000",
+  "patched": "488db5c0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rbp),%rsi"
+ },
+ {
+  "offset": 5358467,
+  "length": 7,
+  "expected": "488d81a8010000",
+  "patched": "488d8100260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rax"
+ },
+ {
+  "offset": 5358474,
+  "length": 7,
+  "expected": "4881c1b8050000",
+  "patched": "4881c1f02e0000",
+  "note": "member end",
+  "text": "add    $0x5b8,%rcx"
+ },
+ {
+  "offset": 5358541,
+  "length": 7,
+  "expected": "488d81a8010000",
+  "patched": "488d8100260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rax"
+ },
+ {
+  "offset": 5358548,
+  "length": 7,
+  "expected": "4881c1b8050000",
+  "patched": "4881c1f02e0000",
+  "note": "member end",
+  "text": "add    $0x5b8,%rcx"
+ },
+ {
+  "offset": 5358815,
+  "length": 7,
+  "expected": "488d99c0050000",
+  "patched": "488d9900300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rcx),%rbx"
+ },
+ {
+  "offset": 5358822,
+  "length": 7,
+  "expected": "488db900250000",
+  "patched": "488db9c0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rcx),%rdi"
+ },
+ {
+  "offset": 5358969,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5359034,
+  "length": 7,
+  "expected": "488d99a8010000",
+  "patched": "488d9900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rbx"
+ },
+ {
+  "offset": 5359041,
+  "length": 7,
+  "expected": "488db1b8050000",
+  "patched": "488db1f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rsi"
+ },
+ {
+  "offset": 5359151,
+  "length": 7,
+  "expected": "4881eba8010000",
+  "patched": "4881eb00260000",
+  "note": "member base (sub)",
+  "text": "sub    $0x1a8,%rbx"
+ },
+ {
+  "offset": 5359487,
+  "length": 7,
+  "expected": "488db9a8010000",
+  "patched": "488db900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rdi"
+ },
+ {
+  "offset": 5359494,
+  "length": 7,
+  "expected": "488db1b8050000",
+  "patched": "488db1f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rsi"
+ },
+ {
+  "offset": 5360097,
+  "length": 7,
+  "expected": "488d9ea8010000",
+  "patched": "488d9e00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rsi),%rbx"
+ },
+ {
+  "offset": 5360104,
+  "length": 7,
+  "expected": "4c8db6b8050000",
+  "patched": "4c8db6f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rsi),%r14"
+ },
+ {
+  "offset": 5360943,
+  "length": 7,
+  "expected": "488d99c0050000",
+  "patched": "488d9900300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rcx),%rbx"
+ },
+ {
+  "offset": 5360950,
+  "length": 7,
+  "expected": "488d8100250000",
+  "patched": "488d81c0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rcx),%rax"
+ },
+ {
+  "offset": 5361261,
+  "length": 7,
+  "expected": "488dbba8010000",
+  "patched": "488dbb00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rbx),%rdi"
+ },
+ {
+  "offset": 5361268,
+  "length": 7,
+  "expected": "4881c3b8050000",
+  "patched": "4881c3f02e0000",
+  "note": "member end",
+  "text": "add    $0x5b8,%rbx"
+ },
+ {
+  "offset": 5361824,
+  "length": 8,
+  "expected": "0fb6840e50020000",
+  "patched": "0fb6840ea8260000",
+  "note": "member field",
+  "text": "movzbl 0x250(%rsi,%rcx,1),%eax"
+ },
+ {
+  "offset": 5362903,
+  "length": 7,
+  "expected": "488d8fa8010000",
+  "patched": "488d8f00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rdi),%rcx"
+ },
+ {
+  "offset": 5362930,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5362974,
+  "length": 6,
+  "expected": "4805a8010000",
+  "patched": "480500260000",
+  "note": "member base (add)",
+  "text": "add    $0x1a8,%rax"
+ },
+ {
+  "offset": 5363007,
+  "length": 7,
+  "expected": "488d99a8010000",
+  "patched": "488d9900260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rcx),%rbx"
+ },
+ {
+  "offset": 5363014,
+  "length": 7,
+  "expected": "488db9b8050000",
+  "patched": "488db9f02e0000",
+  "note": "member end",
+  "text": "lea    0x5b8(%rcx),%rdi"
+ },
+ {
+  "offset": 5364434,
+  "length": 7,
+  "expected": "4881c3a8010000",
+  "patched": "4881c300260000",
+  "note": "member field",
+  "text": "add    $0x1a8,%rbx"
+ },
+ {
+  "offset": 5364510,
+  "length": 3,
+  "expected": "83ff05",
+  "patched": "83ff0b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%edi"
+ },
+ {
+  "offset": 5364689,
+  "length": 7,
+  "expected": "488db9c0050000",
+  "patched": "488db900300000",
+  "note": "peer field",
+  "text": "lea    0x5c0(%rcx),%rdi"
+ },
+ {
+  "offset": 5364696,
+  "length": 7,
+  "expected": "488da900250000",
+  "patched": "488da9c0740000",
+  "note": "peer end",
+  "text": "lea    0x2500(%rcx),%rbp"
+ },
+ {
+  "offset": 5364707,
+  "length": 5,
+  "expected": "be06000000",
+  "patched": "be0c000000",
+  "note": "player count",
+  "text": "mov    $0x6,%esi"
+ },
+ {
+  "offset": 5364857,
+  "length": 7,
+  "expected": "488d9f401f0000",
+  "patched": "488d9fc0440000",
+  "note": "peer span",
+  "text": "lea    0x1f40(%rdi),%rbx"
+ },
+ {
+  "offset": 5365182,
+  "length": 7,
+  "expected": "488dbba8010000",
+  "patched": "488dbb00260000",
+  "note": "member field",
+  "text": "lea    0x1a8(%rbx),%rdi"
+ },
+ {
+  "offset": 5365262,
+  "length": 4,
+  "expected": "4883f805",
+  "patched": "4883f80b",
+  "note": "member index bound",
+  "text": "cmp    $0x5,%rax"
+ },
+ {
+  "offset": 5369863,
+  "length": 7,
+  "expected": "488d9fb8000000",
+  "patched": "488d9f00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rdi),%rbx"
+ },
+ {
+  "offset": 5369931,
+  "length": 3,
+  "expected": "8d7005",
+  "patched": "8d700a",
+  "note": "constructor count",
+  "text": "lea    0x5(%rax),%esi"
+ },
+ {
+  "offset": 5370428,
+  "length": 7,
+  "expected": "488d9f68020000",
+  "patched": "488d9f18060000",
+  "note": "slot end",
+  "text": "lea    0x268(%rdi),%rbx"
+ },
+ {
+  "offset": 5370812,
+  "length": 6,
+  "expected": "41b806000000",
+  "patched": "41b80c000000",
+  "note": "player count",
+  "text": "mov    $0x6,%r8d"
+ },
+ {
+  "offset": 5370882,
+  "length": 4,
+  "expected": "458d4106",
+  "patched": "458d410c",
+  "note": "player count",
+  "text": "lea    0x6(%r9),%r8d"
+ },
+ {
+  "offset": 5371792,
+  "length": 7,
+  "expected": "488d8eb8000000",
+  "patched": "488d8e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rcx"
+ },
+ {
+  "offset": 5371820,
+  "length": 10,
+  "expected": "c786f800000003000000",
+  "patched": "c7864003000003000000",
+  "note": "slot field",
+  "text": "movl   $0x3,0xf8(%rsi)"
+ },
+ {
+  "offset": 5371926,
+  "length": 7,
+  "expected": "488d8eb8000000",
+  "patched": "488d8e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rcx"
+ },
+ {
+  "offset": 5371954,
+  "length": 10,
+  "expected": "c786f800000001000000",
+  "patched": "c7864003000001000000",
+  "note": "slot field",
+  "text": "movl   $0x1,0xf8(%rsi)"
+ },
+ {
+  "offset": 5372174,
+  "length": 7,
+  "expected": "488d9eb8000000",
+  "patched": "488d9e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rbx"
+ },
+ {
+  "offset": 5372181,
+  "length": 7,
+  "expected": "4881c668020000",
+  "patched": "4881c618060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rsi"
+ },
+ {
+  "offset": 5372404,
+  "length": 7,
+  "expected": "488d9eb8000000",
+  "patched": "488d9e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rbx"
+ },
+ {
+  "offset": 5372411,
+  "length": 7,
+  "expected": "4881c668020000",
+  "patched": "4881c618060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rsi"
+ },
+ {
+  "offset": 5372626,
+  "length": 7,
+  "expected": "488d9eb8000000",
+  "patched": "488d9e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rbx"
+ },
+ {
+  "offset": 5372633,
+  "length": 7,
+  "expected": "4881c668020000",
+  "patched": "4881c618060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rsi"
+ },
+ {
+  "offset": 5373538,
+  "length": 7,
+  "expected": "488d93b8000000",
+  "patched": "488d9300030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rbx),%rdx"
+ },
+ {
+  "offset": 5373545,
+  "length": 7,
+  "expected": "4881c368020000",
+  "patched": "4881c318060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rbx"
+ },
+ {
+  "offset": 5373706,
+  "length": 7,
+  "expected": "488dbeb8000000",
+  "patched": "488dbe00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rsi),%rdi"
+ },
+ {
+  "offset": 5373713,
+  "length": 7,
+  "expected": "488dae68020000",
+  "patched": "488dae18060000",
+  "note": "slot end",
+  "text": "lea    0x268(%rsi),%rbp"
+ },
+ {
+  "offset": 5374118,
+  "length": 7,
+  "expected": "498d9eb8000000",
+  "patched": "498d9e00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%r14),%rbx"
+ },
+ {
+  "offset": 5374125,
+  "length": 7,
+  "expected": "4d8dbe68020000",
+  "patched": "4d8dbe18060000",
+  "note": "slot end",
+  "text": "lea    0x268(%r14),%r15"
+ },
+ {
+  "offset": 5374923,
+  "length": 7,
+  "expected": "488d9fb8000000",
+  "patched": "488d9f00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rdi),%rbx"
+ },
+ {
+  "offset": 5374930,
+  "length": 7,
+  "expected": "4881c768020000",
+  "patched": "4881c718060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rdi"
+ },
+ {
+  "offset": 5375202,
+  "length": 6,
+  "expected": "41b806000000",
+  "patched": "41b80c000000",
+  "note": "player count",
+  "text": "mov    $0x6,%r8d"
+ },
+ {
+  "offset": 5375597,
+  "length": 7,
+  "expected": "83bff800000000",
+  "patched": "83bf4003000000",
+  "note": "slot field",
+  "text": "cmpl   $0x0,0xf8(%rdi)"
+ },
+ {
+  "offset": 5375606,
+  "length": 10,
+  "expected": "c787f800000002000000",
+  "patched": "c7874003000002000000",
+  "note": "slot field",
+  "text": "movl   $0x2,0xf8(%rdi)"
+ },
+ {
+  "offset": 5375691,
+  "length": 7,
+  "expected": "488d9fb8000000",
+  "patched": "488d9f00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rdi),%rbx"
+ },
+ {
+  "offset": 5375698,
+  "length": 7,
+  "expected": "4881c768020000",
+  "patched": "4881c718060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rdi"
+ },
+ {
+  "offset": 5375933,
+  "length": 7,
+  "expected": "83bff800000000",
+  "patched": "83bf4003000000",
+  "note": "slot field",
+  "text": "cmpl   $0x0,0xf8(%rdi)"
+ },
+ {
+  "offset": 5375942,
+  "length": 10,
+  "expected": "c787f800000003000000",
+  "patched": "c7874003000003000000",
+  "note": "slot field",
+  "text": "movl   $0x3,0xf8(%rdi)"
+ },
+ {
+  "offset": 5377604,
+  "length": 7,
+  "expected": "488d9fb8000000",
+  "patched": "488d9f00030000",
+  "note": "slot field",
+  "text": "lea    0xb8(%rdi),%rbx"
+ },
+ {
+  "offset": 5377611,
+  "length": 7,
+  "expected": "4881c768020000",
+  "patched": "4881c718060000",
+  "note": "slot end",
+  "text": "add    $0x268,%rdi"
+ }
+]

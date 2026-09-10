@@ -145,8 +145,10 @@ Worth finding where that table lives and what a present record contains.
 From the original brief, and unrelated to any of the above: arena
 selection in the loader.
 
-Raising the six-player cap is now mapped but not started, and it is a
-larger job than it sounded:
-[DS2_SESSION_SLOTS.md](DS2_SESSION_SLOTS.md). One question decides
-whether it is feasible at all — whether the world manager stores its
-players in a fixed array the same way the netcode does.
+Raising the six-player cap is written but completely untested. It ships
+behind `DS2ExpandSessionSlots`, off by default, and it changes the shape
+of two of the game's objects across 141 sites:
+[DS2_SESSION_SLOTS.md](DS2_SESSION_SLOTS.md). Two Steam accounts cannot
+produce a third player, so the only thing this machine can show is that
+a two-player session still forms with the patch on. Whether the protocol
+can even carry a seventh player is not known.

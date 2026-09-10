@@ -129,84 +129,109 @@ Around `14051fef0` a different object carries the same six:
 Not yet identified. It has to be inventoried the same way before
 anything is written.
 
-## What raising it to twelve would take
+## What was done
 
-Both arrays are inline, and one of them sits in the middle of the
-object, so growing them in place would move every field after `+0x5b8`.
-The way that avoids moving anything is to leave `[0, 0x2500)` exactly as
-it is and put both arrays past the old end:
+Both allocations grow and both arrays move past the old end of their
+object. Everything already in the object stays at the offset it has, the
+multiplay-state pointer at `+0x5b8` included; only the arrays themselves
+move.
 
-| | now | after |
+| | before | after |
 | --- | --- | --- |
-| allocation | `0x2500` | `0x7300` |
-| member array | `+0x1a8`, 5 × `0xd0` | `+0x2500`, 11 × `0xd0`, ends `0x2df0` |
-| peer array | `+0x5c0`, 5 × `0x640` | `+0x2e00`, 11 × `0x640`, ends `0x7280` |
-| `+0x5b8` | pointer | untouched |
+| session control size | `0x2500` | `0x7500` |
+| member array | `+0x1a8`, 5 x `0xd0` | `+0x2600`, 11 x `0xd0`, ends `0x2ef0` |
+| peer array | `+0x5c0`, 5 x `0x640` | `+0x3000`, 11 x `0x640`, ends `0x74c0` |
+| multiplay manager size | `0x2d0` | `0x620` |
+| slot array | `+0xb8`, 6 x `0x48` | `+0x300`, 11 x `0x48`, ends `0x618` |
 
-The old array regions become dead padding. Field offsets shift by a
-single constant per array, which keeps the patch mechanical.
+The new ranges deliberately do not overlap any old base or bound. A site
+missed by the inventory therefore reads or writes the region the arrays
+used to occupy, which is now dead padding inside a larger allocation:
+the failure is a phantom that does not appear, not a corrupted heap.
 
-Then: the constructor counts (`mov $0x4,%ebp` and the member array's
-equivalent), every end bound — written both as `+0x2500` on the object
-and as `lea 0x1f40(base)` on the array — every `cmp $0x5` index bound,
-the `6 -` budget, the three session slot counts, and the second object
-above.
+141 sites, all in one module plus the two allocation sizes:
 
-## The world side, which decides whether this is possible at all
+| count | what |
+| --- | --- |
+| 47 | member field, displacement moved by `+0x2458` |
+| 16 | member array end |
+| 18 | member index bound, `cmp $0x5` becomes `cmp $0xb` |
+| 4 | member base reached as object + index * stride |
+| 9 | peer field |
+| 6 | peer array end |
+| 4 | peer array span, `0x1f40` becomes `0x44c0` |
+| 18 | slot field on the multiplay manager |
+| 10 | slot array end |
+| 3 | constructor counts |
+| 4 | the plain sixes: the admission budget and three session slot counts |
+| 2 | the two allocation sizes |
 
-Everything above is the netcode. A seventh player also has to exist in
-the world, as a character the game draws and simulates, and if the world
-kept its players in another fixed inline array this would be a second
-relocation project of unknown size.
+Every one rewrites a displacement or an immediate in place, so no
+instruction changes length.
 
-It does not appear to. Three things were checked:
+### How the sites were found
 
-- `ChrNetworkDataCtrl` is allocated per character, on demand. The
-  RTTI walk gives its vftable at `0x1410e4818`; the only code that
-  writes that vftable is its constructor `FUN_140379750`, whose single
-  caller allocates `0x58` bytes from the heap and hangs the result off
-  `[chr+0x20]`:
+Not by hand. `Source/Injector/Tools/ds2_session_slots/` holds the two
+scripts that produce `patches.json`, and the table header is generated
+from it.
 
-      14031b517  mov $0x8,%edx         alignment
-      14031b520  lea 0x50(%rdx),%ecx   size 0x58
-      14031b523  call 0x140833320      allocator
-      14031b530  call 0x140379750      constructor
-      14031b535  mov %rax,0x20(%rbx)   stored on the character
+The hard part is telling an offset measured from the object from one
+measured from an entry: both fall in the same range, because an entry is
+smaller than the array. Straight-line taint on the disassembly is unsound
+here, and quietly so, because the compiler leaves epilogues in the middle
+of these functions and a linear walk applies their pops to code that is
+only reached by a jump. That silently lost the object in
+`FUN_14051ba70` and dropped 29 real sites.
 
-- the world's count of networked players is a walk of a `std::vector`,
-  not an index into a fixed array. `FUN_1404430d0` iterates
-  `[*mgr, mgr[1])` and counts entries whose type byte is `4`.
+What is stable instead is that the object is `this`: it arrives in RCX
+and stays in one register for the whole function. So the classifier works
+out which registers those are from the prologue, and every site it does
+**not** claim was then read individually against a scalar scan of the
+same ranges, to confirm it is an entry offset, a loop stride, or another
+object. Four false positives came out of that review and are named in the
+script: two reached a different global, one arrived through
+`obj->0x88`, and one was the stride of an unrelated container.
 
-- no other singleton in this family is big enough to hide a player
-  pool. The multiplay globals on `0x141616cf8` are allocated together in
-  `FUN_140513be0` at `0xa8`, `0x2d0`, `0x1b0`, `0x100`, `0x100`,
-  `0x2500`, `0x1a0`, `0xf0` and `0x2a0` bytes. The `0x2500` one is the
-  peer table above, and it is an order of magnitude larger than
-  anything else.
+### Applying it
 
-So the answer is that the six looks confined to the matching layer, and
-raising it is a patch rather than a rewrite.
+`DS2ExpandSessionSlots` in `Injector.config`, off by default. It is
+deliberately not folded into `DS2ForceMultiPlayZone`: that opens the
+closed areas, this changes the shape of two game objects, and a stale
+table here is worse than no multiplayer at all.
 
-That is "no fixed pool found where one would be expected", not "proved
-dynamic everywhere". Two things remain unchecked and would each be a
-surprise late in the work: the character spawn path itself, including
-whatever model and animation resources a phantom needs, and whether the
-protocol carries the player index in a field narrow enough to cap it
-below twelve.
+`DS2_SessionSlotsHook` verifies all 141 sites before writing any and
+writes nothing if one disagrees, because a half-applied layout change
+would leave the game reading its players out of two different places. If
+a write fails partway it rolls back what it already did.
 
 ## What can and cannot be verified here
 
 Two Steam accounts on one machine. Three or more players cannot be
-tested at all, so "it works with twelve" is not a result this setup can
-produce. What a patch could still be checked against:
+tested at all, so **"it works with twelve" is not a result this setup can
+produce, and nobody has produced it.** What can still be checked:
 
-- the object allocates at the new size, read live through the probe
-- slots 6 through 11 come out constructed — the constructor zeroes
-  `+0x40..+0x630` and clears `+0x5a8`, so entry 6 should read like
-  entry 1
+- the hook installs without reporting a mismatch, which proves all 141
+  sites still hold the bytes the table was generated against
+- the objects allocate at the new sizes, read live through the probe:
+  `chain mgr 1616cf8 20` and the size at `0x140513e1c`
+- slots 6 through 11 come out constructed. The peer constructor zeroes
+  `+0x40..+0x630` and clears `+0x5a8`, so entry 6 at `+0x3000 + 6*0x640`
+  should read like entry 1
 - `CreateLobby` receives 12, by breaking at `0x140a72d64` and logging
   `ebp`, or by capturing the 合計スロット数 log line
-- a two-player sign in Majula and in Heide still works, as the control
+- a two-player sign in Majula and in Heide still works, as the control.
+  This is the one that matters: if the relocation is wrong anywhere on
+  the path a single guest takes, it will fail here.
 
-Any patch ships behind its own config flag, off by default, with an
-expected-bytes check per site, the way `DS2_UnblockMultiPlayHook` does.
+## Still unknown
+
+- **Whether the protocol can carry more than six.** Nothing has checked
+  the width of the player index in the messages the clients exchange. If
+  it is three bits somewhere, twelve will not fit and no amount of room
+  in the arrays will help.
+- **The server.** DS3OS imposes no cap of its own - there is no
+  max-player check anywhere in the DS2 server - but it has never been
+  asked to broker a session larger than two.
+- **What twelve phantoms do to the game.** Rendering, animation budget,
+  the peer-to-peer traffic between twelve Steam clients, and the areas
+  themselves, which were built for six.
