@@ -304,6 +304,31 @@ and confirm it still holds the old value immediately before writing it**, and
 stay inside the game's own heap. Nothing was lost either time - the character
 had been saved through the menu - but the loop costs several minutes each time.
 
+## The item needs the player to be human
+
+This cost several hours and invalidated a run of measurements, so it belongs
+near the top of anything read next.
+
+**The Red Sign Soapstone is refused while the character is hollow.** Confirmed
+directly: the item stopped working in Heide, where it had worked repeatedly
+minutes before, and stayed refused across a reverted injector, cleared
+breakpoints and a reverted param. Using a Human Effigy - "Reverses hollowing" -
+brought it straight back, 8.5% against 0.2%.
+
+What made this hard to see is that it looks exactly like the Majula refusal:
+no animation, no message, nothing sent. The character had died on a fall, and
+every "refused" reading taken after that death says only that the character was
+hollow.
+
+**Every measurement in this document taken after that point is void**, which
+includes the tests of the permission mask at 63 and at 7 in both areas. They
+have to be run again on a human character. The findings above it - the zone
+system, the map id, the equalised param row, `SignEventAreaManager` - were all
+taken before the death and stand.
+
+Before trusting any result here: confirm the item works in Heide first. That is
+the baseline, it is cheap, and without it a refusal means nothing.
+
 ## Still open
 
 Nothing found so far separates Majula from Heide. Ruled out by direct
