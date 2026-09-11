@@ -1,9 +1,9 @@
 # Still to validate
 
 Multiplayer works in the closed areas, but "works" currently means: two
-players, on one machine, with two item types, in three of the game's
-thirty-one areas, up to the moment the phantom appears. Everything
-below is untested rather than known good.
+players, almost always on one machine, with two item types, in three of
+the game's thirty-one areas, up to the moment the phantom appears.
+Everything below is untested rather than known good.
 
 Ordered by what would hurt most if it turned out to be wrong.
 
@@ -45,16 +45,27 @@ plausibly where phantom limits, session length and matchmaking ranges
 live. If those turn out to be per-zone, the whole game is silently
 running on Heide's rules. Nobody has read that record.
 
-### One machine, one network path
-
-Both clients run on the same box, so every Steam peer-to-peer session
-so far has been loopback. Nothing is known about behaviour over a real
-connection, with real latency, between two machines, or through NAT.
-
-This is the single largest gap between "it works here" and "it works for
-players".
-
 ## Likely fine, but unverified
+
+### One pair across the internet
+
+Until 2026-09-11 both clients always ran on the same box, so every Steam
+peer-to-peer session was loopback. That day the first pair on two
+machines met: a Linux client and a Windows client on two different home
+connections, both started by `loader-main` against the production
+server. Both reported Majula inside the forced zone, so the area patch
+reached the Windows client too. The Linux player's Cracked Red Eye Orb
+found the Windows player as the only candidate, and the invasion landed:
+the phantom arrived in the Windows player's world.
+
+The server could not have shown that last part. The peer-to-peer
+session goes through Steam rather than the server, and the server logs
+nothing when one forms (`LogFirstMessageOfEachType` was off). The two
+clients reporting positions a few metres apart afterwards was suggestive
+and no more; the confirmation is the player's own account.
+
+Still untried: stricter NAT, worse latency, a summon rather than an
+invasion, any pair but that one.
 
 ### Only two item types
 
