@@ -10,6 +10,9 @@ name: Injector for Linux
 
 on:
   workflow_dispatch:
+  # Also callable, so the loader workflow builds the injector it ships inside
+  # the same run rather than fetching one from some unrelated earlier run.
+  workflow_call:
   push:
     paths:
       - 'Source/Injector/**'

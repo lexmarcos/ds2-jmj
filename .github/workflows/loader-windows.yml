@@ -1,0 +1,80 @@
+name: Loader for Windows
+
+# Builds ds2os-loader.exe and ships it with the injector it needs, as one
+# download a player unpacks and runs:
+#
+#   ds2os-loader.exe
+#   injector/Injector.exe
+#   injector/Injector.dll
+#
+# The loader looks for injector/ beside itself, so the layout is load bearing.
+#
+# The server it connects to is compiled in, the same way a local build reads
+# loader-main/.env. Here there is no .env - it is deliberately not in the
+# repository - so build.rs falls back to these two repository secrets:
+#
+#   DS2OS_SERVER_HOST  the server's public address, ASCII, at most 45 chars
+#   DS2OS_SERVER_KEY   its public key, the PEM file's contents as they are
+#
+# A missing or oversized value fails the build rather than producing a loader
+# that points nowhere or overruns the string the injector writes it over.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'loader-main/**'
+      - 'Source/LoaderLinux/crates/ds2os-core/**'
+      - 'Source/Injector/**'
+      - 'Source/InjectorLauncher/**'
+      - 'Source/Shared/**'
+      - '.github/workflows/loader-windows.yml'
+      - '.github/workflows/injector-linux.yml'
+
+jobs:
+  injector:
+    name: Injector
+    uses: ./.github/workflows/injector-linux.yml
+
+  loader:
+    name: ds2os-loader.exe
+    runs-on: windows-2022
+    needs: injector
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # iced and wgpu are most of the build time; this makes a re-run cheap.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: loader-main
+
+      - name: Build
+        env:
+          DS2OS_SERVER_HOST: ${{ secrets.DS2OS_SERVER_HOST }}
+          DS2OS_SERVER_KEY: ${{ secrets.DS2OS_SERVER_KEY }}
+        run: cargo build --release --locked --manifest-path loader-main/Cargo.toml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: injector
+          path: dist/injector
+
+      - name: Assemble
+        shell: bash
+        run: |
+          cp loader-main/target/release/ds2os-loader.exe dist/
+          # Symbols are for debugging the injector here, not for players.
+          rm -f dist/injector/*.pdb
+          for f in ds2os-loader.exe injector/Injector.exe injector/Injector.dll; do
+            [ -f "dist/$f" ] || { echo "::error::missing dist/$f"; exit 1; }
+          done
+          ls -lR dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds2os-loader-windows
+          if-no-files-found: error
+          path: dist/
