@@ -80,7 +80,7 @@ WorkingDirectory=/opt/ds2os
 Environment=LD_LIBRARY_PATH=/opt/ds2os
 StateDirectory=ds2os
 Environment=HOME=/var/lib/ds2os
-ExecStart=/opt/ds2os/Server
+ExecStart=/usr/bin/stdbuf -oL -eL /opt/ds2os/Server
 Restart=on-failure
 UMask=0077
 MemoryHigh=384M
@@ -91,7 +91,17 @@ ProtectHome=true
 ReadWritePaths=/opt/ds2os/Saved /opt/ds2os/steam_appid.txt
 ```
 
-Two lines in there are the result of the first start failing:
+Three lines in there are the result of the deployment going wrong first:
+
+**The log has to be line buffered.** Under systemd the server's stdout is
+not a terminal, so glibc holds it in 4 KB blocks and writes nothing until
+a block fills. The server looked silent for minutes while running
+normally: the last line in the journal was the Steam library's own, and
+every line the server logged after it sat in the buffer until the process
+exited. That is worse than no log, because a player connecting would not
+show up either, and the natural conclusion would be that nobody reached
+the server. `stdbuf -oL -eL` fixes it; the tell that it worked is a
+server line appearing while the process is still alive.
 
 **`HOME` must not be under `Saved/`.** The Steam API writes under `HOME`,
 and the obvious place for it is beside the server's state. But
