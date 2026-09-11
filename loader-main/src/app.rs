@@ -27,6 +27,13 @@ const IGNITION: Duration = Duration::from_millis(400);
 /// How long to wait for the injector to confirm before saying so.
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How often anything is looked at. Fast enough to follow a launch closely.
+const TICK: Duration = Duration::from_millis(400);
+
+/// The checks are cheap but not free, so while idle they run every fifth tick
+/// rather than every one.
+const CHECK_EVERY: u64 = 5;
+
 pub struct App {
     settings: Settings,
     phase: Phase,
@@ -35,6 +42,14 @@ pub struct App {
     ignited_at: Option<Instant>,
     panel_open: bool,
     fields: Fields,
+    /// Built once. `Handle::from_bytes` stamps a fresh id on every call, so
+    /// building it inside `view` makes the renderer treat each frame's logo as
+    /// a new image: decode the PNG again, upload a new texture, drop the last
+    /// one. That reads on screen as the logo flickering and vanishing.
+    logo: image::Handle,
+    /// Ticks since boot, so the checks can run less often than the frame that
+    /// follows the game.
+    ticks: u64,
 }
 
 #[derive(Default)]
@@ -85,6 +100,8 @@ impl App {
             panel_open: false,
             settings,
             fields,
+            logo: image::Handle::from_bytes(theme::LOGO),
+            ticks: 0,
         };
         app.recheck();
 
@@ -114,11 +131,10 @@ impl App {
     /// runs. Nothing here blocks — the fingerprint is cached and the logs are
     /// read from where they were left.
     pub fn subscription(&self) -> Subscription<Message> {
-        let period = match self.phase {
-            Phase::Starting { .. } | Phase::Playing => Duration::from_millis(400),
-            _ => Duration::from_secs(2),
-        };
-        iced::time::every(period).map(|_| Message::Tick)
+        // One period, always. Returning a different duration per phase makes
+        // iced tear the subscription down and build a new one every time the
+        // phase changes, which is churn for no gain.
+        iced::time::every(TICK).map(|_| Message::Tick)
     }
 
     pub fn update(&mut self, message: Message) {
@@ -135,9 +151,11 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.ticks = self.ticks.wrapping_add(1);
+
         if matches!(self.phase, Phase::Starting { .. } | Phase::Playing | Phase::Astray) {
             self.follow_game();
-        } else {
+        } else if self.ticks % CHECK_EVERY == 0 {
             self.recheck();
         }
     }
@@ -250,7 +268,7 @@ impl App {
     }
 
     fn home(&self) -> Element<'_, Message> {
-        let logo = image(image::Handle::from_bytes(theme::LOGO))
+        let logo = image(self.logo.clone())
             .width(Length::Fixed(600.0))
             .content_fit(iced::ContentFit::Contain);
 
