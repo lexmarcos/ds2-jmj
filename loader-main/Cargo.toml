@@ -22,3 +22,8 @@ thiserror = "2"
 # The same normaliser the loader uses at runtime, so the size assertion
 # measures the form that actually ships.
 ds2os-core = { path = "../Source/LoaderLinux/crates/ds2os-core" }
+
+[profile.release]
+# A loader is something people download. Symbols are 20 MB of it and nobody
+# debugs a release build from a stack trace they cannot symbolise anyway.
+strip = true

@@ -21,20 +21,36 @@ const KEY_MAX_BYTES: usize = 426;
 
 fn main() {
     println!("cargo:rerun-if-changed=.env");
-    for var in ["DS2OS_SERVER_HOST", "DS2OS_SERVER_KEY", "DS2OS_SERVER_NAME"] {
+    for var in [
+        "DS2OS_SERVER_HOST",
+        "DS2OS_SERVER_KEY",
+        "DS2OS_SERVER_KEY_FILE",
+        "DS2OS_SERVER_NAME",
+    ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
 
     let file = read_env_file();
     let host = value("DS2OS_SERVER_HOST", &file);
-    let key = value("DS2OS_SERVER_KEY", &file);
     let name = value("DS2OS_SERVER_NAME", &file);
+
+    // A PEM key is several lines and .env is one line per value, so pasting a
+    // key in means escaping every newline by hand. Pointing at the file the
+    // server wrote is the same thing without the ceremony.
+    let key_file = value("DS2OS_SERVER_KEY_FILE", &file);
+    let key = if key_file.is_empty() {
+        value("DS2OS_SERVER_KEY", &file)
+    } else {
+        println!("cargo:rerun-if-changed={key_file}");
+        fs::read_to_string(&key_file)
+            .unwrap_or_else(|error| panic!("não consegui ler {key_file}: {error}"))
+    };
 
     if host.is_empty() || key.is_empty() {
         panic!(
             "sem servidor embutido. Copie .env.example para .env e preencha \
-             DS2OS_SERVER_HOST e DS2OS_SERVER_KEY, ou passe as duas como \
-             variaveis de ambiente."
+             DS2OS_SERVER_HOST e uma de DS2OS_SERVER_KEY ou \
+             DS2OS_SERVER_KEY_FILE, ou passe as duas como variaveis de ambiente."
         );
     }
 
