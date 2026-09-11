@@ -162,6 +162,17 @@ scp bin/x64_release/server/Server root@<host>:/opt/ds2os/Server
 ssh root@<host> systemctl restart ds2os
 ```
 
+**A restart ends every session**, and the symptom looks like something
+else. The game service accepts a client only if its session token is in
+`AuthenticationStates` (`GameService.cpp`), a map held in memory and
+filled when the player authenticates. A restart empties it. A player who
+was already in the game keeps retrying with the old token, and the log
+fills with `Clients authentication token (0x...) does not appear to be
+valid` — which reads like a Steam or login failure and is neither. The
+player has to go back to the title screen, or restart the game, to log in
+again. So restart with nobody connected: the periodic status line says
+`0 players`.
+
 `config.json` and the keys survive, because they live in `Saved/default`
 and the build does not ship `Saved/`. That also means a change to a
 config *default* in `RuntimeConfig.h` — the welcome announcement, say —
