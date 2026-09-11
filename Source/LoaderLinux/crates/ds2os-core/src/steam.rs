@@ -55,6 +55,8 @@ pub struct GameInstall {
     pub game_type: GameType,
     /// Directory holding the game executable.
     pub install_dir: PathBuf,
+    /// Steam library this install was found in.
+    pub library: PathBuf,
     /// Proton prefix, present only once Steam has run the game at least once.
     pub prefix_path: Option<PathBuf>,
 }
@@ -84,12 +86,65 @@ impl GameInstall {
     pub fn drive_c(&self) -> Option<PathBuf> {
         self.prefix_path.as_ref().map(|prefix| prefix.join("drive_c"))
     }
+
+    /// The compat data directory, which is the prefix's parent.
+    ///
+    /// Proton wants this one in `STEAM_COMPAT_DATA_PATH` while Wine wants the
+    /// `pfx` inside it in `WINEPREFIX`; keeping both here stops call sites
+    /// from guessing which is which.
+    pub fn compatdata_dir(&self) -> Option<PathBuf> {
+        self.prefix_path
+            .as_ref()
+            .and_then(|prefix| prefix.parent())
+            .map(Path::to_path_buf)
+    }
+
+    /// Directory the game executable sits in, which is where it will be run
+    /// from and therefore where Steam looks for `steam_appid.txt`.
+    pub fn game_dir(&self) -> Option<PathBuf> {
+        self.executable()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    }
 }
 
 impl Steam {
     /// Finds a Steam installation, preferring the native one over Flatpak.
+    #[cfg(unix)]
     pub fn discover() -> Result<Self, SteamError> {
         Self::discover_in(&PathBuf::from(std::env::var("HOME").unwrap_or_default()))
+    }
+
+    /// Finds a Steam installation through the registry.
+    ///
+    /// The per-user key is the one Steam keeps current; the machine-wide key
+    /// is the installer's and survives a move, so it is only a fallback.
+    #[cfg(windows)]
+    pub fn discover() -> Result<Self, SteamError> {
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        use winreg::RegKey;
+
+        let per_user = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\\Valve\\Steam")
+            .ok()
+            .and_then(|key| key.get_value::<String, _>("SteamPath").ok());
+
+        let machine = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\\WOW6432Node\\Valve\\Steam")
+            .ok()
+            .and_then(|key| key.get_value::<String, _>("InstallPath").ok());
+
+        for candidate in [per_user, machine].into_iter().flatten() {
+            // Steam writes this one with forward slashes.
+            let root = PathBuf::from(candidate.replace('/', "\\"));
+            if root.join("steamapps").is_dir() {
+                return Ok(Self { root });
+            }
+        }
+
+        Err(SteamError::SteamNotFound(
+            r"HKCU\\Software\\Valve\\Steam\\SteamPath, HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam\\InstallPath"
+                .to_owned(),
+        ))
     }
 
     /// Finds a Steam installation belonging to a particular home directory.
@@ -97,6 +152,7 @@ impl Steam {
     /// A second Steam client, run with its own HOME, is a second logged-in
     /// account: separate credentials, separate steam id, and therefore a
     /// separate peer identity for the game's session layer.
+    #[cfg(unix)]
     pub fn discover_in(home: &Path) -> Result<Self, SteamError> {
         let candidates = [
             home.join(".steam/root"),
@@ -190,6 +246,7 @@ impl Steam {
                 app_id,
                 game_type,
                 install_dir,
+                library: library.clone(),
                 prefix_path: prefix.is_dir().then_some(prefix),
             });
         }

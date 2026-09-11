@@ -1,0 +1,29 @@
+[package]
+name = "ds2os-loader"
+version = "0.1.0"
+edition = "2021"
+description = "Loader do Dark Souls 2 Jamuja Edition"
+
+# Its own workspace on purpose: this crate is built for Windows too, and it
+# must not be dragged into the Linux-only dev harness next door.
+[workspace]
+
+[dependencies]
+ds2os-core = { path = "../Source/LoaderLinux/crates/ds2os-core" }
+# "image" is not a default feature and the logo is a PNG.
+# "image" for the logo; "tokio" because time::every needs an async backend.
+iced = { version = "0.14", features = ["image", "tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+thiserror = "2"
+
+[build-dependencies]
+# The same normaliser the loader uses at runtime, so the size assertion
+# measures the form that actually ships.
+ds2os-core = { path = "../Source/LoaderLinux/crates/ds2os-core" }
+
+[profile.release]
+# A loader is something people download. Symbols are 20 MB of it and nobody
+# debugs a release build from a stack trace they cannot symbolise anyway.
+strip = true
