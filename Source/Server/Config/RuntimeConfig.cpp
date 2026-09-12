@@ -325,6 +325,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(DS2_StickySigns);
     SERIALIZE_VAR(DS2_InvadeAnywhere);
     SERIALIZE_VAR(LogFirstMessageOfEachType);
+    SERIALIZE_VAR(PersistAuthTokens);
     SERIALIZE_VAR(PlayerStatusUploadInterval);
     SERIALIZE_VAR(PlayerCharacterUpdateSendDelay);
     SERIALIZE_VAR(PlayerStatusUploadSendDelay);

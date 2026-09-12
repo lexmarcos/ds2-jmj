@@ -162,16 +162,30 @@ scp bin/x64_release/server/Server root@<host>:/opt/ds2os/Server
 ssh root@<host> systemctl restart ds2os
 ```
 
-**A restart ends every session**, and the symptom looks like something
-else. The game service accepts a client only if its session token is in
-`AuthenticationStates` (`GameService.cpp`), a map held in memory and
-filled when the player authenticates. A restart empties it. A player who
-was already in the game keeps retrying with the old token, and the log
-fills with `Clients authentication token (0x...) does not appear to be
-valid` — which reads like a Steam or login failure and is neither. The
-player has to go back to the title screen, or restart the game, to log in
-again. So restart with nobody connected: the periodic status line says
-`0 players`.
+**A restart still interrupts everyone playing**, though less brutally
+than it used to. The game service accepts a client only if its session
+token is in `AuthenticationStates` (`GameService.cpp`). That map lives in
+memory, so a restart used to empty it: a player already in the game kept
+retrying with the old token, the log filled with `Clients authentication
+token (0x...) does not appear to be valid` — which reads like a Steam or
+login failure and is neither — and after about a minute the client gave
+up with "the connection to the game server was lost".
+
+`PersistAuthTokens`, on by default, writes those tokens to
+`Saved/<server>/auth_tokens.txt` every few seconds and reads them back on
+boot, skipping anything unused for five minutes. The log says
+`Restored N authentication token(s)` when it does. A client that
+reconnects after the restart is then accepted rather than refused.
+
+What persistence cannot fix is the reliable UDP stream: its sequence
+numbers live in the connection, the client carries on from where it was,
+and the new process answers `Received sequenced packet (type 4) before
+connection is established`. So a player who was **in the world** still has
+to go back to the title screen — the client logs in again on its way in —
+before they are really connected. A player already at the title only has
+to press start.
+
+Restarting with `0 players` in the status line still avoids all of it.
 
 `config.json` and the keys survive, because they live in `Saved/default`
 and the build does not ship `Saved/`. That also means a change to a
