@@ -90,8 +90,16 @@ extern "C" {
     fn libc_kill(pid: i32, sig: i32) -> i32;
 }
 
-/// Every pid whose command line contains `needle`. Used to notice the
-/// Steam-launched instance, which the harness does not start itself.
+/// Every pid actually running `needle`, by looking at whole arguments rather
+/// than at the command line as one string.
+///
+/// A substring search over the whole command line matches anything that merely
+/// *mentions* the executable: a `grep DarkSoulsII.exe`, an editor, another
+/// agent's shell. The harness then reports instances that do not exist, and
+/// "is the game already running" — the check that keeps a second launch from
+/// hanging forever on the prefix lock — answers yes when nothing is running.
+/// So an argument only counts when it ends in the name **and** carries a path
+/// separator, which a command line's own mention of the file never does.
 pub fn pids_matching(needle: &str) -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
@@ -102,15 +110,73 @@ pub fn pids_matching(needle: &str) -> Vec<u32> {
         let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
         };
+        if pid == std::process::id() {
+            continue;
+        }
         let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
             continue;
         };
-        if String::from_utf8_lossy(&cmdline).contains(needle) {
+        let runs_it = cmdline.split(|byte| *byte == 0).any(|argument| {
+            let argument = String::from_utf8_lossy(argument);
+            let argument = argument.trim_matches(['"', '\'']);
+            argument.ends_with(needle) && argument.contains(['/', '\\'])
+        });
+        if runs_it {
             found.push(pid);
         }
     }
     found.sort_unstable();
     found
+}
+
+/// One variable from a process's environment, when it is readable.
+pub fn env_of(pid: u32, key: &str) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{key}=");
+    raw.split(|byte| *byte == 0)
+        .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_owned))
+}
+
+/// The game processes themselves, without Proton's wrappers.
+///
+/// `pids_matching` is deliberately generous: stopping an instance has to take
+/// down the launcher and the helpers too, or the prefix stays locked. For
+/// *reporting* what is running, only the processes that are the game belong on
+/// screen, and the kernel's own name for a process says which those are.
+pub fn game_pids() -> Vec<u32> {
+    pids_matching("DarkSoulsII.exe")
+        .into_iter()
+        .filter(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .map(|name| name.trim() == "DarkSoulsII.exe")
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Waits for every one of `pids` to disappear.
+///
+/// Relaunching into a Proton prefix while anything still holds it means the new
+/// `proton run` blocks on `pfx.lock`, which has no timeout: the harness looks
+/// hung and the only way out is killing it by hand. Nothing may start until the
+/// last process is gone.
+pub fn wait_gone(pids: &[u32], timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let alive: Vec<u32> = pids
+            .iter()
+            .copied()
+            .filter(|pid| std::fs::metadata(format!("/proc/{pid}")).is_ok())
+            .collect();
+        if alive.is_empty() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 /// Whether anything is listening on a local TCP port.

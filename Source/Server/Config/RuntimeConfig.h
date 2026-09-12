@@ -345,6 +345,13 @@ public:
     // it maps which online subsystems a client actually uses where it stands.
     bool LogFirstMessageOfEachType = false;
 
+    // Keep authentication tokens across a restart, in Saved/<server>/auth_tokens.txt,
+    // so restarting the server does not log everybody out. Without it a client
+    // that was playing keeps offering a token the new process has never seen,
+    // is refused for about a minute, and then drops to the title screen with a
+    // message that reads like a Steam problem.
+    bool PersistAuthTokens = true;
+
     // How frequently (in seconds) the clients should send PlayerStatus updates. Increase this to 
     // reduce network bandwidth. Client clamps this to a minimum of 5.
     float PlayerStatusUploadInterval = 15.0f;

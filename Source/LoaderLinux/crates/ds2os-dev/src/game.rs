@@ -1,8 +1,10 @@
 //! Preparing the game directory and running the instances.
 //!
-//! Instance 1 is whatever Steam launches: the harness can configure it and
-//! notice when it appears, but it cannot start it, because Steam owns that.
-//! Instance 2 the harness starts itself, in its own Proton prefix.
+//! Both instances are started here, by running Proton directly. Steam does not
+//! have to be the one to launch instance 1: `proton run` in the prefix Steam
+//! already built for the game does the same thing, and it does it without a
+//! human clicking Play. The wrapper written into the launch options stays
+//! there for playing by hand.
 
 use std::path::{Path, PathBuf};
 
@@ -162,29 +164,60 @@ exec "${{args[@]}}"
     Ok(script)
 }
 
-/// Starts the second instance in its own Proton prefix, outside Steam.
+/// Starts one instance in a Proton prefix of its own, outside Steam.
+///
+/// Instance 1 runs in the prefix Steam built for the game, so its saves and
+/// settings are the ones the player already has. Instance 2 gets a prefix of
+/// the harness's own: the game refuses to run twice in one prefix, and a second
+/// prefix is what lets two clients share a machine.
 ///
 /// `second_steam` points at a home directory holding a second Steam client. The
 /// game's session layer is peer to peer over Steam and keyed on the account's
 /// steam id, so two instances sharing one account can never connect to each
 /// other. Pointing this instance at a second logged-in client is what gives it
 /// a distinct peer identity.
-pub fn launch_second(
+pub fn launch(
     environment: &Environment,
+    account: u8,
     second_steam: Option<&std::path::Path>,
 ) -> Result<u32, String> {
-    if let Some(pid) = proc::running(&paths::instance_pid(2), "Injector.exe") {
+    if account != 1 {
+        return launch_through_steam(environment, second_steam);
+    }
+
+    if let Some(pid) = proc::running(&paths::instance_pid(account), "Injector.exe") {
         return Ok(pid);
     }
 
-    let game_dir = environment.game_dir.clone().ok_or("Dark Souls II não está instalado")?;
-    let game_exe = environment.game_exe.clone().ok_or("não achei DarkSoulsII.exe")?;
+    let install = environment
+        .installs
+        .iter()
+        .find(|install| install.account == account)
+        .ok_or_else(|| format!("não achei a instalação da conta {account}"))?;
+
+    let game_dir = install.game_dir.clone();
+    let game_exe = install
+        .game_exe
+        .clone()
+        .ok_or("não achei DarkSoulsII.exe")?;
     let proton = environment.proton.clone().ok_or("nenhum Proton instalado")?;
     let steam_root = environment.steam_root.clone().ok_or("Steam não encontrada")?;
 
-    let prefix = paths::second_prefix();
+    let prefix = compat_data(environment, account)?;
     std::fs::create_dir_all(&prefix).map_err(|e| e.to_string())?;
     paths::ensure_dirs().map_err(|e| e.to_string())?;
+
+    // A second launch into a prefix something else still holds blocks on
+    // pfx.lock, which has no timeout: it looks like a hang with no way out but
+    // killing it. Refuse instead, and say what to do.
+    let busy = instance_pids(&prefix);
+    if !busy.is_empty() {
+        return Err(format!(
+            "o prefixo da instância {account} ainda tem {} processo(s) do jogo; \
+             rode `ds2os-dev game stop --instance {account}` antes",
+            busy.len()
+        ));
+    }
 
     let injector = game_dir.join("Injector.exe");
     if !injector.is_file() {
@@ -193,6 +226,7 @@ pub fn launch_second(
 
     // With a second Steam home, the client this instance talks to is the one
     // logged in as the other account, and HOME is what steamclient follows.
+    let second_steam = if account == 1 { None } else { second_steam };
     let (client_root, home) = match second_steam {
         Some(home) => {
             let root = ds2os_core::steam::Steam::discover_in(home)
@@ -220,13 +254,165 @@ pub fn launch_second(
         &["run", &injector.display().to_string(), &game_exe.display().to_string()],
         &game_dir,
         &env,
+        &paths::instance_log(account),
+        &paths::instance_pid(account),
+        false,
+    )
+    .map_err(|e| format!("não consegui iniciar a instância {account}: {e}"))?;
+
+    Ok(managed.pid)
+}
+
+/// Starts the second instance by asking its own Steam client to launch it.
+///
+/// **The second instance must come from the second Steam client.** The session
+/// between two players is peer to peer over Steam and keyed on the account's
+/// steam id, so two instances on one account can never reach each other: the
+/// server even renames the second connection `<id>_1`, and every test between
+/// them silently proves nothing. The two clients exist for exactly this.
+///
+/// Running Proton directly does not achieve it. Setting `HOME` points the Linux
+/// side at the other client, but Proton overwrites
+/// `STEAM_COMPAT_CLIENT_INSTALL_PATH` with the installation it was launched
+/// from, and that is the path the Windows side of steamclient follows: the game
+/// then logs in as the first account while everything else looks right.
+/// Measured, both ways, on this machine.
+fn launch_through_steam(
+    environment: &Environment,
+    second_steam: Option<&std::path::Path>,
+) -> Result<u32, String> {
+    let home = second_steam
+        .ok_or("nenhuma segunda Steam configurada; rode `ds2os-dev steam2 init`")?
+        .to_path_buf();
+    let steam = ds2os_core::steam::Steam::discover_in(&home)
+        .map_err(|e| format!("não achei uma Steam em {}: {e}", home.display()))?;
+    let root = steam.root().to_path_buf();
+
+    if let Ok(prefix) = compat_data(environment, 2) {
+        let running = instance_pids(&prefix);
+        if let Some(pid) = running.first() {
+            return Ok(*pid);
+        }
+    }
+
+    // Steam launches the game through whatever is in that account's launch
+    // options. Without the wrapper there the game starts with no injector at
+    // all, reaches FromSoftware's servers, and nothing in the harness would say
+    // so until a test quietly measured nothing.
+    if !wrapper_in_launch_options(&root) {
+        return Err(format!(
+            "a conta 2 não tem o wrapper nas opções de lançamento da Steam dela.\n               Abra a segunda Steam (`ds2os-dev steam2 run`), propriedades do Dark Souls II, \
+             e cole:\n  {}",
+            environment
+                .installs
+                .iter()
+                .find(|install| install.account == 2)
+                .map(|install| format!(
+                    "'{}' %command%",
+                    install.game_dir.join("ds2os-launch.sh").display()
+                ))
+                .unwrap_or_else(|| "<rode `ds2os-dev game prepare` primeiro>".to_owned())
+        ));
+    }
+
+    let managed = proc::spawn(
+        &root.join("steam.sh"),
+        &["-applaunch", &APP_ID.to_string()],
+        &root,
+        &[("HOME", home.display().to_string())],
         &paths::instance_log(2),
         &paths::instance_pid(2),
         false,
     )
-    .map_err(|e| format!("não consegui iniciar a segunda instância: {e}"))?;
+    .map_err(|e| format!("não consegui pedir à segunda Steam que abra o jogo: {e}"))?;
 
     Ok(managed.pid)
+}
+
+/// Whether any account in that Steam client launches the game through the
+/// harness's wrapper.
+fn wrapper_in_launch_options(root: &Path) -> bool {
+    let Ok(users) = std::fs::read_dir(root.join("userdata")) else {
+        return false;
+    };
+    users.flatten().any(|user| {
+        std::fs::read(user.path().join("config/localconfig.vdf"))
+            .map(|bytes| String::from_utf8_lossy(&bytes).contains("ds2os-launch.sh"))
+            .unwrap_or(false)
+    })
+}
+
+/// The Proton data directory one account plays in./// The Proton data directory one account plays in.
+///
+/// Account 1 plays in the one Steam built for the game, so its saves are the
+/// player's own. Account 2 plays in one belonging to the harness, because the
+/// game refuses to run twice in a single prefix.
+pub fn compat_data(environment: &Environment, account: u8) -> Result<PathBuf, String> {
+    environment
+        .installs
+        .iter()
+        .find(|install| install.account == account)
+        .and_then(|install| install.prefix.as_ref())
+        .and_then(|pfx| pfx.parent())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            format!(
+                "a conta {account} não tem prefixo Proton; abra o jogo uma vez pela Steam dela"
+            )
+        })
+}
+
+/// Every process of the game running in `compat_data`, whichever launched it.
+///
+/// Wine puts the prefix in the environment of everything it starts, which is
+/// the only thing that tells one instance's processes from the other's: both
+/// run the same executable, and only one of them was started by the harness.
+pub fn instance_pids(compat_data: &Path) -> Vec<u32> {
+    let prefix = compat_data.join("pfx");
+    // Proton hands the prefix down with a trailing slash, and the harness
+    // passes it without one. Comparing the two strings as they come back
+    // matched nothing, every instance looked like it belonged to no prefix,
+    // and "the window of account 2" quietly fell back to "the second window",
+    // which was account 1 — so a command aimed at one instance drove the other.
+    let prefix = trim_slash(&prefix.to_string_lossy());
+
+    proc::pids_matching("DarkSoulsII.exe")
+        .into_iter()
+        .chain(proc::pids_matching("Injector.exe"))
+        .filter(|pid| {
+            proc::env_of(*pid, "WINEPREFIX")
+                .map(|value| trim_slash(&value) == prefix)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn trim_slash(path: &str) -> String {
+    path.trim_end_matches('/').to_owned()
+}
+
+/// Stops one instance and does not return until its prefix is free.
+pub fn stop_instance(environment: &Environment, account: u8) -> Result<usize, String> {
+    let prefix = compat_data(environment, account)?;
+
+    let mut pids = instance_pids(&prefix);
+    if let Some(pid) = proc::running(&paths::instance_pid(account), "Injector.exe") {
+        pids.push(pid);
+    }
+    if pids.is_empty() {
+        return Ok(0);
+    }
+
+    let stopped = pids.len();
+    for pid in &pids {
+        proc::stop(*pid);
+    }
+    if !proc::wait_gone(&pids, std::time::Duration::from_secs(30)) {
+        return Err(format!(
+            "a instância {account} não morreu; um processo dela ainda segura o prefixo"
+        ));
+    }
+    Ok(stopped)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,8 +428,10 @@ pub struct InstancesStatus {
 pub fn instances_status(environment: &Environment) -> InstancesStatus {
     let game_dir = environment.game_dir.clone();
     InstancesStatus {
-        game_processes: proc::pids_matching("DarkSoulsII.exe"),
-        second_instance_pid: proc::running(&paths::instance_pid(2), "Injector.exe"),
+        game_processes: proc::game_pids(),
+        second_instance_pid: compat_data(environment, 2)
+            .ok()
+            .and_then(|prefix| instance_pids(&prefix).into_iter().next()),
         wrapper_installed: game_dir
             .as_ref()
             .map(|d| d.join("ds2os-launch.sh").is_file())

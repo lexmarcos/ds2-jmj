@@ -15,6 +15,14 @@ pub struct HarnessConfig {
     /// account's steam id, so two instances can only reach each other if they
     /// are two accounts.
     pub second_steam_home: Option<PathBuf>,
+
+    /// Which character each instance is supposed to load, by account.
+    ///
+    /// The game opens the last save played on that account, and one account
+    /// here holds more than one character, so "it loaded" and "it loaded the
+    /// right one" are different questions. With a name written down, the
+    /// harness can answer the second from the server's own log.
+    pub characters: std::collections::BTreeMap<u8, String>,
 }
 
 impl HarnessConfig {

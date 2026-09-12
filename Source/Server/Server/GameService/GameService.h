@@ -57,6 +57,14 @@ public:
     void CreateAuthToken(uint64_t AuthToken, const std::vector<uint8_t>& CwcKey);
     void RefreshAuthToken(uint64_t AuthToken);
 
+    // Authentication states live in memory, so a restart used to log everyone
+    // out: the client keeps presenting the token it already has, is refused,
+    // and only finds out a minute later, with a dialog that reads like a Steam
+    // failure. Writing them beside the rest of the server's state means a
+    // restart that takes a second is invisible to anyone playing.
+    void SaveAuthTokens();
+    void LoadAuthTokens();
+
     const std::vector<std::shared_ptr<GameManager>>& GetManagers() { return Managers; }
 
     void RegisterManager(std::shared_ptr<GameManager> Manager);
@@ -101,6 +109,10 @@ private:
     std::vector<std::shared_ptr<GameManager>> Managers;
 
     std::unordered_map<uint64_t, GameClientAuthenticationState> AuthenticationStates;
+
+    // When the tokens were last written, so writing is periodic rather than
+    // once per packet.
+    double LastAuthTokenSaveTime = 0.0;
 
     RSAKeyPair* ServerRSAKey;
 

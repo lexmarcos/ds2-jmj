@@ -21,6 +21,11 @@
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DebugObjects.h"
 
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+
 #include "Config/BuildConfig.h"
 #include "Config/RuntimeConfig.h"
 
@@ -64,11 +69,15 @@ bool GameService::Init()
 
     TrimDatabase();
 
+    LoadAuthTokens();
+
     return true;
 }
 
 bool GameService::Term()
 {
+    SaveAuthTokens();
+
     for (auto& Manager : Managers)
     {
         if (!Manager->Term())
@@ -79,6 +88,124 @@ bool GameService::Term()
     }
 
     return true;
+}
+
+namespace
+{
+    // One line per token: the token, the session key, and the wall clock time
+    // it was last refreshed. Wall clock, because the point is to survive a
+    // process that is about to lose its own clock.
+    std::filesystem::path AuthTokenPath(Server* ServerInstance)
+    {
+        return ServerInstance->GetSavedPath() / "auth_tokens.txt";
+    }
+
+    std::string ToHex(const std::vector<uint8_t>& Bytes)
+    {
+        std::string Result;
+        Result.reserve(Bytes.size() * 2);
+        for (uint8_t Byte : Bytes)
+        {
+            char Pair[3];
+            snprintf(Pair, sizeof(Pair), "%02x", Byte);
+            Result += Pair;
+        }
+        return Result;
+    }
+
+    std::vector<uint8_t> FromHex(const std::string& Text)
+    {
+        std::vector<uint8_t> Result;
+        if (Text.size() % 2 != 0)
+        {
+            return Result;
+        }
+        Result.reserve(Text.size() / 2);
+        for (size_t Index = 0; Index + 1 < Text.size(); Index += 2)
+        {
+            Result.push_back(static_cast<uint8_t>(std::stoul(Text.substr(Index, 2), nullptr, 16)));
+        }
+        return Result;
+    }
+};
+
+void GameService::SaveAuthTokens()
+{
+    if (!ServerInstance->GetConfig().PersistAuthTokens)
+    {
+        return;
+    }
+
+    std::filesystem::path Path = AuthTokenPath(ServerInstance);
+    std::ofstream Output(Path, std::ios::trunc);
+    if (!Output.is_open())
+    {
+        WarningS(GetName().c_str(), "Could not write authentication tokens to %s.", Path.string().c_str());
+        return;
+    }
+
+    double Now = GetSeconds();
+    int64_t WallNow = static_cast<int64_t>(time(nullptr));
+    for (auto& Pair : AuthenticationStates)
+    {
+        // Store when each token was last used, not when it was written, so a
+        // long session is not mistaken for a stale entry on the way back.
+        int64_t LastUsed = WallNow - static_cast<int64_t>(Now - Pair.second.LastRefreshTime);
+        Output << std::hex << Pair.second.AuthToken << " " << ToHex(Pair.second.CwcKey) << " "
+               << std::dec << LastUsed << "\n";
+    }
+}
+
+void GameService::LoadAuthTokens()
+{
+    if (!ServerInstance->GetConfig().PersistAuthTokens)
+    {
+        return;
+    }
+
+    std::filesystem::path Path = AuthTokenPath(ServerInstance);
+    std::ifstream Input(Path);
+    if (!Input.is_open())
+    {
+        return;
+    }
+
+    // A token nobody has used for a while belongs to a session that is over.
+    // The window is generous compared with the timeout that applies while the
+    // server runs, because the gap here is a restart, not idleness.
+    const int64_t MaximumAge = 300;
+    int64_t WallNow = static_cast<int64_t>(time(nullptr));
+
+    std::string TokenText;
+    std::string KeyText;
+    int64_t LastUsed = 0;
+    int Restored = 0;
+    while (Input >> TokenText >> KeyText >> LastUsed)
+    {
+        if (WallNow - LastUsed > MaximumAge)
+        {
+            continue;
+        }
+
+        GameClientAuthenticationState AuthState;
+        AuthState.AuthToken = std::strtoull(TokenText.c_str(), nullptr, 16);
+        AuthState.CwcKey = FromHex(KeyText);
+        // The clock this counts against started when this process did, so every
+        // restored token gets a full window rather than a fabricated history.
+        AuthState.LastRefreshTime = GetSeconds();
+        if (AuthState.AuthToken == 0 || AuthState.CwcKey.empty())
+        {
+            continue;
+        }
+
+        AuthenticationStates.insert({ AuthState.AuthToken, AuthState });
+        Restored++;
+    }
+
+    if (Restored > 0)
+    {
+        Log("Restored %i authentication token(s); clients from before the restart can carry on.", Restored);
+    }
 }
 
 void GameService::TrimDatabase()
@@ -176,6 +303,15 @@ void GameService::Poll()
         {
             iter++;
         }
+    }
+
+    // Written every few seconds rather than on every change: the file is tiny,
+    // and this way a server that is killed rather than stopped still leaves a
+    // recent copy behind.
+    if (GetSeconds() - LastAuthTokenSaveTime > 5.0)
+    {
+        LastAuthTokenSaveTime = GetSeconds();
+        SaveAuthTokens();
     }
 }
 

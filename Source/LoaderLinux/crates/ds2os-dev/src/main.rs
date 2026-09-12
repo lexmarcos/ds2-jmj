@@ -8,11 +8,13 @@
 //! Instance 1 belongs to Steam. The harness configures it and notices when it
 //! appears, but Steam is what starts it.
 
+mod drive;
 mod env;
 mod game;
 mod logs;
 mod pad;
 mod paths;
+mod probe;
 mod proc;
 mod screen;
 mod server;
@@ -24,6 +26,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use env::Environment;
+use probe::Where;
 
 #[derive(Parser)]
 #[command(
@@ -54,9 +57,18 @@ enum Command {
         /// Turn on the exploratory probe that locates the area id in memory
         #[arg(long)]
         probe_area: bool,
+        /// Start the games but leave them at the title screen
+        #[arg(long)]
+        no_enter: bool,
     },
     /// Stops the server and the second instance
     Down,
+    /// Restarts the server and puts every open instance back in the world
+    ///
+    /// The game is not closed: it saves, drops to the title screen and comes
+    /// back. Use it for a server change; a new injector still needs a real
+    /// relaunch, because the DLL is only read when the process starts.
+    Reload,
     /// One screen of what is running
     Status {
         #[arg(long)]
@@ -229,14 +241,44 @@ enum GameAction {
         #[arg(long)]
         force_zone: bool,
     },
-    /// Starts the second instance in its own Proton prefix
+    /// Starts the game, in its own Proton prefix, without Steam
     Launch {
         /// Home of the second Steam client; defaults to what steam2 saved
         #[arg(long)]
         steam_home: Option<PathBuf>,
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
     },
-    /// Stops the second instance
-    Stop,
+    /// Stops an instance and waits until its prefix is free
+    Stop {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+    },
+    /// Walks one instance from the title screen into the world
+    Enter {
+        /// 1 or 2, in the order the windows are listed
+        #[arg(long, default_value_t = 1)]
+        instance: u8,
+        /// Fail unless this character is the one that loads
+        #[arg(long)]
+        character: Option<String>,
+    },
+    /// Which character an instance should load, so a wrong save is noticed
+    Character {
+        /// 1 or 2
+        #[arg(long)]
+        instance: u8,
+        /// The character's name; leave it out to see what is remembered
+        name: Option<String>,
+    },
+    /// Saves and quits to the title screen, leaving the game running
+    Leave {
+        /// 1 or 2, in the order the windows are listed
+        #[arg(long, default_value_t = 1)]
+        instance: u8,
+    },
     /// Prints the line to paste into Steam's launch options
     Options,
     /// Asks the injector to watch the area address for a few seconds
@@ -325,8 +367,8 @@ fn run(command: Command) -> Result<(), String> {
 
     match command {
         Command::Doctor { json } => doctor(&environment, json),
-        Command::Up { timer_seconds, no_timer, probe_area } => {
-            up(&environment, timer_seconds, !no_timer, probe_area)
+        Command::Up { timer_seconds, no_timer, probe_area, no_enter } => {
+            up(&environment, timer_seconds, !no_timer, probe_area, no_enter)
         }
         Command::Down => {
             let stopped_game = game::stop_second();
@@ -335,6 +377,7 @@ fn run(command: Command) -> Result<(), String> {
             println!("  servidor:          {}", yes_no(stopped_server));
             Ok(())
         }
+        Command::Reload => reload(&environment),
         Command::Status { json } => status(&environment, json),
         Command::Server { action } => match action {
             ServerAction::Up => {
@@ -347,6 +390,21 @@ fn run(command: Command) -> Result<(), String> {
                 Ok(())
             }
             ServerAction::Restart => {
+                // A client that is in the world reconnects afterwards with the
+                // token it already had, which the server now keeps across a
+                // restart — so it is let in, but its packet stream cannot
+                // resume. It then looks connected and counts as a player while
+                // nothing it sends arrives. Saying so here is cheap; finding it
+                // out later, from a test that quietly reports nothing, is not.
+                for instance in drive::open_instances(&environment) {
+                    if drive::locate(&environment, instance) == Where::World {
+                        println!(
+                            "  atenção: a instância {instance} está no mundo. Reiniciar assim \
+                             deixa a conexão dela quebrada em silêncio; `ds2os-dev reload` sai \
+                             para o título antes e volta depois"
+                        );
+                    }
+                }
                 server::down();
                 let status = server::up(&environment)?;
                 print_server(&status);
@@ -369,16 +427,57 @@ fn run(command: Command) -> Result<(), String> {
                 }
                 prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone)
             }
-            GameAction::Launch { steam_home } => {
+            GameAction::Launch { steam_home, instance } => {
                 let home = resolve_second_steam(steam_home)?;
-                announce_account(home.as_deref());
-                let pid = game::launch_second(&environment, home.as_deref())?;
-                println!("  segunda instância iniciada, pid {pid}");
-                println!("  log: {}", paths::instance_log(2).display());
+                for account in accounts(&instance)? {
+                    if account == 2 {
+                        announce_account(home.as_deref());
+                    }
+                    let pid = game::launch(&environment, account, home.as_deref())?;
+                    println!("  instância {account} iniciada, pid {pid}");
+                    println!("    log: {}", paths::instance_log(account).display());
+                }
                 Ok(())
             }
-            GameAction::Stop => {
-                println!("  parada: {}", yes_no(game::stop_second()));
+            GameAction::Stop { instance } => {
+                for account in accounts(&instance)? {
+                    match game::stop_instance(&environment, account)? {
+                        0 => println!("  instância {account}: já estava parada"),
+                        n => println!("  instância {account}: {n} processo(s) encerrado(s)"),
+                    }
+                }
+                Ok(())
+            }
+            GameAction::Enter { instance, character } => {
+                let expected = character
+                    .or_else(|| drive::expected_character(&HarnessConfig::load(), instance));
+                let arrival =
+                    drive::enter(&environment, instance, expected.as_deref(), drive::DEFAULT_TIMEOUT)?;
+                println!(
+                    "  instância {instance}: {} no mundo em {:.0}s",
+                    arrival.character, arrival.seconds
+                );
+                Ok(())
+            }
+            GameAction::Character { instance, name } => {
+                let mut settings = HarnessConfig::load();
+                if let Some(name) = name {
+                    settings.characters.insert(instance, name.clone());
+                    settings.save()?;
+                    println!("  instância {instance}: {name}");
+                } else if settings.characters.is_empty() {
+                    println!("  nenhum personagem anotado");
+                    println!("  anote com: ds2os-dev game character --instance 1 Samuel");
+                } else {
+                    for (instance, name) in &settings.characters {
+                        println!("  instância {instance}: {name}");
+                    }
+                }
+                Ok(())
+            }
+            GameAction::Leave { instance } => {
+                let seconds = drive::leave(&environment, instance, drive::DEFAULT_TIMEOUT)?;
+                println!("  instância {instance}: de volta ao título em {seconds:.0}s");
                 Ok(())
             }
             GameAction::Options => {
@@ -416,6 +515,90 @@ fn run(command: Command) -> Result<(), String> {
             logs::show(&path, &logs::Options { lines, grep: grep.as_deref(), follow })
                 .map_err(|e| e.to_string())
         }
+    }
+}
+
+/// Turns `1`, `2` or `both` into the accounts to act on.
+fn accounts(choice: &str) -> Result<Vec<u8>, String> {
+    match choice.trim() {
+        "1" => Ok(vec![1]),
+        "2" => Ok(vec![2]),
+        "both" | "ambas" | "all" => Ok(vec![1, 2]),
+        other => Err(format!("instância inválida: {other} (use 1, 2 ou both)")),
+    }
+}
+
+/// Restarts the server and walks every open instance back into the world.
+///
+/// The order is the whole point. A client that logged in before the restart is
+/// holding a token the new server has never seen, and the game only asks for a
+/// new one on its way **into** the title screen. Quitting to the title first
+/// and restarting after leaves the client authenticated against a server that
+/// no longer exists: it then refuses to enter the world, retries for a minute
+/// and drops back to the title with "connection to the game server was lost".
+/// So: restart, then quit to title, then come back.
+fn reload(environment: &Environment) -> Result<(), String> {
+    let instances = drive::open_instances(environment);
+    if instances.is_empty() {
+        println!("servidor");
+        server::down();
+        let status = server::up(environment)?;
+        print_server(&status);
+        println!("\n  nenhuma instância aberta");
+        return Ok(());
+    }
+
+    // Ask each game where it is, before anything moves. The server's log cannot
+    // answer this: it is recreated on every start, and a client that lost its
+    // session plays on offline, which the server never sees at all.
+    let playing: Vec<u8> = instances
+        .iter()
+        .copied()
+        .filter(|account| drive::locate(environment, *account) == Where::World)
+        .collect();
+
+    // Out of the world first, then restart, then back in. The client asks for a
+    // session on its way *into* the title screen, so leaving first means it is
+    // already holding a valid one when the server comes back — and the server
+    // keeps its tokens across a restart (`PersistAuthTokens`), so that session
+    // is still good. Restarting first instead means the client is refused,
+    // retries for a minute, and drops out with "the connection to the game
+    // server was lost".
+    if !playing.is_empty() {
+        println!("saindo para o título");
+        for instance in &playing {
+            match drive::leave_now(environment, *instance, drive::DEFAULT_TIMEOUT, false) {
+                Ok(seconds) => println!("  instância {instance}: título em {seconds:.0}s"),
+                Err(error) => println!("  instância {instance}: {error}"),
+            }
+        }
+        println!();
+    }
+
+    println!("servidor");
+    server::down();
+    let status = server::up(environment)?;
+    print_server(&status);
+
+    println!("\nvoltando ao mundo");
+    let settings = HarnessConfig::load();
+    let mut failure = None;
+    for instance in &instances {
+        let expected = drive::expected_character(&settings, *instance);
+        match drive::enter(environment, *instance, expected.as_deref(), drive::DEFAULT_TIMEOUT) {
+            Ok(arrival) => println!(
+                "  instância {instance}: {} no mundo em {:.0}s",
+                arrival.character, arrival.seconds
+            ),
+            Err(error) => {
+                println!("  instância {instance}: {error}");
+                failure.get_or_insert(error);
+            }
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
@@ -750,6 +933,7 @@ fn up(
     timer_seconds: f64,
     timer_patch: bool,
     probe_area: bool,
+    no_enter: bool,
 ) -> Result<(), String> {
     let problems = environment.problems();
     if !problems.is_empty() {
@@ -776,22 +960,48 @@ fn up(
     println!("\njogo");
     prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, false)?;
 
-    println!("\nopções de lançamento");
-    print_launch_options(environment);
-
-    println!("\nfalta você");
+    println!("\ninstâncias");
     if environment.installs.len() < 2 {
         println!("  só uma conta configurada. As duas instâncias precisam de contas Steam");
         println!("  diferentes, senão a sessão PvP entre elas não conecta.");
         println!("  rode: ds2os-dev steam2 init");
-    } else {
-        println!("  1. cole a linha da conta 1 nas opções de lançamento do DS2 nessa Steam");
-        println!("  2. cole a linha da conta 2 nas opções de lançamento da OUTRA Steam");
-        println!("     (abra-a com: ds2os-dev steam2 run)");
-        println!("  3. dê Play nas duas");
-    println!("     (o gamepad virtual já está no ar, então os jogos vão enxergá-lo)");
     }
-    println!("  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
+
+    let home = resolve_second_steam(None)?;
+    let mut started = Vec::new();
+    for install in &environment.installs {
+        let account = install.account;
+        match game::launch(environment, account, home.as_deref()) {
+            Ok(pid) => {
+                println!("  conta {account}: pid {pid}");
+                started.push(account);
+            }
+            Err(error) => println!("  conta {account}: {error}"),
+        }
+    }
+
+    if no_enter || started.is_empty() {
+        println!("\n  os jogos ficam no título; `ds2os-dev game enter --instance N` entra");
+        println!("  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
+        return Ok(());
+    }
+
+    // Both were started before anything is driven, so the two boots overlap:
+    // the second is already at its title screen by the time the first is in the
+    // world. Driving is serial because there is one pad and one focus.
+    println!("\nno mundo");
+    let settings = HarnessConfig::load();
+    for account in started {
+        let expected = drive::expected_character(&settings, account);
+        match drive::enter(environment, account, expected.as_deref(), drive::DEFAULT_TIMEOUT) {
+            Ok(arrival) => println!(
+                "  conta {account}: {} em {:.0}s",
+                arrival.character, arrival.seconds
+            ),
+            Err(error) => println!("  conta {account}: {error}"),
+        }
+    }
+    println!("\n  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
     Ok(())
 }
 
