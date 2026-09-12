@@ -35,6 +35,9 @@ pub struct Pose {
     pub z: f32,
     pub facing_x: f32,
     pub facing_z: f32,
+    /// Which sample this is. Two reads with the same tick are the same
+    /// reading, however much time passed between them.
+    pub tick: u64,
 }
 
 fn state_path(install_dir: &Path) -> PathBuf {
@@ -45,7 +48,8 @@ fn state_path(install_dir: &Path) -> PathBuf {
 /// what the injector writes when the chain does not resolve.
 pub fn read(install_dir: &Path) -> Option<Pose> {
     let text = std::fs::read_to_string(state_path(install_dir)).ok()?;
-    let mut parts = text.split_whitespace();
+    let fields: Vec<&str> = text.split_whitespace().collect();
+    let mut parts = fields.iter();
     let mut next = || parts.next().and_then(|v| v.parse::<f32>().ok());
     let pose = Pose {
         x: next()?,
@@ -53,6 +57,9 @@ pub fn read(install_dir: &Path) -> Option<Pose> {
         z: next()?,
         facing_x: next()?,
         facing_z: next()?,
+        // The pointer sits between the facing and the tick and is of no use
+        // here - it is the same in both instances.
+        tick: fields.last().and_then(|v| v.parse::<u64>().ok())?,
     };
 
     // While an area loads, the chain resolves but everything in it is still
@@ -122,11 +129,17 @@ pub fn walk_to(
     let mut yaw: f32 = 0.0;
     let mut have_yaw = false;
 
-    let first = read(install_dir).ok_or("o jogo não está publicando posição")?;
+    let first = fresh(install_dir, 0, Duration::from_secs(5))
+        .ok_or("o jogo não está publicando posição")?;
     let mut previous = first;
+    let mut sent: Option<f32> = None;
 
     loop {
-        let pose = match read(install_dir) {
+        // Never measure against a reading that has not been taken since the
+        // last burst: a repeated sample looks exactly like a character that
+        // did not move, and that mistake reported a walk as stuck while it was
+        // standing on its target.
+        let pose = match fresh(install_dir, previous.tick, Duration::from_secs(3)) {
             Some(pose) => pose,
             None => return Ok(Outcome::LostPlayer { steps }),
         };
@@ -147,68 +160,82 @@ pub fn walk_to(
             return Ok(Outcome::TimedOut { steps, distance });
         }
 
-        // What the last burst actually produced, against what it asked for.
-        if steps > 0 {
+        if let Some(asked) = sent {
             let moved_x = pose.x - previous.x;
             let moved_z = pose.z - previous.z;
             let moved = (moved_x * moved_x + moved_z * moved_z).sqrt();
             if moved < 0.15 {
                 stalled += 1;
-                if stalled >= 4 {
+                if stalled >= 5 {
                     return Ok(Outcome::Stuck { steps, distance });
                 }
             } else {
                 stalled = 0;
-                // The rotation that takes the stick direction to the world
-                // direction. Smoothed, because a single burst that clipped a
-                // wall would otherwise throw the next one off.
-                let wanted = last_requested_angle(&previous, target);
+                // The rotation that takes what was asked for to what happened.
+                // It has to be the angle actually sent, not the one aimed at
+                // the target, because a sidestep sends something else.
                 let got = moved_z.atan2(moved_x);
-                let sample = wrap(got - wanted);
+                let sample = wrap(got - asked);
                 yaw = if have_yaw { wrap(yaw + 0.6 * wrap(sample - yaw)) } else { sample };
                 have_yaw = true;
             }
         }
 
         // Desired world direction, rotated back into stick space.
-        let world = dz.atan2(dx);
-        let stick = world - yaw;
+        let mut stick = wrap(dz.atan2(dx) - yaw);
 
-        // A stalled walk tries a sidestep before giving up: most walls here are
-        // cleared by a metre of strafe, and the alternative is a dead test.
-        let stick = if stalled > 0 {
-            stick + std::f32::consts::FRAC_PI_2 * if stalled % 2 == 0 { 1.0 } else { -1.0 }
+        // A stall tries a sidestep before giving up: most walls here are a
+        // metre of strafe from being cleared, and the alternative is a dead
+        // test.
+        if stalled > 0 {
+            let side = if stalled % 2 == 0 { 1.0 } else { -1.0 };
+            stick = wrap(stick + side * std::f32::consts::FRAC_PI_2);
+        }
+
+        // Shorter steps close in, or the walk paces back and forth over the
+        // target: the first attempt overshot 1.6 m into 1.8 m.
+        let burst = if distance < 3.0 {
+            Duration::from_millis((plan.burst.as_millis() as u64) / 2)
         } else {
-            stick
+            plan.burst
         };
 
-        // The pad takes x right and y up-negative, which is why the z component
-        // is negated on the way out.
-        let sx = stick.cos();
-        let sy = stick.sin();
+        // The pad takes x right and y up-negative, which is why the angle's
+        // sine goes out as the y component unchanged: both are screen-down
+        // positive here.
         screen::focus(&window)?;
         pad::send(
             1,
             &format!(
                 "stick l {:.3} {:.3} {}",
-                sx.clamp(-1.0, 1.0),
-                sy.clamp(-1.0, 1.0),
-                plan.burst.as_millis()
+                stick.cos().clamp(-1.0, 1.0),
+                stick.sin().clamp(-1.0, 1.0),
+                burst.as_millis()
             ),
         )
         .map_err(|e| format!("conta {account}: {e}"))?;
 
+        sent = Some(stick);
         previous = pose;
         steps += 1;
-        std::thread::sleep(Duration::from_millis(120));
     }
 }
 
-/// The world angle the previous burst was aimed at, recomputed from where the
-/// character stood then. Keeping it out of the loop state means the estimate
-/// never drifts from a value nobody can check.
-fn last_requested_angle(from: &Pose, target: (f32, f32)) -> f32 {
-    (target.1 - from.z).atan2(target.0 - from.x)
+/// Reads a sample newer than `after`, or gives up. Everything the walk decides
+/// hangs on this: a stale reading is not a slow one, it is a wrong one.
+fn fresh(install_dir: &Path, after: u64, timeout: Duration) -> Option<Pose> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(pose) = read(install_dir) {
+            if pose.tick > after {
+                return Some(pose);
+            }
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
 }
 
 fn wrap(angle: f32) -> f32 {
