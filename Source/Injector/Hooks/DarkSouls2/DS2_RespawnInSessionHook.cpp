@@ -72,6 +72,13 @@ namespace
     constexpr size_t kSessionPosition = 0x1a4;
     constexpr size_t kStatePlaying = 7;
 
+    // Why the session layer is being asked to act. Measured: 2 is "the guest
+    // died". The host dying reaches this same terminal on the guest's client
+    // with a different one, and there is nothing to save in that case - the
+    // session ends either way, and swallowing the goodbye only leaves the host
+    // hanging on a farewell that never comes. It did, for good.
+    constexpr uint32_t kReasonGuestDied = 2;
+
     struct WarpRequest
     {
         uint32_t Kind;
@@ -143,7 +150,8 @@ namespace
     {
         void* Session = s_session.load();
 
-        bool Redirect = s_enabled.load() && Record != nullptr && Session != nullptr;
+        bool Redirect = s_enabled.load() && Record != nullptr && Session != nullptr &&
+                        Reason == kReasonGuestDied;
         uint32_t State = 0;
         unsigned Role = 0xff;
 
@@ -157,8 +165,10 @@ namespace
 
         if (!Redirect)
         {
-            Append(StringFormat("  morte de fantasma: motivo=%u estado=%u papel=%u -> original\n",
-                Reason, State, Role));
+            Append(StringFormat(
+                "  morte de fantasma: motivo=%u estado=%u papel=%u -> original%s\n",
+                Reason, State, Role,
+                (s_enabled.load() && Reason != kReasonGuestDied) ? " (nao foi o convidado que morreu)" : ""));
             s_original_death(Record, Reason);
             return;
         }
@@ -228,9 +238,9 @@ namespace
         }
 
         Append(StringFormat(
-            "  morte de fantasma: papel=%u mapa=%08x sabor=%u destino=%.2f,%.2f,%.2f "
+            "  morte de fantasma: motivo=%u papel=%u mapa=%08x sabor=%u destino=%.2f,%.2f,%.2f "
             "flag=%u [+0x24ac]=%08x [+0x24b1]=%02x portao=%d%s aceito=%u\n",
-            Role, Request.Map, (unsigned)Request.Flavour,
+            Reason, Role, Request.Map, (unsigned)Request.Flavour,
             Request.X, Request.Y, Request.Z, (unsigned)Flag,
             EntryState, (unsigned)EntryFlags, Saved, Lift ? " (erguido)" : "",
             (unsigned)Accepted));
