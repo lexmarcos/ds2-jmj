@@ -176,13 +176,17 @@ So: **`game stop` while a session is live costs a strike.** End the session
 first (a death, the timer). If a character suddenly cannot place a sign, look
 at its screen before measuring anything.
 
-**And the M2 experiment itself costs a strike.** Measured 12/09: Chico placed
-sign 1001 without trouble at 19:26, the seamless-respawn test ran at 19:31,
-and by 19:40 he could not place a sign and had stopped polling for them
-entirely. Nothing else happened in between. From the game's side that is fair
-— a guest who refuses the session teardown and then leaves *is* an illegal
-disconnect — but it means **every run of this experiment burns the guest**,
-and there are only so many Bones of Order in a playthrough. We spent both.
+**A co-op test can cost a strike, and the guest is who pays.** Measured
+12/09: Chico placed sign 1001 without trouble at 19:26, a seamless-respawn
+test ran at 19:31, and by 19:40 he could not place a sign and had stopped
+polling for them entirely. From the game's side that is fair — a guest who
+refuses the session teardown and then leaves *is* an illegal disconnect.
+
+It is **not** every run, though: a later test that ended with the session
+collapsing on its own left him able to place signs immediately afterwards. The
+runs that burned a character were the ones that left a session wedged and were
+cleaned up by killing the client. Still, assume a test can cost one, because
+there are only so many Bones of Order in a playthrough and we spent both.
 
 The cure is not an item, it is the save. The private server keeps its own
 (`EnableSeperateSaveFiles`), so the whole thing is one file per account:
