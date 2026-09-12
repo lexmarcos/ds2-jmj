@@ -74,9 +74,12 @@ namespace
 
     // The arrival handler's very first test: `*(char*)(*(session+0x108)+8)`.
     // Nonzero and it does not arrive at all - it goes straight to
-    // EndSession(0x13), which costs a staging and says nothing. So it is read
-    // on the way past a real join, to learn what it holds there, and read
-    // again before any replay, which is refused if it disagrees.
+    // EndSession(0x13), which costs a staging and says nothing.
+    //
+    // Measured 12/09: **0 on a real join, 1 at the instant the guest dies**.
+    // So the replay cannot simply be issued; it has to wait for whatever this
+    // is to pass. Whether it ever passes while the player is dead is the one
+    // thing left to find out, and waiting is how to ask.
     constexpr size_t kArriveGuardOwner = 0x108;
     constexpr size_t kArriveGuardByte = 8;
 
@@ -200,6 +203,12 @@ namespace
     // a few seconds afterwards instead of guessing.
     std::atomic<int> s_trace{ 0 };
     uint32_t s_trace_last = 0xffffffff;
+    // How long to hold the replay waiting for the guard to clear, in frames,
+    // and what the guard last read - so the wait reports the value changing
+    // rather than one line per frame.
+    constexpr int kGuardWaitFrames = 1800;
+    int s_guard_waited = 0;
+    uint8_t s_guard_last = 0xff;
 
     using Warp_p = uint8_t(*)(void* Context, WarpRequest* Request, uint8_t Flag);
 
@@ -301,6 +310,9 @@ namespace
 
         if (s_rejoin.load())
         {
+            s_guard_waited = 0;
+            s_guard_last = 0xff;
+
             if (!s_payload_valid.load())
             {
                 Append("  reentrada pedida mas nenhum convite foi visto; deixando a morte normal seguir\n");
@@ -418,20 +430,31 @@ namespace
 
             if (State == kStateArriving && s_payload_valid.load())
             {
-                s_pending_arrive.store(false);
-
                 const uint8_t Guard = ReadArriveGuard(Session);
+                if (Guard != s_guard_last)
+                {
+                    s_guard_last = Guard;
+                    Append(StringFormat("  guarda da chegada = %02x apos %d quadros\n",
+                        (unsigned)Guard, s_guard_waited));
+                }
+
                 if (Guard != 0)
                 {
-                    // It would not arrive; it would end the session with 0x13
-                    // and take the staging with it. Better to say so - and
-                    // still let the frame run, which a bare return would not.
-                    Append(StringFormat(
-                        "  guarda da chegada = %02x; a chegada seria recusada. Nao repetindo.\n",
-                        (unsigned)Guard));
+                    // Not yet. The arrival would go straight to
+                    // EndSession(0x13) and take the staging with it, so the
+                    // replay waits - and gives up out loud rather than
+                    // silently sitting armed.
+                    if (++s_guard_waited >= kGuardWaitFrames)
+                    {
+                        s_pending_arrive.store(false);
+                        Append(StringFormat(
+                            "  a guarda ficou em %02x por %d quadros; desistindo da repeticao\n",
+                            (unsigned)Guard, s_guard_waited));
+                    }
                 }
                 else
                 {
+                    s_pending_arrive.store(false);
                     uint32_t Payload[kPayloadWords];
                     memcpy(Payload, s_payload, sizeof(Payload));
 
