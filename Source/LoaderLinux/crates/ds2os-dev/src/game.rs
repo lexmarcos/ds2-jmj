@@ -47,6 +47,7 @@ pub fn prepare(
     area_address: Option<String>,
     probe_zone: bool,
     force_zone: bool,
+    remove_fog: bool,
 ) -> Result<Prepared, String> {
     let game_dir = install.game_dir.clone();
     let server_paths = environment
@@ -86,6 +87,7 @@ pub fn prepare(
         DS2AreaAddress: area_address.unwrap_or_default(),
         DS2ProbeMultiPlayZone: probe_zone,
         DS2ForceMultiPlayZone: force_zone,
+        DS2RemovePhantomFog: remove_fog,
         DS2ForcedZoneId: 103110,
     };
     let injector_config = config

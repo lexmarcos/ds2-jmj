@@ -28,6 +28,8 @@ pub fn injector_config() -> InjectorConfig {
         EnableSeperateSaveFiles: true,
 
         DS2ForceMultiPlayZone: true,
+        // Not proven yet: it is an experiment, and players get proven things.
+        DS2RemovePhantomFog: false,
         DS2ForcedZoneId: 103110,
         DS2PatchPhantomTimers: true,
         DS2PhantomTimerSeconds: 4000.0,

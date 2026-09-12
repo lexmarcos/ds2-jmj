@@ -64,6 +64,10 @@ public:
     // zone, so summon signs and invasions work where they normally cannot.
     bool DS2ForceMultiPlayZone = false;
 
+    // Create every fog wall as if the local player owned the world, which is
+    // the experiment for the barrier that pens a phantom into one area.
+    bool DS2RemovePhantomFog = false;
+
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.
     int DS2ForcedZoneId = 103110;
