@@ -153,15 +153,29 @@ nothing; the menu's count dropping is the only honest check. Burn it **after**
 the instance is in the world — a killed client never saves, so an effigy burnt
 before a `game stop` is gone when the game comes back.
 
-Being human is **necessary but not sufficient**, and the rest is still open:
-on 12/09 Chico refused to place a sign with the effigy confirmed consumed
-(90 → 89), the client online, the seamless hooks switched off and the
-character standing on the exact spot where a sign had gone down an hour
-earlier. Ruled out that day: hollowing, an offline client, the seamless
-hooks, the arrival guard byte (0), the multiplay counter at `ctx+0xd0 +0x168`
-(positive), position, and X not reaching the game (it opens item info in the
-menu). Whatever it is, it survives a full `down`/`up` of server and both
-instances.
+**Killing a client during a live session is an *illegal disconnect*, and the
+game counts them.** After enough of them it puts up
+
+> Due to repeated illegal multiplayer disconnects, your connection to other
+> worlds was lost. Only a Bone of Order can restore your connection.
+
+and from then on that character can do **nothing** multiplayer: the white
+soapstone, the red soapstone and the Cracked Red Eye Orb are all a dead X,
+with no animation, no message and no `RequestCreateSign` reaching the server.
+It reads exactly like hollowing, and it is not.
+
+It is **character state in the save**, so it survives a full `down`/`up` of
+the server and both instances, and burning effigies does nothing for it. The
+only cure is a **Bone of Order**. On 12/09 this cost most of an afternoon:
+hollowing, an offline client, the seamless hooks, the arrival guard byte, the
+multiplay counter at `ctx+0xd0 +0x168`, position and X delivery were each
+measured and cleared before the game finally said what was wrong — and it only
+said it on the client's own screen, never in any log.
+
+So: **`game stop` while a session is live costs a strike.** End the session
+first (a death, the timer), and when a test leaves a session wedged, expect to
+spend a Bone of Order before the next staging. If a character suddenly cannot
+place a sign, look at its screen before measuring anything.
 
 **Two games open on the same account break every session, and the symptom
 points somewhere else.** After a failed relaunch left a second client running

@@ -582,3 +582,51 @@ morte correr como o jogo a escreveu** — ele levanta na própria fogueira, vivo
 e só então puxá-lo de volta. A sessão sobrevive à viagem porque o desmonte é
 recusado à parte, que é a única coisa já provada deste caminho todo: o estado
 7 continua lá quando ele se levanta.
+
+### A sétima tentativa, e por que ela fecha a porta
+
+Medida em 12/09 com a encenação completa — marca 1000, invocação confirmada
+(`RequestNotifyJoinGuestPlayer` + `RequestNotifyJoinSession`), convite copiado
+(`destino=6.19,-18.50,209.03`), convidado morto de propósito na água:
+
+```
+morte de fantasma: motivo=2 papel=1 -> morte normal, e depois puxar de volta
+fim de sessao RECUSADO sessao=... papel=1 estado=7 motivo=2 de=+0x2c9246
+esperando: estado=7 guarda=01 apos 1200 quadros
+...
+desisti de puxar de volta: estado=7 guarda=01
+```
+
+A sessão **sobreviveu** — estado 7 o tempo todo, como o M1 promete. Mas o
+convidado **nunca levantou**: ficou morto embaixo d'água, com a barra do host
+ainda no HUD, e a guarda da chegada em `01` por 7200 quadros seguidos.
+
+É esta a conclusão que fecha o assunto: **o renascimento é rio abaixo do
+desmonte.** Deixar a morte correr não basta, porque a morte de um fantasma não
+o levanta — quem o levanta é o desmonte da sessão, que o M1 recusa de
+propósito. As duas coisas que o M2 precisa, manter a sessão e pôr o jogador de
+pé, estão ligadas ao mesmo pedido, e ele é **um só e não se repete**.
+
+O que sobra, e é o desenho da oitava tentativa: **levantar o jogador nós
+mesmos**. `FUN_14044fde0(*(ctx+0x70))` é o "mande-o para a última fogueira" que
+o `DS2_SeamlessCoopHook` já sabe chamar. Com a sessão segura no estado 7 e o
+jogador de pé por conta própria, a guarda tem a chance de abrir — e aí a
+repetição do convite, que já está construída e testada até a porta, roda.
+
+### Destravar uma sessão sem matar o cliente
+
+O pedido de fim é **um só**: recusado uma vez, nunca mais é feito. Liberar o
+bloqueio depois não adianta, e o convidado fica presoentre estados. Matar o
+cliente resolve e **custa caro** (ver o CLAUDE.md sobre desconexões ilegais).
+
+O jeito barato usa o próprio modelo já mapeado — o estado 7 sai quando
+`sessao+0x1cc` deixa de ser zero:
+
+```
+bp 2c3630 deref rcx+f8 8          # o despachante entrega o ponteiro da sessão
+pokeabs fim <sessao+0x1cc> 02000000 00000000
+```
+
+Medido: o convidado foi do fundo d'água para a própria fogueira, vivo, em
+segundos. É a confirmação de ponta a ponta de que `+0x1cc` é o gatilho único
+do 7 para o 8.
