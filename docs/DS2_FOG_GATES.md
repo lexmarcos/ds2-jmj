@@ -320,30 +320,57 @@ either coincidence or a side effect worth remembering.
 So `MapObjWhiteDoorComponent` is not the barrier at all. Its state follows a
 session the way a thermometer follows a fever.
 
-### The census that comes next
+### What it actually was
+
+`FUN_1401d24a0` is the door's decision. It takes the door's kind, from the
+first byte of the record at `this + 0x58`, and the field at `this + 0x80`:
+
+```c
+case 0:  return (this->0x80 != 0) ? 4 : 0;
+case 3:  return (this->0x80 != 0) ? 5 : 0;
+case 2:  /* the closed state only while it is 0 */
+```
+
+and hands the answer to `FUN_1401d1f20`, which is what puts the wall up. So
+`+0x80` was the lever after all — the very first field measured. The first
+attempt failed because it patched the write in the door's **init** and left the
+one in the per-frame **update**, which wrote the value back on the next frame.
+A right hypothesis applied in the wrong place looks exactly like a wrong one.
+
+**Patching both writes removes the barrier.** Confirmed in a session: the guest
+invades, no fog wall appears at the boundary, and both players move freely.
+
+The mode byte at `this + 0x85` moves with a session too and is a red herring:
+pinning it changed nothing.
+
+### The census, which found nothing, and was still worth having
+
+Counting the live objects of all 43 map object component classes, with and
+without a session, gives identical numbers: nothing is created or destroyed
+when a phantom arrives. That ruled out a whole family of explanations in one
+measurement, and it is cheap to repeat — `censo.sh` in the scratchpad scans for
+each class's vtable pointer.
+
 
 `.?AVMapObj*Component` and `.?AVMapArea*` give 74 classes, and their vtables
 are recoverable from RTTI in one pass. Scanning the running game for each
 vtable pointer counts the live objects of every class at once, and the class
 whose count changes when a session forms is the one that builds the barrier.
 
-With a session up, the counts run 162 for most components and 149 for
-`MapObjGimmickComponent`. The other half of that measurement — the same census
-with nobody visiting — is what settles which class to read next.
+## What is still unknown
 
-## How to carry on
+The patch makes every fog wall behave as it does when nobody is visiting. That
+is the right answer for the barrier at an area boundary, and it is untested for
+everything else a fog wall does:
 
-Take a character to a fog wall, then measure three things while standing in it:
+- **Boss fog during a session.** A boss gate is a white door too. Whether a
+  phantom can still be brought through one, and whether the gate still works at
+  all, has not been tried.
+- **Any area but Heide**, and any door kind but the five measured there.
+- **The host's side over a long session**, and what happens when a guest walks
+  somewhere the game never expected a guest to be: the server's own area
+  filtering is a separate mechanism, and `DS2_InvadeAnywhere` is what governs
+  it.
 
-1. `abs` on `[[0x1416148f0 + 0x22f0] + 0x3c0] + 0x1e` — the byte, to see it go
-   to 1 and to see what changes on screen when it does.
-2. `scan` for `MAP_OBJE` again — the white door rows should be resident there,
-   and the header's row count and layout can be read the way
-   `DS2_UnblockMultiPlayHook` reads `NETWORK_AREA_PARAM`.
-3. The door kind at `this + 0x58`, which decides whether the box test runs at
-   all.
-
-Only then is there enough to say what a patch would change.
-
-Run the control: a fog wall that already behaves the way we want, if one
-exists, before believing anything about one that does not.
+`DS2RemovePhantomFog` is off by default and off in the loader until those are
+answered.
