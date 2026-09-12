@@ -60,6 +60,9 @@ enum Command {
         /// Start the games but leave them at the title screen
         #[arg(long)]
         no_enter: bool,
+        /// Leave the closed areas closed, the way retail has them
+        #[arg(long)]
+        no_force_zone: bool,
     },
     /// Stops the server and the second instance
     Down,
@@ -367,8 +370,8 @@ fn run(command: Command) -> Result<(), String> {
 
     match command {
         Command::Doctor { json } => doctor(&environment, json),
-        Command::Up { timer_seconds, no_timer, probe_area, no_enter } => {
-            up(&environment, timer_seconds, !no_timer, probe_area, no_enter)
+        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone } => {
+            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone)
         }
         Command::Down => {
             let stopped_game = game::stop_second();
@@ -934,6 +937,7 @@ fn up(
     timer_patch: bool,
     probe_area: bool,
     no_enter: bool,
+    force_zone: bool,
 ) -> Result<(), String> {
     let problems = environment.problems();
     if !problems.is_empty() {
@@ -957,8 +961,14 @@ fn up(
     let status = server::up(environment)?;
     print_server(&status);
 
+    // Multiplayer in the closed areas is the point of this server, and the
+    // config is read when the injector is injected — so a game `up` started
+    // without it is a game that has to be closed and opened again. It used to
+    // be a flag on `game prepare` because `up` only printed instructions and a
+    // human pressed Play; now that `up` launches the game, leaving it off is
+    // how a Majula test quietly fails.
     println!("\njogo");
-    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, false)?;
+    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, force_zone)?;
 
     println!("\ninstâncias");
     if environment.installs.len() < 2 {
