@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -39,6 +40,14 @@ namespace
         size_t Offset = 0;
         uint8_t Original = 0;
         bool Armed = false;
+
+        // Which register to follow, and how many bytes to read there. A
+        // register holding a pointer is the common case in this binary: the
+        // interesting value is almost never *in* rcx or rdx, it is one
+        // dereference away, in a local the caller built and will reuse. By the
+        // time a request file could read that address the memory is gone.
+        std::string DerefRegister;
+        size_t DerefLength = 0;
     };
 
     std::atomic<bool> s_running{ false };
@@ -77,6 +86,22 @@ namespace
         VirtualProtect((LPVOID)Address, 1, Previous, &Ignored);
         FlushInstructionCache(GetCurrentProcess(), (LPCVOID)Address, 1);
         return true;
+    }
+
+    // A read that is allowed to fail. MSVC refuses __try in a function that
+    // has to unwind C++ objects, and the handler is full of std::string, so
+    // the guard lives here on its own.
+    bool ReadGuarded(uintptr_t At, uint8_t* Out, size_t Length)
+    {
+        __try
+        {
+            memcpy(Out, (const void*)At, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
     }
 
     LONG CALLBACK OnException(PEXCEPTION_POINTERS Exception)
@@ -159,13 +184,57 @@ namespace
                     }
                 }
 
+                // The dereference, when the request asked for one. A read
+                // here can fault — the register may hold anything — and a
+                // fault inside a vectored handler takes the game with it, so
+                // it is guarded and a bad address is reported as such rather
+                // than being allowed to happen.
+                std::string Followed;
+                if (Point.DerefLength > 0)
+                {
+                    uintptr_t At = 0;
+                    const std::string& Which = Point.DerefRegister;
+                    const CONTEXT* Registers = Exception->ContextRecord;
+                    if (Which == "rcx") { At = (uintptr_t)Registers->Rcx; }
+                    else if (Which == "rdx") { At = (uintptr_t)Registers->Rdx; }
+                    else if (Which == "r8") { At = (uintptr_t)Registers->R8; }
+                    else if (Which == "r9") { At = (uintptr_t)Registers->R9; }
+                    else if (Which == "rax") { At = (uintptr_t)Registers->Rax; }
+                    else if (Which == "rbx") { At = (uintptr_t)Registers->Rbx; }
+                    else if (Which == "rsi") { At = (uintptr_t)Registers->Rsi; }
+                    else if (Which == "rdi") { At = (uintptr_t)Registers->Rdi; }
+
+                    if (At == 0)
+                    {
+                        Followed = StringFormat(" [%s: registrador desconhecido ou nulo]", Which.c_str());
+                    }
+                    else
+                    {
+                        uint8_t Bytes[64] = {};
+                        if (ReadGuarded(At, Bytes, Point.DerefLength))
+                        {
+                            Followed = StringFormat(" [%s]=", Which.c_str());
+                            for (size_t i = 0; i < Point.DerefLength; i++)
+                            {
+                                Followed += StringFormat("%02x", Bytes[i]);
+                            }
+                        }
+                        else
+                        {
+                            Followed = StringFormat(" [%s=%016llx ilegivel]",
+                                Which.c_str(), (unsigned long long)At);
+                        }
+                    }
+                }
+
                 Line = StringFormat(
-                    "  alcancado +0x%zx de=+0x%llx rcx=%016llx rdx=%016llx r8=%016llx pilha:%s\n",
+                    "  alcancado +0x%zx de=+0x%llx rcx=%016llx rdx=%016llx r8=%016llx%s pilha:%s\n",
                     Point.Offset,
                     (unsigned long long)(Caller >= s_base ? Caller - s_base : Caller),
                     (unsigned long long)Exception->ContextRecord->Rcx,
                     (unsigned long long)Exception->ContextRecord->Rdx,
                     (unsigned long long)Exception->ContextRecord->R8,
+                    Followed.c_str(),
                     Frames.c_str());
             }
 
@@ -193,7 +262,7 @@ namespace
         s_breakpoints.clear();
     }
 
-    void Arm(size_t Offset)
+    void Arm(size_t Offset, const std::string& DerefRegister = std::string(), size_t DerefLength = 0)
     {
         const uintptr_t Address = s_base + Offset;
 
@@ -206,6 +275,8 @@ namespace
         Breakpoint Point;
         Point.Address = Address;
         Point.Offset = Offset;
+        Point.DerefRegister = DerefRegister;
+        Point.DerefLength = DerefLength > 64 ? 64 : DerefLength;
         Point.Original = *(volatile uint8_t*)Address;
 
         if (Point.Original == 0xCC)
@@ -222,9 +293,15 @@ namespace
     }
 
     // Requests, one per line:
-    //   bp <hex offset from the module base>
+    //   bp <hex offset from the module base> [deref <registrador> <bytes>]
     //   clear
     //   report
+    //
+    // The deref is what makes an argument readable. Half the interesting
+    // values in this binary are behind a pointer in rcx or rdx — a handle, a
+    // small struct the caller built on its stack — and by the time a request
+    // file could be answered that memory has been reused. Registers: rcx rdx
+    // r8 r9 rax rbx rsi rdi; at most 64 bytes.
     void ServeRequests()
     {
         std::error_code Error;
@@ -258,11 +335,20 @@ namespace
             }
             else if (Kind == "bp")
             {
+                // bp <hex offset> [deref <register> <decimal length>]
                 std::string Where;
                 Parts >> Where;
+                std::string Follow;
+                std::string Register;
+                size_t Length = 0;
+                Parts >> Follow;
+                if (Follow == "deref")
+                {
+                    Parts >> Register >> Length;
+                }
                 if (!Where.empty())
                 {
-                    Arm((size_t)strtoull(Where.c_str(), nullptr, 16));
+                    Arm((size_t)strtoull(Where.c_str(), nullptr, 16), Register, Length);
                     Added++;
                 }
             }
