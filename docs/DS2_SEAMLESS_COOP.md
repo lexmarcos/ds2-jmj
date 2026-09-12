@@ -441,3 +441,102 @@ desmonte, não faz renascer — essa é a peça seguinte.
   é fantasma. É a primeira coisa que o log responde.
 - Se o host que morre com fantasma dentro emite motivo 4 para alguém, e por
   qual caminho.
+
+## Cinco tentativas de fazer o convidado renascer dentro da sessão
+
+Recusar o fim da sessão manteve o convidado dentro dela — morto. Fazê-lo
+renascer **no mundo do host** levou cinco medições, e as quatro primeiras
+falharam do mesmo jeito por baixo.
+
+| # | o que foi feito | o que aconteceu |
+| --- | --- | --- |
+| 1 | warp motivo 4, flag 1, portão como estava | recusado pelo portão |
+| 2 | warp motivo 4, flag 0 | aceito, nenhum pedido de fim, convidado vivo — **mandado para casa**, mapa e posição ignorados |
+| 3 | flag 1 na morte do **host**, portão em 811 | aceito, e o **host travou** |
+| 4 | flag 1 na morte do convidado, portão erguido à mão | aceito, convidado vivo e de pé, sessão em 7 dos dois lados, host ainda listando ele — **no próprio mundo** |
+| 5 | estado da sessão devolvido a 1 | nenhum warp, nenhum fim de sessão, convidado morto na água; a máquina andou sozinha até o **estado 2** e parou |
+
+A quinta é a que explica as outras. Com `bp 2c3630 deref rcx+f8 8` o
+despachante mostrou `[rcx+f8]=02`: o handler do estado 1 rodou, viu o elo com
+o par de pé, escreveu 2 e saiu. E o **estado 2 não está no switch do
+despachante** — nem o 3. Eles só rodam quando chega uma mensagem.
+
+### O handler do estado 2 responde as quatro primeiras de uma vez
+
+`FUN_1402c2a80`, o slot `+0x28` da sessão. Decompilado, ele:
+
+```c
+if (sessao[0x1f] != 2)                    { sessao[0x1f] = 0xb; ... return; }
+if (*(char*)(sessao[0x21] + 8) != 0)      { slot30(sessao, 0x13);     return; }
+if (!FUN_1402c6570(..., papel))           { sessao[0x1f] = 0xb; ... return; }
+
+sessao+0x19c = param_2[0];                // mapa
+sessao+0x198 = param_2[7];
+
+/* o bloco "de onde ele veio": lido do jogador VIVO e dos contadores VIVOS */
+sessao+0x1a0 .. +0x1c8 = posição atual do jogador, ctx+0x70 +0x164/168/16c,
+                         ctx+0xd0 +0x168   /* o portão */
+
+pedido = { tipo 0, motivo 4, param_2[0], -1, 0, FUN_1402d4830(papel),
+           param_2[1..3], 1.0f, quaternion de param_2[5] };
+if (!ctx->slot40(ctx, &pedido, 1))        { slot30(sessao, 0x13);     return; }
+
+FUN_1402bbf20(sessao);
+FUN_140500fd0(ctx+0x22e0);
+FUN_1402900b0(sessao+0x110, papel, FUN_14028f320(...));   // avisa o par
+sessao[0x1f] = 3;
+sessao+0x1c9 = param_2[8];
+```
+
+Três conclusões, e cada uma mata uma tentativa:
+
+- **O warp nunca foi a metade que faltava.** O handler monta exatamente o
+  mesmo pedido que as tentativas 1–4 montavam à mão, e chama o mesmo slot com
+  a mesma flag 1 e o mesmo portão. Quem decide em qual mundo o jogador cai é o
+  que vem **em volta**: `FUN_1402bbf20`, a mensagem ao par, o estado 3.
+- **`sessao+0x1a4` não é a posição do host.** É escrita *por este handler*, a
+  partir do objeto do jogador, como registro de onde o convidado estava antes
+  de ser invocado. A tentativa 4 entregou esse registro ao warp como destino —
+  e o convidado voltou para o próprio mundo, exatamente como medido.
+- **O destino não está na sessão.** Ele chega em `param_2`, do host, pela
+  rede. Só três campos ficam guardados depois: `[0]` em `+0x19c`, `[7]` em
+  `+0x198`, `[8]` em `+0x1c9`.
+
+### O payload, campo a campo
+
+| campo | uso |
+| --- | --- |
+| `[0]` | mapa; também copiado para `+0x19c` |
+| `[1] [2] [3]` | o destino entregue ao warp |
+| `[4]` | nunca lido |
+| `[5]` | giro; vira o quaternion por cos/sin |
+| `[6]` | lido como short, vai para `FUN_14051c6a0` |
+| `[7]` | também copiado para `+0x198` |
+| `[8]` | lido como byte, também copiado para `+0x1c9` |
+
+### A sexta tentativa: repetir o convite
+
+Se o que falta chega do host e nada mais, então não há o que sintetizar: o
+convite é **copiado na passagem** do join de verdade e repetido na morte. O
+destino repetido é o ponto de invocação — um lugar aonde o host andou de
+propósito, garantia que nenhuma posição inventada teria. Onde o convidado
+morreu não serve: ele pode ter morrido na água, e foi o que aconteceu no teste
+da tentativa 5.
+
+Duas armadilhas que o código evita porque decompilar as mostrou antes:
+
+- o byte em `*(sessao+0x108) +8` é o primeiro teste do handler, e se não for
+  zero ele **não chega** — vai direto para `EndSession(0x13)`, levando a
+  encenação junto e sem dizer nada. É lido num convite de verdade e conferido
+  antes de qualquer repetição;
+- o bloco `+0x1a0..+0x1c8` é refeito a partir do que é verdade **agora**, e um
+  desses valores é o portão, que vale 0 na morte do convidado. Repetir sem
+  cuidado trocaria o registro do convite original — de onde sai o caminho de
+  volta para casa — por lixo. Ele é salvo e devolvido.
+
+O que sobra para medir é uma coisa só: **o estado 3 também não está no switch**,
+então a chegada manda a mensagem ao par e espera resposta. Se um host responde
+a um convidado que ele já conta como dentro, ninguém sabe. O rastro de estado
+depois da chegada responde isso num teste só — `3→5→6→7` é o join fechando,
+`3` parado é o host ignorando, e `3→4` seguido de `0xf` é o join estourando o
+temporizador do case 4.
