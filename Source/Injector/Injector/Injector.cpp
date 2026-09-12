@@ -33,6 +33,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SeamlessSessionHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -200,6 +201,7 @@ bool Injector::Init()
             if (Config.DS2SeamlessCoop)
             {
                 Hooks.push_back(std::make_unique<DS2_SeamlessCoopHook>());
+                Hooks.push_back(std::make_unique<DS2_SeamlessSessionHook>());
             }
 
             // Always on for Dark Souls II: it only polls, and it is the only
