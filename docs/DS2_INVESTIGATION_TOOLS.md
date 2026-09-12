@@ -87,6 +87,36 @@ the game when the character moved. A second thread can reach an address between
 the first restoring the byte and the handler running, so the handler owns an
 address whether or not it is still armed - without that it died immediately.
 
+## A varredura de breakpoints, com a lista vinda do Ghidra
+
+O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
+`/home/suel/tools/scripts`, faz o mesmo trabalho lendo a lista de funções do
+próprio Ghidra e imprimindo os **deslocamentos de módulo**, um por linha:
+
+```
+analyzeHeadless ... -postScript Entries.java <saida> 0x140270000 0x1402a0000
+```
+
+O método, confirmado em 12/09 achando o que o botão A numa placa de invocação
+alcança:
+
+1. `head -520 <saida> | sed 's/^/bp /' > <install>/DS2_Trace.req`
+   (acima de ~600 o jogo fica instável, e 3229 já matou o processo)
+2. deixe o jogo parado uns quinze segundos: o que roda por quadro dispara e se
+   desarma sozinho
+3. **apague o `DS2_Trace.log`** — é o que separa o ruído do que você quer
+4. aperte o botão
+5. o que aparecer no log novo é o que a ação alcançou
+
+Na prática o primeiro toque (abrir o diálogo "Summon this dark spirit?") deixou
+duas funções: uma é alocador de pool, o que por si só diz que o toque
+**alocou** alguma coisa. O confirme deixou onze, com as pilhas inteiras.
+
+Vale saber o que o ruído parece: `FUN_140279d50` é inicialização de free-list,
+e `FUN_140276050`/`FUN_140276110` são invólucros de envio de pedido — pegam um
+subsistema, pedem um id ao objeto pelo slot virtual `+0x58` e repassam. Um
+alvo de verdade tem os campos do pedido nas mãos.
+
 ## Reading the binary
 
 `objdump` reads the PE directly and dumps all 27MB in about three seconds:
