@@ -188,6 +188,28 @@ carregamento de área voluntário — e ver se a sessão continua listada nos do
 HUDs. Se sobreviver, o M2 vira "deixe a morte seguir o caminho normal e reentre
 no estado 2", e não precisa de revive nenhum.
 
+### O teste do carregamento de área: o jogo não deixa nem tentar
+
+Medido em 12/09, com uma sessão de co-op de pé e o convidado **vivo** no mundo
+do host: abrir o inventário dele e escolher a Homeward Bone mostra o menu de
+ação com **"Use" acinzentado**. Um fantasma invocado não pode usá-la.
+
+Isso não é um detalhe de item. É o jogo fechando, de propósito, toda porta pela
+qual um convidado poderia carregar área sem sair da sessão: fantasma não
+descansa em fogueira, não viaja rápido e não usa Homeward Bone. A frase que
+estava no desenho como suposição — *"o jogo nunca carrega área nenhuma dentro
+do mundo do host para um convidado"* — deixa de ser suposição.
+
+**O que isso faz com o M2.** As duas saídas viram uma só:
+
+1. ~~deixar a morte seguir o caminho normal e reentrar no estado 2~~ — depende
+   de um carregamento que o convidado não tem permissão de fazer;
+2. **ressuscitar em pé, sem carregamento**, que é a única forma que sobra — e
+   continua precisando da primitiva de revive que ainda não apareceu.
+
+Ou seja: o M2 exige criar uma capacidade que o jogo remove de propósito do
+convidado. Não é afinar um parâmetro, é abrir uma porta fechada.
+
 Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
 jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
 mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par
