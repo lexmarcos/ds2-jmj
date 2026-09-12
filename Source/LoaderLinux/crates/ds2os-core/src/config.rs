@@ -44,6 +44,9 @@ pub struct InjectorConfig {
     /// is what a phantom's area barrier appears to hang on.
     pub DS2RemovePhantomFog: bool,
     pub DS2AutoRematch: bool,
+    /// Death in another world goes to the last bonfire, and every warp is
+    /// written to DS2_Seamless.log.
+    pub DS2SeamlessCoop: bool,
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,

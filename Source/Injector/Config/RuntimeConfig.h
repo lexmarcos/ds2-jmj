@@ -74,6 +74,11 @@ public:
     // pairs with is off too.
     bool DS2AutoRematch = false;
 
+    // Sends a player who dies in somebody else's world to their last bonfire
+    // instead of home, and writes a line for every warp the game asks for. Off
+    // by default: it detours the one call every warp in the game goes through.
+    bool DS2SeamlessCoop = false;
+
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.
     int DS2ForcedZoneId = 103110;

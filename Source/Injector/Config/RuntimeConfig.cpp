@@ -158,6 +158,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(DS2ForceMultiPlayZone);
     SERIALIZE_VAR(DS2RemovePhantomFog);
     SERIALIZE_VAR(DS2AutoRematch);
+    SERIALIZE_VAR(DS2SeamlessCoop);
     SERIALIZE_VAR(DS2ForcedZoneId);
     SERIALIZE_VAR(ServerPort);
     SERIALIZE_VAR(ServerGameType);

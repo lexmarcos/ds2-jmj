@@ -39,6 +39,7 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.cpp
     Hooks/DarkSouls2/DS2_PhantomFogHook.cpp
     Hooks/DarkSouls2/DS2_RematchHook.cpp
+    Hooks/DarkSouls2/DS2_SeamlessCoopHook.cpp
     Hooks/DarkSouls2/DS2_TraceHook.h
     Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
