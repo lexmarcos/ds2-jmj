@@ -231,6 +231,19 @@ namespace
     // starts from and let the game redo it. Everything the handshake needs is
     // still in the session object; nothing here has to be synthesised.
     std::atomic<bool> s_rejoin{ false };
+    // The other shape of the same idea. Option 4 swallows the death to keep
+    // the guest where he fell; this one lets the death run its normal course -
+    // the guest loads back at his own bonfire, alive - and only then pulls him
+    // back to the host. The session survives the trip because the teardown
+    // request is refused separately (`DS2_Session.req` = block), so nothing
+    // has to be rebuilt: state 7 is still there when he stands up.
+    //
+    // It exists because the arrival's guard reads 1 at the instant of death.
+    // If that is "this player is in no state to go anywhere", then waiting for
+    // him to be somewhere is the answer, not forcing the arrival.
+    std::atomic<bool> s_rearm{ false };
+    std::atomic<bool> s_rearm_pending{ false };
+    int s_rearm_waited = 0;
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -304,6 +317,20 @@ namespace
                 "  morte de fantasma: motivo=%u estado=%u papel=%u -> original%s\n",
                 Reason, State, Role,
                 (s_enabled.load() && Reason != kReasonGuestDied) ? " (nao foi o convidado que morreu)" : ""));
+            s_original_death(Record, Reason);
+            return;
+        }
+
+        if (s_rearm.load())
+        {
+            // Nothing is taken away from the death: it runs exactly as the
+            // game wrote it, warp and all. The only addition is a note to come
+            // back for him once he is standing.
+            Append(StringFormat(
+                "  morte de fantasma: motivo=%u papel=%u -> morte normal, e depois puxar de volta\n",
+                Reason, Role));
+            s_rearm_pending.store(true);
+            s_rearm_waited = 0;
             s_original_death(Record, Reason);
             return;
         }
@@ -423,6 +450,42 @@ namespace
         // The rejoin parks itself in state 2 and waits for a message that will
         // never come: nobody is going to invite a player who is already here.
         // So the host's own invitation is played again.
+        // Waiting for the guest to be back on his feet in his own world, with
+        // the session still standing because the teardown was refused. When
+        // the guard opens, the join is started over from the top.
+        if (s_rearm_pending.load() && Session != nullptr)
+        {
+            uint8_t* Bytes = (uint8_t*)Session;
+            const uint32_t State = *(uint32_t*)(Bytes + kSessionState);
+            const uint8_t Guard = ReadArriveGuard(Session);
+            ++s_rearm_waited;
+
+            if (State == kStatePlaying && Guard == 0 && s_payload_valid.load())
+            {
+                s_rearm_pending.store(false);
+                Append(StringFormat(
+                    "  de pe de novo apos %d quadros, guarda=%02x; recomecando o join\n",
+                    s_rearm_waited, (unsigned)Guard));
+                *(uint32_t*)(Bytes + kSessionState) = kStateJoining;
+                s_guard_waited = 0;
+                s_guard_last = 0xff;
+                s_pending_arrive.store(true);
+            }
+            else if (s_rearm_waited % 600 == 0)
+            {
+                Append(StringFormat("  esperando: estado=%u guarda=%02x apos %d quadros\n",
+                    State, (unsigned)Guard, s_rearm_waited));
+            }
+
+            if (s_rearm_waited >= 7200)
+            {
+                s_rearm_pending.store(false);
+                Append(StringFormat(
+                    "  desisti de puxar de volta: estado=%u guarda=%02x\n",
+                    State, (unsigned)Guard));
+            }
+        }
+
         if (s_pending_arrive.load() && Session != nullptr)
         {
             uint8_t* Bytes = (uint8_t*)Session;
@@ -527,15 +590,20 @@ namespace
                 // "0" off, "1" the join's flag, "2" the teardown's flag,
                 // "3" the join's flag with the gate held open for the call,
                 // "4" no warp at all: the session is put back to the state a
-                // join starts from and the host's own invitation is replayed.
+                // join starts from and the host's own invitation is replayed,
+                // "5" the death runs normally and the guest is pulled back
+                // once he is standing again.
                 const char Choice = Contents.empty() ? '0' : Contents[0];
                 s_enabled.store(Choice != '0');
                 s_flag.store(Choice == '2' ? 0 : 1);
                 s_lift.store(Choice == '3');
                 s_rejoin.store(Choice == '4');
+                s_rearm.store(Choice == '5');
                 Append(StringFormat("=== renascer na sessao %s, %s ===\n",
                     Choice == '0' ? "desligado" : "ligado",
-                    s_rejoin.load()
+                    s_rearm.load()
+                        ? "morte normal, e puxar de volta quando ele levantar"
+                        : s_rejoin.load()
                         ? "reentrando pelo estado 1 e repetindo o convite"
                         : (s_flag.load() ? (s_lift.load() ? "flag 1, portao erguido" : "flag 1")
                                          : "flag 0")));
