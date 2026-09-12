@@ -267,12 +267,25 @@ para a fogueira dentro do mundo do host. Suprimir sem redirecionar é
 exatamente o erro que o CLAUDE.md descreve como "patch no valor em vez de na
 origem".
 
-Falta ainda saber **qual índice** corresponde a cada papel. O tipo vem de
-`rcx+0xe0`; capturei o `rcx` num breakpoint em `FUN_140190950`
-(`rcx=0x7fffe8158ac0`, `rdx=2`), mas a sonda rodou um minuto depois e leu
-memória já reciclada — o objeto é transitório. Para ler o byte certo, a sonda
-precisa acontecer no mesmo instante do breakpoint, o que o tracer ainda não
-sabe fazer.
+### O índice do fantasma é 7
+
+Medido em 12/09, depois que o tracer ganhou o `deref` (o objeto é transitório
+e uma sonda tardia lê memória já reciclada — foi o que aconteceu na primeira
+tentativa):
+
+    bp 190950 deref rcx+e0 1
+
+Com uma invasão montada e o fantasma morto por queda:
+
+    alcancado +0x190950 de=+0x18f773 rdx=2 r8=0x1410c0050 [rcx+e0]=07
+
+Ou seja: **o papel vale 7** e o motivo vale 2. A entrada 7 da tabela é
+
+    +0x070  04 01 01 01  03 00 07 01      byte1 = 1, encerra
+
+Então o alvo do co-op seamless é um byte só: `0x1410c00c1`. Zerar a tabela
+inteira travou a morte; zerar só essa entrada é o teste que ainda falta, e é
+a diferença entre desligar um comportamento e desligá-lo para o papel certo.
 
 ## Por que isso importa
 
