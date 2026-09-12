@@ -180,6 +180,29 @@ because an accidental second death **in the invader's own world** sat
 between the duel and the test. The fix was to run the loop again with
 nothing in between.
 
+### A revanche por red sign, e o que o servidor tem sem entregar nada
+
+`DS2_AutoRematch` e o gatilho `debug_summon.req` estão no servidor e
+funcionam no que prometem: o par é lembrado e o push é reenviado. Mas
+**sozinhos não formam sessão nenhuma** — está medido em
+[DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md). A flag nasce
+desligada e deve continuar assim até existir a metade do cliente; caso
+contrário ela vira a mesma armadilha que o `debug_invade.req` virou.
+
+Em aberto, em ordem de quanto bloqueiam:
+
+- **O `SignHandle` sobrevive a uma placa nova?** O handle capturado no
+  toque é de uma placa que deixou de existir. Se o handle da placa
+  recolocada for outro, o hook precisa enumerar em vez de repetir.
+- **Qual índice da tabela em `0x1410c0050` é cada papel.** Zerar todos
+  trava a morte; para o co-op seamless é preciso saber qual entrada
+  mexer, e o tipo vem de `rcx+0xe0` num objeto transitório.
+- **A Red Sign Soapstone pode ser usada hollow?** Continua sem resposta:
+  o teste que parecia provar que sim foi feito com o personagem humano.
+- **O host hollow não vê placa** foi medido uma vez só, com o controle
+  no mesmo ponto (efígie, prompt aparece). Vale repetir num outro lugar
+  antes de virar regra.
+
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena
