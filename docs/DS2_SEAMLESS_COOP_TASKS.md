@@ -252,6 +252,38 @@ o portão é `*(mgr+0x168) > 0`, com `mgr = *(contexto+0xd0)`. Medido positivo n
 meio da sessão (777 e 811) e evidentemente **não positivo no instante da
 morte** — que é o único instante que importa.
 
+### A terceira tentativa: a flag da entrada é aceita — e o host trava
+
+Encenado de novo com o hook em `flag 1` e o portão erguido se preciso. O que
+disparou não foi a morte do convidado, foi a **morte do host** — que no cliente
+do convidado passa pelo mesmo terminal, `FUN_140190950`. O registro:
+
+    morte de fantasma: papel=1 flag=1 [+0x24ac]=1e [+0x24b1]=40 portao=811 aceito=1
+
+Três coisas de uma vez:
+
+- **a forma da entrada é aceita.** Com o portão aberto — 811 neste instante, e
+  nem foi preciso erguer — o warp de motivo 4 com flag 1 passa. A recusa da
+  primeira tentativa era mesmo o portão, e não a forma;
+- **nenhum pedido de fim de sessão existiu** em nenhum dos dois lados;
+- o convidado ficou **vivo, de pé e no lugar**, em vez de ser devolvido.
+
+**Mas o host travou.** A tela dele parou no quadro da própria morte e não mudou
+mais um pixel; o HUD continuou listando "Chico". O processo está vivo — o
+publicador de posição segue contando, e a posição dele já é a da fogueira — ou
+seja **a lógica rodou e a apresentação parou**.
+
+A explicação que encaixa com tudo o que se sabe: o host morre, pede o fim da
+sessão e fica esperando a saída do convidado, que o hook substituiu e nunca
+mandou. É o risco que o parecer externo marcou como número um, só que pelo lado
+oposto ao previsto — não é o cadáver do fantasma que não se levanta, é o host
+que fica pendurado numa despedida que não vem.
+
+**O que isso exige do M2:** a intervenção não pode ser só do lado de quem morre.
+Ou o host precisa ser avisado por outro caminho, ou o hook precisa distinguir
+"o convidado morreu" de "o host morreu" — no segundo caso não há nada a salvar,
+a sessão acaba de qualquer jeito e substituir a despedida só trava os dois.
+
 Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
 jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
 mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par
