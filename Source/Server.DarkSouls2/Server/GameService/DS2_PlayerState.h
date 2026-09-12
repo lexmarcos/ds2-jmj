@@ -15,6 +15,7 @@
 #include "Server/GameService/Utils/DS2_GameIds.h"
 
 #include "Server/GameService/PlayerState.h"
+#include "Shared/Core/Utils/Strings.h"
 
 #define DEFINE_FIELD(type, name, default_value)                             \
     private: type name = default_value;                                     \
@@ -88,9 +89,21 @@ public:
         return "";
     }
 
+    // What the client tells us about itself that has no field of its own.
+    // Written out rather than left blank because the harness reads it, and the
+    // one that matters is the effigy count: a hollow character cannot be
+    // summoned as a white phantom, and a whole afternoon went into a staging
+    // that could never have worked because nobody could see that.
     virtual std::string GetStatusDescription() override
     {
-        return "";
+        if (!GetPlayerStatus().has_player_status())
+        {
+            return "";
+        }
+
+        auto Status = GetPlayerStatus().player_status();
+        return StringFormat("efigies %u, arquetipo %u, fogueira %u",
+            Status.human_effigy_burnt(), Status.archetype(), Status.sitting_at_bonfire());
     }
 
 };
