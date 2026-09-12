@@ -162,6 +162,34 @@ Uma versão intermediária que não precisa de patch nenhum: o fantasma recoloca
 a placa (um toque), o host aperta A nela (um toque). Nada é consumido, e a
 placa reaparece no mesmo lugar, ao lado do host.
 
+## Qual push o host obedece, e qual ele ignora
+
+Três pushes, o mesmo host parado no mesmo lugar, medidos em 12/09 no servidor
+local. O que muda entre eles é só quem recebe e o que o outro lado está
+fazendo:
+
+| push | para quem | o que acontece |
+| --- | --- | --- |
+| `PushRequestBreakInTarget` | host ocioso | **o host reage em 1s**: manda `RequestSendMessageToPlayers`, e se o invasor estiver esperando a sessão forma |
+| `PushRequestVisit` | host ocioso | **nada**, nos quatro tipos (0 Blue Sentinels, 1 Bell Keepers, 2 Rat, 3) |
+| `PushRequestSummonSign` | fantasma com placa no chão | o fantasma retira a placa e tenta entrar, e falha porque ninguém abriu sessão |
+
+O controle rodou no meio disso, logo depois das quatro visitas ignoradas: uma
+invasão comum por orbe, `RequestSendMessageToPlayers` às 02:48:24,
+`RequestNotifyJoinGuestPlayer` às 02:48:34 e `RequestNotifyJoinSession` às
+02:48:36. A máquina formava sessão; a visita é que não faz nada.
+
+O provável motivo da visita ser ignorada: ela é o mecanismo dos covenants, e o
+cliente do host checa se uma visita **daquele tipo** é legal onde ele está.
+Heide não é área de Bell Keeper nem de Rat, e o patch de zona força a área de
+atividade para 103110 de qualquer jeito. Não foi investigado além disso,
+porque o resultado já bastava para descartar o caminho.
+
+**O que isso ensina sobre a revanche:** o servidor tem as duas metades
+separadas e elas nunca se encontram. O push de invasão abre a sessão no host;
+o push de summon faz o fantasma aceitar. Falta provar que servem um ao outro —
+é o próximo experimento, e é barato.
+
 ## Onde o cliente manda cada mensagem de placa
 
 Achado procurando os ids do protocolo como imediatos

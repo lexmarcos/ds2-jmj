@@ -61,7 +61,12 @@ protected:
     // The point of it is which side opens the session: an invasion push goes to
     // the *host* and the host reaches for its peer, which is the half a
     // replayed summon is missing.
-    bool PushVisitToHost(uint32_t OwnerPlayerId, uint32_t VisitType, std::string& OutReason);
+    bool PushVisitToHost(uint32_t OwnerPlayerId, uint32_t VisitType, uint32_t ExplicitHostId, std::string& OutReason);
+
+    // Tells the host it is being invaded by the phantom. This is the one push
+    // the game answers by opening a session — the host reaches for its peer
+    // within a second of it, idle or not.
+    bool PushBreakInToHost(uint32_t OwnerPlayerId, uint32_t ExplicitHostId, std::string& OutReason);
 
     void PollRematchRequest();
 
