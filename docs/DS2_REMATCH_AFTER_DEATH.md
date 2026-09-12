@@ -190,6 +190,49 @@ separadas e elas nunca se encontram. O push de invasão abre a sessão no host;
 o push de summon faz o fantasma aceitar. Falta provar que servem um ao outro —
 é o próximo experimento, e é barato.
 
+## Nenhuma combinação de pushes fecha a sessão
+
+Depois de um duelo de red sign de verdade — com o blob do host guardado, o
+host humano e o fantasma recolocando a placa — o servidor tentou reconectar
+sozinho de três maneiras. Medido em 12/09, sempre com o par no mesmo lugar:
+
+| tentativa | fantasma | host | resultado |
+| --- | --- | --- | --- |
+| só o summon | retira a placa, tenta entrar | nada na tela | "Unable to join multiplayer session" |
+| só a visita | — | **inerte**, nos 4 tipos | nada acontece |
+| só a invasão | — | abre sessão: `RequestSendMessageToPlayers` em 1s, e a própria placa dele some ("Your summon sign has disappeared") | nada acontece |
+| invasão + summon, no mesmo tick | retira a placa, tenta entrar | abre sessão | falha |
+| invasão, 4s, summon | retira a placa, tenta entrar | abre sessão | falha |
+
+As duas metades existem e **não se encontram**. A leitura mais simples é que
+elas não são a mesma sessão: o host abre uma sessão de *invasão* e o fantasma
+tenta entrar numa de *summon*. O jogo não tem push que diga a um cliente "você
+invocou fulano" — esse estado nasce quando o jogador encosta na placa, e só.
+
+Um detalhe que veio de graça: o host **recusa um segundo push de invasão**
+enquanto o primeiro está pendente, com `RequestRejectBreakInTarget`, reason 1.
+
+### O blob não é intercambiável
+
+O `player_struct` que o summon carrega tem que ser o que o host mandou **num
+summon**. Tentei emprestar o blob que o mesmo jogador tinha mandado ao criar
+uma placa sua: o fantasma ignorou o push por completo, nem retirou a placa.
+Com o blob genuíno, ele age todas as vezes. Então a revanche por placa só é
+possível para um par que já duelou uma vez — o que, para a funcionalidade
+pedida, é exatamente o caso.
+
+### Um host hollow não vê placa nenhuma
+
+Custou uma hora até aparecer. Com o personagem hollow, a placa vermelha do
+outro jogador simplesmente **não existe** no mundo dele: nenhum prompt, nada
+no chão, e o servidor mandando a placa na lista normalmente. Uma Human Effigy
+sem o personagem dar um passo e o prompt "Touch Summon Sign" aparece no mesmo
+ponto.
+
+É o espelho do que já estava medido para o orbe, e junto formam a regra:
+**forma humana é exigida dos dois lados de um duelo por placa** — de quem
+invoca para ver a placa, e de quem coloca para usar o item.
+
 ## Onde o cliente manda cada mensagem de placa
 
 Achado procurando os ids do protocolo como imediatos

@@ -91,15 +91,36 @@ void DS2_SignManager::Poll()
 // then is the push it is expecting. The break-in equivalent does nothing,
 // because an invader who has not used an orb is not waiting for anything —
 // see docs/DS2_REMATCH_AFTER_DEATH.md.
-bool DS2_SignManager::ReplaySummon(uint32_t OwnerPlayerId, std::string& OutReason)
+bool DS2_SignManager::ReplaySummon(uint32_t OwnerPlayerId, uint32_t ExplicitHostId, std::string& OutReason)
 {
+    RememberedSummon Remembered;
     auto Iter = LastSummonOfOwner.find(OwnerPlayerId);
-    if (Iter == LastSummonOfOwner.end())
+    if (Iter != LastSummonOfOwner.end())
+    {
+        Remembered = Iter->second;
+    }
+    else if (ExplicitHostId != 0)
+    {
+        // No duel to repeat, so borrow the host's own sign blob. It is the
+        // same shape — a player's character data as the client serialises it —
+        // and it is the only way to test the push before a pair has ever met.
+        auto Blob = LastPlayerStruct.find(ExplicitHostId);
+        std::shared_ptr<GameClient> Named = GameServiceInstance->FindClientByPlayerId(ExplicitHostId);
+        if (Blob == LastPlayerStruct.end() || !Named)
+        {
+            OutReason = "the named host has never placed a sign, so there is no blob of theirs to send";
+            return false;
+        }
+        Remembered.HostPlayerId = ExplicitHostId;
+        Remembered.HostSteamId = Named->GetPlayerState().GetSteamId();
+        Remembered.PlayerStruct.assign(Blob->second.begin(), Blob->second.end());
+        Remembered.Time = GetSeconds();
+    }
+    else
     {
         OutReason = "that player has never been summoned, so there is no host blob to repeat";
         return false;
     }
-    const RememberedSummon& Remembered = Iter->second;
 
     std::shared_ptr<GameClient> OwnerClient = GameServiceInstance->FindClientByPlayerId(OwnerPlayerId);
     if (!OwnerClient)
@@ -330,7 +351,7 @@ void DS2_SignManager::PollRematchRequest()
     }
     if (Mode == 0 || Mode == 2 || Mode == 3)
     {
-        if (!ReplaySummon(OwnerPlayerId, Reason))
+        if (!ReplaySummon(OwnerPlayerId, ExplicitHostId, Reason))
         {
             WarningS("Signs", "Rematch: cannot replay the summon of player %u: %s.", OwnerPlayerId, Reason.c_str());
             return;
@@ -610,6 +631,10 @@ MessageHandleResult DS2_SignManager::Handle_RequestCreateSign(GameClient* Client
     Sign->Type = Request->sign_type();
     Sign->PlayerStruct.assign(Request->player_struct().data(), Request->player_struct().data() + Request->player_struct().size());
     Sign->MatchingParameters = std::make_unique<DS2_Frpg2RequestMessage::MatchingParameter>(Request->matching_parameter());
+
+    // Keep the blob past the sign's life. It is the only piece of a summon the
+    // server cannot build for itself, and a rematch has to send one.
+    LastPlayerStruct[Sign->PlayerId] = Sign->PlayerStruct;
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 

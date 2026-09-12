@@ -55,7 +55,7 @@ protected:
 
     // Sends the summon push for a sign as if the remembered host had walked up
     // to it and pressed the button. Returns why it could not, for the log.
-    bool ReplaySummon(uint32_t OwnerPlayerId, std::string& OutReason);
+    bool ReplaySummon(uint32_t OwnerPlayerId, uint32_t ExplicitHostId, std::string& OutReason);
 
     // Tells the host a visitor is arriving, the way a covenant invasion does.
     // The point of it is which side opens the session: an invasion push goes to
@@ -94,6 +94,12 @@ private:
         double Time = 0.0;
     };
     std::unordered_map<uint32_t, RememberedSummon> LastSummonOfOwner;
+
+    // The last player blob each client sent with a sign of its own. The blob
+    // is the only part of a summon the server cannot build, and a pair that
+    // has never duelled leaves none behind — but anyone who has ever placed a
+    // sign has handed one over already.
+    std::unordered_map<uint32_t, std::vector<uint8_t>> LastPlayerStruct;
 
     double NextRematchPollTime = 0.0;
 
