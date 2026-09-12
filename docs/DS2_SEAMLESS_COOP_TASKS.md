@@ -6,6 +6,11 @@ O que já foi medido do cliente está em
 trabalho, e existe para ser **editada**: quando um marco fecha, ele vira uma
 linha de "feito" com o endereço e a prova, não some.
 
+**M0 entrou na frente de tudo**, a pedido: sem levar um personagem até o outro
+sem mão humana, cada teste destes custa meia hora de pilotagem. Está feito —
+ver [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md) para o que ele faz
+e o que não faz.
+
 A ordem não é preferência, é dependência. **Tudo de M2 para baixo pressupõe
 M1.** Enquanto uma morte desfizer a sessão, respawn, espectador, party wipe,
 viagem em grupo e reset de fogueira não têm onde acontecer.
@@ -26,6 +31,7 @@ ao servidor. Ausência de erro não prova nada.
 | …inclusive placa **branca** de co-op | o hook não olha o tipo | `Sign … type 1` invocada sozinha |
 | Todo warp do jogo mapeado e interceptável | `DS2_SeamlessCoopHook`, `+0x1c2a80` | [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) |
 | Morte de convidado vai para a última fogueira | motivo 4/força 0 → `FUN_14044fde0` | medido com o interruptor ligado e desligado |
+| **M0 — o harness anda sozinho** | `DS2_NavHook` + `ds2os-dev where` / `goto` | 9 m da fogueira até o outro personagem, escada acima, em 17 passos |
 
 ---
 
