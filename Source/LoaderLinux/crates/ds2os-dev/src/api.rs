@@ -5,11 +5,12 @@
 //! all of it already - the clients tell it - and publishes it over the web UI.
 //! So this asks the server instead of reverse engineering the client.
 //!
-//! The one field that earns this module on its own is `deathCount`. A test
-//! driven by a script fails in two ways: the thing being tested did not work,
-//! or the character died on the way to it. Those look identical in a log full
-//! of "nothing happened", and telling them apart by screenshot costs more than
-//! the test does.
+//! Careful with what DS2 actually fills. `deathCount`, `souls` and
+//! `multiplayCount` come from PlayerState methods this game never implements,
+//! so they are always zero - a death has to be read from the warp log instead
+//! (see `watch`). What is real here: name, soul level, soul memory, area, play
+//! time, and the status line, which carries the effigy count that decides
+//! whether a character can be summoned at all.
 //!
 //! Login is off unless the config carries a username and a password, so the
 //! credentials are read from the server's own config rather than invented

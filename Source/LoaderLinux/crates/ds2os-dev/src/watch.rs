@@ -7,8 +7,9 @@
 //!
 //! So this watches the things that say what happened, together:
 //!
-//! - the server's death count per player, which is the only unambiguous "they
-//!   died" the harness can get without another address hunt;
+//! - the warp log, which is where a death actually shows up: the DS2 server
+//!   never fills its death counter, so the API's is always zero and only the
+//!   game itself can say;
 //! - where each player is, by area name, so a character that fell somewhere
 //!   else announces itself;
 //! - the warp log the injector writes, which names *why* the game moved
