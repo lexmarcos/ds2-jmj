@@ -225,6 +225,33 @@ lados; quem barra é a camada de menu, antes de o warp chegar a ser pedido.
 Ou seja: o M2 exige criar uma capacidade que o jogo remove de propósito do
 convidado. Não é afinar um parâmetro, é abrir uma porta fechada.
 
+### Duas tentativas, e o que cada uma provou
+
+**Flag 1 (a forma da entrada): recusada.** O hook montou o pedido certo e o
+warp disse não. As duas precondições estavam boas no instante da morte —
+`ctx+0x24ac = 0x1e`, `ctx+0x24b1 = 0x40`, bit 2 limpo — então quem recusou foi
+o portão `FUN_140248940`.
+
+**Flag 0 (a forma do desmonte): aceita, e no lugar errado.** O warp passou
+(`aceito=1`), **nenhum pedido de fim de sessão chegou a existir** — o log de
+sessão ficou vazio nos dois lados —, o convidado voltou **vivo e em pé**, e a
+sessão continuou em **estado 7 nos dois clientes** (o handler do estado 7
+segue rodando com o mesmo ponteiro). O host continuou listando "Chico" no HUD.
+
+Mas o convidado foi parar no **próprio mundo**: movi o host e ele não viu nada,
+e o mapa e a posição que mandei no pedido foram ignorados.
+
+Isso corrige uma inferência minha: **a flag não é só a chave do portão, ela
+escolhe o significado do destino.** Com ela ligada o pedido é "vá para este
+lugar neste mapa"; com ela desligada é "vá para casa", e o destino do pedido
+não é olhado. Só a forma da entrada carrega destino — e só o portão a barra.
+
+O saldo: saímos de "morto e travado" (M1) para "vivo, objetos de sessão
+intactos nos dois lados, mundo errado". Falta uma coisa só, e ela é pequena:
+o portão é `*(mgr+0x168) > 0`, com `mgr = *(contexto+0xd0)`. Medido positivo no
+meio da sessão (777 e 811) e evidentemente **não positivo no instante da
+morte** — que é o único instante que importa.
+
 Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
 jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
 mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par

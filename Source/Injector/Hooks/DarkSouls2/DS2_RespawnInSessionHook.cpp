@@ -58,6 +58,13 @@ namespace
     constexpr size_t kEntryState = 0x24ac;   // must be 0x1e
     constexpr size_t kEntryFlags = 0x24b1;   // bit 2 must be clear
 
+    // The permission gate the join's flag has to pass. FUN_140248940 inverts a
+    // virtual that is four instructions long - it asks whether this counter is
+    // positive - so the counter is the whole gate, and it can be lifted for the
+    // length of one call and put back.
+    constexpr size_t kGateOwner = 0xd0;
+    constexpr size_t kGateCounter = 0x168;
+
     // Session fields, all read live and all confirmed on a running co-op.
     constexpr size_t kSessionRole = 0xd8;
     constexpr size_t kSessionState = 0xf8;
@@ -102,6 +109,12 @@ namespace
     // warp was accepted in the same instant with zero, so both are worth
     // trying - the gate is the only thing that reads this.
     std::atomic<uint8_t> s_flag{ 1 };
+    // Lift the gate around the warp when it would refuse. Measured: with the
+    // flag clear the request is accepted but sends the player *home* - the map
+    // and position are ignored, because that flag is what selects "go home"
+    // rather than "go to this place". Only the join's flag carries a
+    // destination, and only the gate stands in its way.
+    std::atomic<bool> s_lift{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -187,16 +200,40 @@ namespace
         const uint32_t EntryState = *(const uint32_t*)(Context + kEntryState);
         const uint8_t EntryFlags = *(const uint8_t*)(Context + kEntryFlags);
 
+        // The gate, read and optionally held open. Restored immediately: it
+        // is a counter the game keeps for its own reasons, and leaving it
+        // raised would be a lie told to everything else that reads it.
+        int32_t* Counter = nullptr;
+        int32_t Saved = 0;
+        const uintptr_t GateOwner = *(uintptr_t*)(Context + kGateOwner);
+        if (GateOwner != 0)
+        {
+            Counter = (int32_t*)(GateOwner + kGateCounter);
+            Saved = *Counter;
+        }
+
         const uint8_t Flag = s_flag.load();
+        const bool Lift = s_lift.load() && Counter != nullptr && Saved <= 0;
+        if (Lift)
+        {
+            *Counter = 1;
+        }
+
         Warp_p Warp = *(Warp_p*)(*(uintptr_t*)Context + kWarpSlot);
         const uint8_t Accepted = Warp((void*)Context, &Request, Flag);
 
+        if (Lift)
+        {
+            *Counter = Saved;
+        }
+
         Append(StringFormat(
             "  morte de fantasma: papel=%u mapa=%08x sabor=%u destino=%.2f,%.2f,%.2f "
-            "flag=%u [+0x24ac]=%08x [+0x24b1]=%02x aceito=%u\n",
+            "flag=%u [+0x24ac]=%08x [+0x24b1]=%02x portao=%d%s aceito=%u\n",
             Role, Request.Map, (unsigned)Request.Flavour,
             Request.X, Request.Y, Request.Z, (unsigned)Flag,
-            EntryState, (unsigned)EntryFlags, (unsigned)Accepted));
+            EntryState, (unsigned)EntryFlags, Saved, Lift ? " (erguido)" : "",
+            (unsigned)Accepted));
 
         if (!Accepted)
         {
@@ -233,11 +270,15 @@ namespace
 
                 // "0" off, "1" on with the join's flag, "2" on with the
                 // teardown's flag.
+                // "0" off, "1" the join's flag, "2" the teardown's flag,
+                // "3" the join's flag with the gate held open for the call.
                 const char Choice = Contents.empty() ? '0' : Contents[0];
                 s_enabled.store(Choice != '0');
                 s_flag.store(Choice == '2' ? 0 : 1);
-                Append(StringFormat("=== renascer na sessao %s, flag %u ===\n",
-                    Choice == '0' ? "desligado" : "ligado", (unsigned)s_flag.load()));
+                s_lift.store(Choice == '3');
+                Append(StringFormat("=== renascer na sessao %s, flag %u, portao %s ===\n",
+                    Choice == '0' ? "desligado" : "ligado", (unsigned)s_flag.load(),
+                    s_lift.load() ? "erguido" : "intacto"));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
