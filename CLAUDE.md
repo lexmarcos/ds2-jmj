@@ -132,16 +132,16 @@ the first guess and it was wrong. Dying **in your own world** hollows you;
 dying as an invader in someone else's world does not, so a duel loss costs no
 effigy.
 
-**A session between the two clients stops forming after a rough restart.**
-Killing Steam 2, the wineservers or the games out from under each other leaves
-the peer to peer link broken even though everything else looks healthy: the
-server still routes the push, the target still answers
-`RequestSendMessageToPlayers`, and then one side says "Summoning failed. Timed
-out." and the other "Disconnected from multiplayer session." Neither an
-invasion nor a sign summon lands. The fix is a clean `down`, no leftover
-`Injector.exe`, `wineserver` or launch chain, and only then `up`. Before
-reading a PvP result as a finding, **run the invasion control**: it is two
-button presses and it tells you whether the machine can form a session at all.
+**Two games open on the same account break every session, and the symptom
+points somewhere else.** After a failed relaunch left a second client running
+on account 1, no session would form at all — not an invasion, not a sign
+summon — while everything upstream looked healthy: the server routed the push
+and the target answered `RequestSendMessageToPlayers`. Then one side said
+"Summoning failed. Timed out." and the other "Disconnected from multiplayer
+session." Closing the extra client fixed it immediately. `status` shows the
+game processes; there must be exactly one per account. Before reading any PvP
+result as a finding, **run the invasion control** — two button presses, and it
+says whether the machine can form a session at all.
 
 **Quit Game is refused while a PvP session is live**, on both sides. The menu
 entry highlights and A does nothing, so `game leave` sits there pressing

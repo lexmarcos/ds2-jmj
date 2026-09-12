@@ -103,6 +103,42 @@ fantasma. Foi assim que `game leave` falhou por 180s sem dizer o motivo.
 Pelo que foi visto aqui, resta a morte, o temporizador e a desconexão. Os
 itens de saída (Separation Crystal, Homeward Bone) não foram testados.
 
+## O push de summon é aceito — e mesmo assim a sessão não forma
+
+Medido em 12/09 com o gatilho `debug_summon.req` e o par já tendo duelado uma
+vez (é o duelo anterior que deixa no servidor o id do host e o blob opaco que
+ele mandou).
+
+    02:22:16  1:Samuel  Summoning sign 1003              o duelo de verdade
+    02:25:27  3:Chico   Sign 1004 created: type 4        a placa de volta ao chão
+    02:25:43  servidor  Rematch: replayed the summon of sign 1004 by player 1
+    02:25:43  3:Chico   Sign 1004 removed by its owner
+    02:25:5x  3:Chico   "Summoning canceled. Unable to join multiplayer session."
+              1:Samuel  nada. nenhum diálogo, nenhuma mensagem
+
+As duas linhas do meio são a parte boa, e é um resultado novo: **o cliente que
+está com uma placa no chão age num push que ninguém pediu.** Ele retira a
+placa e tenta entrar, que é exatamente o que faz num summon legítimo. O push
+de invasão fabricado não produz nem isso — o invasor parado não está
+esperando nada.
+
+A parte ruim é a última linha. O host nunca soube de coisa alguma. Quem abre a
+sessão é o cliente do host quando ele aperta o botão na placa; o servidor não
+consegue criar esse estado, e repetir o `player_struct` guardado não basta —
+ou ele é de uso único, ou falta o lado que escuta. O fantasma tenta conectar
+num host que não está esperando ninguém, e o jogo diz isso com todas as
+letras.
+
+**O que isso significa para a funcionalidade:** a revanche pela red sign
+também precisa de um patch no cliente, só que do outro lado. No caminho do
+orbe quem precisa agir é o invasor; no caminho da placa é o **host**, que
+teria que reemitir sozinho o summon da placa do mesmo par. O servidor faz a
+metade dele: lembra o par e sabe reenviar o push.
+
+Uma versão intermediária que não precisa de patch nenhum: o fantasma recoloca
+a placa (um toque), o host aperta A nela (um toque). Nada é consumido, e a
+placa reaparece no mesmo lugar, ao lado do host.
+
 ## O que isso deixa como projeto
 
 Em ordem de valor:
