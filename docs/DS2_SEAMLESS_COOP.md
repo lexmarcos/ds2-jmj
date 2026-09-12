@@ -191,6 +191,39 @@ Ser honesto aqui importa mais que a feature:
 - Com dois jogadores em uma máquina não dá para testar três; ver
   [DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md).
 
+## A sessão é uma máquina de estados, e o warp é o que ela usa para mover gente
+
+O objeto da sessão guarda o estado em `objeto+0xf8`, e cada estado tem o seu
+handler. Dois interessam:
+
+| estado | handler | o que faz |
+| --- | --- | --- |
+| `2` | `FUN_1402c2a80` | leva o convidado **para dentro** do mundo do host |
+| `8` | `FUN_1402c3900` | desmonta a sessão e manda o convidado para casa |
+
+O handler do estado 2 monta o pedido assim — e este é o molde de "ponha o
+jogador **aqui**, neste mapa":
+
+    +0x00  0            tipo 0
+    +0x04  4            motivo
+    +0x08  mapa         vem do pedido que chegou pela rede
+    +0x14  byte         de FUN_1402d4830
+    +0x18  x, y, z      posição
+    +0x24  1.0f
+    +0x28  ...          orientação, normalizada ali mesmo
+
+e chama o warp com o terceiro argumento **1**. O retorno importa: se o warp
+recusa, o handler joga a máquina para o estado `0x13` (`0x1402c2ee6`). Ou seja
+**o warp devolve um byte**, e um detour declarado `void` entrega ao chamador o
+que sobrou em `al` — foi um bug real deste hook, corrigido.
+
+Isto é também o desenho do próximo passo. Se numa morte de convidado a máquina
+fosse levada de volta ao estado 2 com um destino novo, em vez de ao estado 8, o
+convidado renasceria **dentro do mundo do host**. Não está testado, e há contas
+que o jogo pode ter a acertar (o host precisa concordar, o corpo do fantasma
+precisa sumir, a bloodstain fica em algum lugar). Mas é a primeira hipótese com
+endereço.
+
 ## Os sítios que chamam o warp não saem do Ghidra
 
 `Xrefs.java` em `0x1416148f0` devolve 40 leituras e **nenhuma** delas é uma das
