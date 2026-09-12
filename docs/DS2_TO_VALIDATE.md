@@ -191,9 +191,12 @@ contrário ela vira a mesma armadilha que o `debug_invade.req` virou.
 
 Em aberto, em ordem de quanto bloqueiam:
 
-- **O `SignHandle` sobrevive a uma placa nova?** O handle capturado no
-  toque é de uma placa que deixou de existir. Se o handle da placa
-  recolocada for outro, o hook precisa enumerar em vez de repetir.
+- ~~O `SignHandle` sobrevive a uma placa nova?~~ **Não**, e o hook já
+  resolve: ele lê o handle novo no parâmetro de saída da função que
+  registra a placa. A revanche por red sign funciona ponta a ponta.
+- **O hook invoca qualquer placa que chegue**, não só a do par. Com dois
+  jogadores dá no mesmo; com três, está errado. Falta ler o campo do
+  item que identifica o dono.
 - **Qual índice da tabela em `0x1410c0050` é cada papel.** Zerar todos
   trava a morte; para o co-op seamless é preciso saber qual entrada
   mexer, e o tipo vem de `rcx+0xe0` num objeto transitório.

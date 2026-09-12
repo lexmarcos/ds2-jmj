@@ -375,6 +375,25 @@ quer parar, ou a placa que chegou é de outra pessoa. Para dois jogadores no
 servidor a placa que chega é sempre do par; para mais, o hook precisa
 identificar o dono, que é o campo do item que ainda não foi lido.
 
+## O ciclo fechado, sem ninguém armar nada
+
+Última rodada, 12/09 às 06:04, com a build em que o próprio summon liga a
+revanche:
+
+    05:58:11  1:Samuel  Summoning sign 1003          o unico toque humano
+              hook      "o jogador invocou a placa 80000015; revanche ligada"
+    06:03:xx  sessao termina
+    06:04:05  3:Chico   Sign 1004 created            a placa volta ao chao
+    06:04:58  hook      "revanche: invocando a placa 80000025 que acabou de chegar"
+    06:04:58  1:Samuel  Summoning sign 1004
+    06:05:04  3:Chico   Sign 1004 removed by its owner
+    06:05:11  3:Chico   First RequestNotifyJoinSession
+
+O `JoinSession` da última linha vem de um cliente que tinha acabado de ser
+reiniciado, então o censo dele estava limpo e a linha é honesta.
+
+Entre o primeiro summon e esse, **ninguém apertou nada no host**.
+
 ## Como ligar, e o que a funcionalidade é hoje
 
 Duas peças, uma de cada lado, e as duas nascem desligadas:
