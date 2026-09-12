@@ -29,10 +29,12 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | --- | --- |
 | `doctor` | reports everything missing from the environment |
 | `status` | one screen: server, ports, player count, game processes, log paths |
-| `up` / `down` | server, game and second instance in one go |
+| `up` / `down` | server, both instances, and both characters standing in the world |
+| `reload` | restarts the server and puts everyone back in the world, without closing the game |
 | `server up\|down\|restart\|status` | the local server on its own |
 | `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations |
-| `game launch\|stop` | the second instance, in its own Proton prefix |
+| `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
+| `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
 | `game options` | the line to paste into Steam's launch options |
 | `game watch` | asks the injector to watch the area address for a few seconds |
@@ -45,6 +47,61 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 `--timer-seconds`, `--probe-area`, `--watch-reads`, `--area-address`,
 `--probe-zone`. The config is read **when the injector is injected**, so
 changing it means closing and reopening the game.
+
+### Getting into the world
+
+`up` ends with both characters standing in Majula, and `reload` puts them back
+there after a server restart. Both are menu walks, and the walk is short:
+
+```
+title  --START-->  main menu  --A-->  save list  --A-->  world
+```
+
+What makes it reliable is that nothing waits for a duration. Two oracles say
+what the game is doing:
+
+- **The game itself.** `DS2_MemProbe` reads `mod 1614804 1`: the byte is 1
+  while the title screen's state machine is alive and 0 from the moment
+  loading starts. It is the only answer that works when the client is not
+  talking to the server at all, which is exactly when things go wrong.
+- **The server's log**, for the half the game will not admit to:
+  `has logged in as player` means the title screen is behind us, and
+  `Renaming connection to '<n>:<name>'` means that character is in the world.
+  The name is the only statement tying an instance to a save, so it is also
+  the check for "did the right character load".
+
+The log is written with box-drawing bytes that are not UTF-8, so `grep` calls
+it binary and prints its match to **stderr**. Use `grep -a`, or the harness.
+
+**A server restart has one correct order**, which `reload` follows: quit to
+the title **first**, then restart, then come back in. The client asks for a
+session on its way *into* the title screen, so leaving first means it is
+already holding one when the server returns — and the server keeps its tokens
+across a restart (`PersistAuthTokens`, on by default, in
+`Saved/<server>/auth_tokens.txt`), so that session is still good.
+
+Restarting first costs a minute and looks like something else entirely. The
+client keeps presenting a token the new process has never seen, is refused,
+retries, and eventually drops to the title with "the connection to the game
+server was lost" — which reads like a Steam failure and is not. It also puts
+up "lost connection to game server, switching to offline mode" over the world,
+and that dialog eats the first button of any menu walk.
+
+Persisted tokens do not let a client keep playing through a restart: the
+reliable UDP stream's sequence numbers live in the connection, so the server
+answers `Received sequenced packet (type 4) before connection is established`
+and the client is connected in name only. The trip to the title is what
+rebuilds the stream.
+
+The game happily enters the world **offline** when its login failed, and looks
+perfectly normal there. `game enter` notices — nothing renames the connection
+— quits to the title and tries once more.
+
+Two smaller rules, both learned by losing an afternoon:
+
+- **The pad has to exist before the game starts.** `up` orders it that way.
+- **Focus is not a formality.** The game ignores the pad while another window
+  is active, so every press focuses first and checks that the focus landed.
 
 ### Driving the game
 

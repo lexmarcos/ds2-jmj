@@ -22,6 +22,13 @@ pub struct GameWindow {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    /// The process that owns it, when the window says so.
+    ///
+    /// Two instances look identical from the outside, and their windows appear
+    /// in whatever order the X server hands them over. The owning pid is the
+    /// only thing that ties a window to the instance the harness started, so
+    /// that "focus instance 2" means the account, not a position in a list.
+    pub pid: Option<u32>,
 }
 
 /// Every Dark Souls II game window currently mapped.
@@ -59,6 +66,7 @@ pub fn windows() -> Result<Vec<GameWindow>, String> {
             .unwrap_or((0, 0));
 
         found.push(GameWindow {
+            pid: window_pid(id),
             id: id.to_owned(),
             title: "DARK SOULS II".to_owned(),
             width,
@@ -73,16 +81,42 @@ pub fn windows() -> Result<Vec<GameWindow>, String> {
     Ok(found)
 }
 
+/// The pid in the window's _NET_WM_PID, when it has one.
+fn window_pid(id: &str) -> Option<u32> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+
+    let id = u32::from_str_radix(id.trim_start_matches("0x"), 16).ok()?;
+    let (conn, _) = x11rb::connect(None).ok()?;
+    let atom = conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    let property = conn
+        .get_property(false, id, atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let first = property.value32()?.next();
+    first
+}
+
 /// Brings a window to the front and gives it keyboard focus.
 ///
 /// The game ignores gamepad input while it is not the active window, so
 /// anything that drives it has to focus the right instance first. This asks the
 /// window manager through _NET_ACTIVE_WINDOW rather than forcing the stacking
 /// order, so the manager stays in charge and the change sticks.
+///
+/// It then **checks** that the focus landed, and says so when it did not. A
+/// request the manager quietly drops used to report success, and every input
+/// sent afterwards went to whatever really held the focus: the game sat at the
+/// same screen while the harness reported a menu walk it never performed.
 pub fn focus(window: &GameWindow) -> Result<(), String> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{
-        self, ClientMessageEvent, ConnectionExt as _, EventMask, StackMode,
+        self, ClientMessageEvent, ConnectionExt as _, EventMask, InputFocus, StackMode,
     };
 
     let id = u32::from_str_radix(window.id.trim_start_matches("0x"), 16)
@@ -115,9 +149,49 @@ pub fn focus(window: &GameWindow) -> Result<(), String> {
     );
     conn.flush().map_err(|e| e.to_string())?;
 
-    // The manager needs a moment before the window actually takes input.
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    Ok(())
+    // The manager needs a moment before the window actually takes input, and
+    // it may decide not to. Give it a few tries, then take the focus directly:
+    // that bypasses the manager's focus-stealing prevention, which is exactly
+    // what a harness wants and an application should not do.
+    for attempt in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        match active_window(&conn, root) {
+            Some(active) if active == id => return Ok(()),
+            _ => {}
+        }
+        if attempt >= 2 {
+            let _ = conn.set_input_focus(InputFocus::PARENT, id, x11rb::CURRENT_TIME);
+            let _ = conn.flush();
+        }
+    }
+
+    let holder = active_window(&conn, root)
+        .map(|w| format!("0x{w:x}"))
+        .unwrap_or_else(|| "nenhuma".to_owned());
+    Err(format!(
+        "a janela {} não ficou em foco; {holder} está com ele. \
+         O jogo ignora o controle enquanto não está em foco",
+        window.id
+    ))
+}
+
+/// Which window the manager currently reports as active.
+fn active_window<C: x11rb::connection::Connection>(conn: &C, root: u32) -> Option<u32> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _};
+
+    let atom = conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    let property = conn
+        .get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let first = property.value32()?.next();
+    first
 }
 
 /// Grabs one window and writes it as a PNG.

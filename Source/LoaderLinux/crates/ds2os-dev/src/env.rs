@@ -69,7 +69,16 @@ impl Environment {
             .as_ref()
             .map(|s| GameDetection::probe(s, GameType::DarkSouls2));
 
-        let proton = steam.as_ref().and_then(|s| s.proton_builds().pop());
+        // The prefix names the Proton that built it, which is the one the
+        // game's saves and settings were made under. Falling back to "the last
+        // one alphabetically" picked "Proton 9.0" over "Proton - Experimental"
+        // by an accident of the dash.
+        let proton = steam
+            .as_ref()
+            .zip(install.as_ref())
+            .and_then(|(steam, game)| ds2os_core::proton::for_game(steam, game))
+            .map(|build| build.dir)
+            .or_else(|| steam.as_ref().and_then(|s| s.proton_builds().pop()));
 
         let server = repo_root.as_ref().and_then(|root| {
             let working_dir = root.join("bin/x64_release/server");

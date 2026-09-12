@@ -37,6 +37,17 @@ fn required_settings() -> Value {
         // Lets one Steam account hold both sessions, which is the whole point
         // of running two instances from one copy of the game.
         "AllowDuplicateSteamIds": true,
+        // Upstream's welcome is an advert for another project, and it is the
+        // first thing in the way every time the game starts. This replaces it
+        // with the one thing worth reading at that moment: which server you
+        // are on. An empty list would be quieter, but the game then says
+        // "There is no new information", which is also what it says when it is
+        // talking to FromSoftware's own servers — and telling those two apart
+        // is the whole point of looking.
+        "Announcements": [{
+            "Header": "Servidor local — ds2os-dev",
+            "Body": "\nVocê está no servidor desta máquina (127.0.0.1), não nos servidores oficiais.",
+        }],
     })
 }
 
@@ -125,13 +136,28 @@ fn start(server: &ServerPaths) -> Result<(), String> {
     .map_err(|e| format!("não consegui iniciar o servidor: {e}"))
 }
 
+/// Whether the pid in `pid_file` still exists at all, whatever it is running.
+fn started_or_starting(pid_file: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(pid_file) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return false;
+    };
+    std::fs::metadata(format!("/proc/{pid}")).is_ok()
+}
+
 fn wait_until_listening(timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if proc::tcp_port_busy(50050) && proc::tcp_port_busy(50000) {
             return Ok(());
         }
-        if proc::running(&paths::server_pid(), "Server").is_none() {
+        // Only a process that is really gone counts as dead. Reading the
+        // command line of one that is still starting can come back empty
+        // while it execs, and treating that as death reported a server that
+        // had in fact come up and was serving.
+        if !started_or_starting(&paths::server_pid()) {
             return Err(format!(
                 "o servidor morreu ao iniciar; veja {}",
                 paths::server_log().display()
