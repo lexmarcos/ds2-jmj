@@ -253,6 +253,49 @@ jogo e não código de jogabilidade:
 `FUN_1406a2610` é o alvo se a revanche precisar de patch no cliente: é o envio
 que só acontece depois que o host encosta na placa.
 
+## O caminho do cliente quando o host encosta na placa
+
+Levantado em 12/09 com a varredura de breakpoints (ver
+[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)): 520 entradas
+armadas na faixa `0x140270000–0x1402a0000`, jogo parado quinze segundos para o
+que roda por quadro se desarmar, log apagado, e então o toque.
+
+O confirme do diálogo "Summon this dark spirit?" leva a uma classe com nome
+de verdade, vinda do RTTI:
+
+    FUN_1402a5970   construtor de NetSvrSummonSignSummonJob
+                    vftables em 0x1410d63a8 e 0x1410d6448
+
+E, ao contrário de tudo o mais neste caminho, ela **tem grafo de chamadas
+estático**:
+
+    FUN_1402a14c0  ->  FUN_1402a41b0  ->  FUN_1402a2ca0  ->  FUN_1402a5970
+
+O topo é pequeno o bastante para caber aqui:
+
+```c
+void FUN_1402a14c0(undefined8 param_1, undefined4 *param_2)
+{
+    undefined4 local[6];
+    local[0] = *param_2;
+    FUN_1402a41b0(param_1, local);
+}
+```
+
+`FUN_1402a41b0` pega o gerenciador de placas (`FUN_1402128d0`), resolve o
+**dword** que recebeu pelo slot virtual `+0x98` — ou seja, o argumento é um
+*handle de placa*, não a placa — e, passando as checagens, monta o job.
+
+**Isto é o ponto de entrada que a revanche precisa.** Um hook no injector pode
+guardar o `param_1` e o handle que o jogador usou e chamar `FUN_1402a14c0` de
+novo quando o par recolocar a placa. O que ainda não se sabe:
+
+- o que é `param_1` (contexto da interação? o jogador?) — sai de graça num
+  breakpoint em `0x2a14c0`, que registra `rcx`;
+- se o handle continua válido depois que o fantasma recoloca a placa. Provável
+  que não: a placa nova é outro objeto. Nesse caso o hook precisa **enumerar**
+  as placas pelo mesmo gerenciador em vez de repetir o handle velho.
+
 ## O que isso deixa como projeto
 
 Em ordem de valor:
