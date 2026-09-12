@@ -125,11 +125,6 @@ pub fn focus(window: &GameWindow) -> Result<(), String> {
     let (conn, screen_index) = x11rb::connect(None).map_err(|e| e.to_string())?;
     let root = conn.setup().roots[screen_index].root;
 
-    // Already there: return without the settle below, because a walk focuses
-    // before every burst and would otherwise pay for it ten times over.
-    if active_window(&conn, root) == Some(id) {
-        return Ok(());
-    }
 
     let atom = conn
         .intern_atom(false, b"_NET_ACTIVE_WINDOW")
@@ -155,6 +150,12 @@ pub fn focus(window: &GameWindow) -> Result<(), String> {
     );
     conn.flush().map_err(|e| e.to_string())?;
 
+    // Asserted every time, never skipped when the window already looks active:
+    // the game stops taking the virtual pad unless the focus is claimed again,
+    // and being the active window is not enough. Short-circuiting this because
+    // `_NET_ACTIVE_WINDOW` already named the window made every walk move on its
+    // first burst and freeze afterwards, which read as terrain.
+    //
     // The manager needs a moment before the window actually takes input, and
     // it may decide not to. Give it a few tries, then take the focus directly:
     // that bypasses the manager's focus-stealing prevention, which is exactly

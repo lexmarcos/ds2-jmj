@@ -98,8 +98,8 @@ pub struct Plan {
 impl Default for Plan {
     fn default() -> Self {
         Self {
-            radius: 1.5,
-            burst: Duration::from_millis(450),
+            radius: 2.0,
+            burst: Duration::from_millis(1200),
             timeout: Duration::from_secs(90),
             max_drop: 6.0,
         }
@@ -133,6 +133,9 @@ pub fn walk_to(
         .ok_or("o jogo não está publicando posição")?;
     let mut previous = first;
     let mut sent: Option<f32> = None;
+    let mut grown: u64 = 0;
+    // Which of the eight compass directions to try next when nothing moves.
+    let mut probe: u32 = 0;
 
     loop {
         // Never measure against a reading that has not been taken since the
@@ -164,12 +167,21 @@ pub fn walk_to(
             let moved_x = pose.x - previous.x;
             let moved_z = pose.z - previous.z;
             let moved = (moved_x * moved_x + moved_z * moved_z).sqrt();
-            if moved < 0.15 {
+            if moved < 0.20 {
+                // The character turns before it walks, and a burst that ends
+                // during the turn covers no ground - measured, a 700 ms one
+                // after a right angle moved nothing at all. So a burst that
+                // achieved little buys a longer one rather than a verdict; it
+                // is also the only way the estimate below gets any signal.
                 stalled += 1;
-                if stalled >= 5 {
+                grown = (grown * 2).min(2400);
+                probe += 1;
+                if stalled >= 9 {
                     return Ok(Outcome::Stuck { steps, distance });
                 }
             } else {
+                grown = 0;
+                probe = 0;
                 stalled = 0;
                 // The rotation that takes what was asked for to what happened.
                 // It has to be the angle actually sent, not the one aimed at
@@ -184,36 +196,50 @@ pub fn walk_to(
         // Desired world direction, rotated back into stick space.
         let mut stick = wrap(dz.atan2(dx) - yaw);
 
-        // A stall tries a sidestep before giving up: most walls here are a
-        // metre of strafe from being cleared, and the alternative is a dead
-        // test.
+        // Nothing moved, so the direction is blocked and the estimate has
+        // nothing to learn from. Sweep the eight compass directions instead of
+        // guessing: one of them is open, and the burst that finally moves is
+        // also the sample that calibrates the camera. Alternating ninety
+        // degrees either side was not enough - wedged against the bonfire,
+        // both sides are wall.
         if stalled > 0 {
-            let side = if stalled % 2 == 0 { 1.0 } else { -1.0 };
-            stick = wrap(stick + side * std::f32::consts::FRAC_PI_2);
+            stick = wrap((probe as f32) * std::f32::consts::FRAC_PI_4);
         }
 
         // Shorter steps close in, or the walk paces back and forth over the
-        // target: the first attempt overshot 1.6 m into 1.8 m.
-        let burst = if distance < 3.0 {
-            Duration::from_millis((plan.burst.as_millis() as u64) / 2)
-        } else {
-            plan.burst
-        };
+        // target. Not much shorter, though: the character turns before it
+        // moves, and a burst that ends during the turn covers no ground at all
+        // - a 700 ms one, measured, moved nothing after a 90 degree turn.
+        let base = if distance < 3.0 { 500 } else { plan.burst.as_millis() as u64 };
+        let burst = Duration::from_millis(base.max(grown));
 
-        // The pad takes x right and y up-negative, which is why the angle's
-        // sine goes out as the y component unchanged: both are screen-down
-        // positive here.
+        // The pad's y is up-negative, so the stick vector reaches the world as
+        // (x, -y). That is a reflection, and a reflection cannot be absorbed by
+        // the rotation the estimate above is made of - getting it wrong walked
+        // the character steadily away from the target while the estimate
+        // chased its own tail.
+        //
+        // Measured rather than guessed: stick right produced world angle
+        // -164.8 degrees and stick forward -82.2, and forward is +90 from
+        // right only under this reading.
         screen::focus(&window)?;
         pad::send(
             1,
             &format!(
                 "stick l {:.3} {:.3} {}",
                 stick.cos().clamp(-1.0, 1.0),
-                stick.sin().clamp(-1.0, 1.0),
+                (-stick.sin()).clamp(-1.0, 1.0),
                 burst.as_millis()
             ),
         )
         .map_err(|e| format!("conta {account}: {e}"))?;
+
+        // The stick has to sit at centre for a moment before the game takes a
+        // new direction: without this the first burst of a walk moves and
+        // every one after it does nothing, which reads as a wall on all eight
+        // sides. It was in the first version of this loop and got lost in a
+        // rewrite, and cost an afternoon of blaming the terrain.
+        std::thread::sleep(Duration::from_millis(200));
 
         sent = Some(stick);
         previous = pose;

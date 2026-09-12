@@ -138,6 +138,31 @@ a guinada da câmera, suavizada no passo seguinte. Cair e travar são relatados,
 não combatidos — um teste que dependia da caminhada falha dizendo o que houve
 em vez de estourar o tempo.
 
+Três coisas que custaram caro para descobrir, e que valem para qualquer coisa
+que dirija o jogo:
+
+- **O foco tem que ser reafirmado a cada vez.** Não basta a janela já estar
+  ativa: o jogo para de aceitar o controle virtual se o foco não for reclamado
+  de novo. Um atalho que devolvia cedo quando `_NET_ACTIVE_WINDOW` já apontava
+  para a janela fez toda caminhada andar no primeiro passo e congelar depois —
+  e isso se parece exatamente com terreno bloqueado. Foram gastas horas
+  culpando a fogueira.
+- **O eixo Y do controle chega ao mundo invertido.** O mapeamento é uma rotação
+  **composta com um espelho**, e um espelho não é absorvível por uma estimativa
+  que só sabe girar: errar isso faz o personagem andar firme para longe do alvo
+  enquanto a estimativa persegue o próprio rabo. Medido, não chutado: stick
+  para a direita deu ângulo −164,8° no mundo e stick para a frente −82,2°, e
+  frente só é +90° de direita sob essa leitura.
+- **O personagem gira antes de andar.** Um burst que acaba durante a virada não
+  cobre chão nenhum — um de 700 ms depois de noventa graus mediu deslocamento
+  zero. Por isso os passos são de 1,2 s, crescem quando rendem pouco, e só
+  passos que cobriram mais de meio metro têm direito de ensinar a estimativa.
+
+O que ela **não** faz: desviar de obstáculo. Ela varre as oito direções quando
+para de sair do lugar, o que resolve encavalar, mas não contorna geometria. Na
+prática chega a 2 m do alvo em terreno com degraus, que é folga de sobra para
+pisar numa placa, e é por isso que o raio padrão é 2 m.
+
 ## O breakpoint que segue um ponteiro
 
 `DS2_Trace.req` aceita, desde 12/09:

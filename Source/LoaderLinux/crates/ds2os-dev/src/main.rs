@@ -104,7 +104,7 @@ enum Command {
         #[arg(long)]
         to_instance: Option<u8>,
         /// Close enough, in metres
-        #[arg(long, default_value_t = 1.5)]
+        #[arg(long, default_value_t = 2.0)]
         radius: f32,
         /// Give up after this many seconds
         #[arg(long, default_value_t = 90)]
