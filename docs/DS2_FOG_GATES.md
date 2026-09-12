@@ -171,6 +171,26 @@ One trap worth writing down: a `scan` always reports one hit at a low address
 (`0x0954fb08` here), because the probe's own needle is in memory too. Ignore
 the hit that is not in the game's heap.
 
+## The fog a phantom sees is not a white door
+
+Measured in Heide, with a guest in a host's world and the fog on screen in
+front of the guest, both clients probed at the same moment:
+
+| reading | guest | host |
+| --- | --- | --- |
+| `[[FeManager + 0x3c0] + 0x1e]`, polled for 24s | 0 | 0 |
+| `MAP_OBJECT_*` params resident | 6 | 6 |
+
+The six are the same six that are resident in Majula, and none of them is the
+white door table. So while a fog wall was being rendered a few metres away,
+**no white door data was loaded and the white door test never fired**.
+
+That is a negative result worth keeping: the fog that appears because someone
+is a guest in another player's world is drawn by something other than
+`MapObjWhiteDoorComponent`, and the whole class above — vtable, box test,
+frontend byte — is about the *placed* fog walls of a map, not about the
+boundary a phantom runs into.
+
 ## How to carry on
 
 Take a character to a fog wall, then measure three things while standing in it:
