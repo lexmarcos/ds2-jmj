@@ -241,9 +241,35 @@ Entradas de 16 bytes, lidas da memória viva em `mod 10c0050 140`:
 faz a morte daquele tipo deixar de desmanchar as sessões — e é um patch de
 *dado*, não de `.text`, da mesma família do `DS2_TimerParamPatch`.
 
-Falta saber qual índice é a morte do fantasma: o tipo vem de `rcx+0xe0`, e o
-`rcx` desse ponto ainda não foi capturado. O próximo passo é um breakpoint em
-`FUN_140190950` para ler o `rcx` e sondar esse byte.
+### Tentar zerar a tabela inteira não entrega o co-op, e ensina por quê
+
+Primeira tentativa, em 12/09: zerar o byte `+1` das dezessete entradas que o
+tinham diferente de zero, **só no cliente do fantasma**, com
+`pokemod 10c00?1 00`. Todas aceitaram (`antes=01`/`03`, `ok`).
+
+Depois disso, uma invasão montada e o fantasma jogado do penhasco:
+
+- a sessão **continuou de pé** — a barra de vida do host seguiu na tela do
+  fantasma, e o servidor continuou recebendo posição dele;
+- mas o fantasma **não morreu**. Ficou caindo no vazio por mais de dois
+  minutos, sem tela de morte, sem renascer, sem voltar para o próprio mundo. O
+  processo seguia rodando a 80% de CPU e a imagem seguia mudando, então não era
+  travamento: era um fluxo de morte que nunca completa;
+- restaurar os bytes não desfez o estado em que o personagem já estava.
+
+A leitura: esse byte não é "mantenha a sessão". Ele faz parte do caminho da
+**morte**, e tirá-lo deixa o jogador num limbo. O co-op seamless precisa de
+mais do que suprimir o fim da sessão — precisa redirecionar o renascimento
+para a fogueira dentro do mundo do host. Suprimir sem redirecionar é
+exatamente o erro que o CLAUDE.md descreve como "patch no valor em vez de na
+origem".
+
+Falta ainda saber **qual índice** corresponde a cada papel. O tipo vem de
+`rcx+0xe0`; capturei o `rcx` num breakpoint em `FUN_140190950`
+(`rcx=0x7fffe8158ac0`, `rdx=2`), mas a sonda rodou um minuto depois e leu
+memória já reciclada — o objeto é transitório. Para ler o byte certo, a sonda
+precisa acontecer no mesmo instante do breakpoint, o que o tracer ainda não
+sabe fazer.
 
 ## Por que isso importa
 
