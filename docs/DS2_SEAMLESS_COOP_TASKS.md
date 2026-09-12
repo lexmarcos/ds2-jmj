@@ -53,8 +53,18 @@ fantasma branco morto por queda:
 O que **não** está resolvido, e é o M2: o convidado fica morto onde caiu.
 Nada o levanta. Recusar o fim impede o desmonte; não faz renascer.
 
-Também não está medido quanto tempo a sessão aguenta assim, nem o que acontece
-se o host andar para outra área com um convidado morto pendurado.
+**E ela não aguenta indefinidamente.** Medido depois: deixado assim, o
+convidado acabou recebendo *"Disconnected from multiplayer session."* e voltou
+ao próprio mundo vivo, sem que nada fosse pedido de novo. Ou seja, recusar o
+fim de sessão **adia** o desmonte enquanto alguém age, não o cancela para
+sempre: um convidado morto que nunca levanta é uma sessão que expira.
+
+Isso não desfaz o M1 — no momento da medição não houve warp, o host não pediu
+nada e os dois HUDs listavam o outro — mas muda o que ele significa. O M1
+compra tempo para o M2 acontecer; não substitui o M2.
+
+Também não está medido o que acontece se o host andar para outra área com um
+convidado morto pendurado.
 
 ### Como era antes
 
