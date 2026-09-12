@@ -171,7 +171,35 @@ One trap worth writing down: a `scan` always reports one hit at a low address
 (`0x0954fb08` here), because the probe's own needle is in memory too. Ignore
 the hit that is not in the game's heap.
 
-## The fog a phantom sees is not a white door
+## Correction: white doors are there, the param is not
+
+The section below concluded from two readings — the param not resident, the
+byte never set — that the phantom's barrier was not a white door. The first
+reading does not support that conclusion, and the conclusion was wrong.
+
+Scanning the guest's memory for the class's own vtable pointer, `0x1410c6458`,
+finds **five live `MapObjWhiteDoorComponent` objects** in Heide while the
+barrier is up. Each holds at `+0x58` a pointer into a table of `0x20` byte
+records:
+
+| offset | meaning |
+| --- | --- |
+| `+0x00` | kind: `0`, `1` or `2` among these five |
+| `+0x04` | a float, `1.5` on the kind `1` records and `0` on the rest |
+| `+0x08`, `+0x0c` | two ids, `0x118`…`0x11e` here |
+| `+0x10` | `0x009d5300` / `0x009d5301` on the kind `1` records, zero elsewhere |
+| `+0x18` | `0x07cee711` / `0x07cee716` |
+
+So the param table being absent means only that: these doors do not need a row
+from it. Scanning for a class's vtable is the cheap way to ask whether its
+objects exist at all, and it should have been the first question.
+
+What remains true from the measurement is narrower: the byte at
+`[[FeManager + 0x3c0] + 0x1e]` stayed 0 while the guest stood **in front of**
+the barrier, which says the guest was not inside any door's box, not that no
+door was there.
+
+## The reading that was wrong
 
 Measured in Heide, with a guest in a host's world and the fog on screen in
 front of the guest, both clients probed at the same moment:
