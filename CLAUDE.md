@@ -44,6 +44,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
+| `players` | what the server knows: name, soul level, souls, soul memory, deaths, covenant, area |
+| `watch` | prints only when something changes; a death above all |
 | `where` | where each character is standing, from the game's own memory |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
 | `game options` | the line to paste into Steam's launch options |
@@ -325,6 +327,19 @@ completeness against something that does not share the inventory's
 assumptions: re-running your own classifier over your own result agrees with
 itself by construction and proves nothing. This mistake shipped a patch that
 crashed the game on save load.
+
+**A test that fails and a character that died look identical.** Both leave a
+log full of nothing, and telling them apart by screenshot afterwards has cost
+several afternoons. `ds2os-dev players` shows the death count, and
+`ds2os-dev watch` prints a line the moment it goes up; `goto` stops on its own
+when the character is moved by something other than the walk, because one burst
+cannot cover eight metres and a jump that large is a respawn. Run a watch beside
+anything scripted.
+
+The web UI's login is off until `WebUIServerUsername` and `WebUIServerPassword`
+are set in the server config, and the harness reads the credentials from that
+same config - so whatever the server was started with is what works. The
+config lives under `Saved/` and is gitignored.
 
 **A killed client leaves its sign behind, and it looks real.** The server
 does clean up — `DS2_SignManager::OnLostPlayer` removes the player's signs and
