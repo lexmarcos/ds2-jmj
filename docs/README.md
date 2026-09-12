@@ -11,6 +11,8 @@ server.
 | [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md) | What stands between a death and the next invasion of the same pair, measured |
 | [DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md) | The client's path from a death to `RequestNotifyLeaveSession`, traced at runtime |
 | [DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md) | **The client's multiplayer classes carry RTTI names and full method signatures** |
+| [DS2_SEAMLESS_COOP_DESIGN.md](DS2_SEAMLESS_COOP_DESIGN.md) | **What seamless co-op is meant to be: the host owns the world, each player keeps their own save, and every rule that follows from that** |
+| [DS2_SEAMLESS_COOP_TASKS.md](DS2_SEAMLESS_COOP_TASKS.md) | **The work left, in dependency order, with what is already known about each piece** |
 | [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) | **Every warp in the game goes through one call: the request it carries, who reads which field, and why a co-op death and an invader death end up in different places** |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas; carries corrections where it was wrong |
 | [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md) | **Multiplayer in Majula and the other closed areas: the three things required, how to apply and verify them** |

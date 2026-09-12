@@ -12,6 +12,14 @@ Written material lives in `docs/`; `docs/README.md` is the index.
 `docs/DS2_MAJULA_MULTIPLAYER.md` is the closest thing to a reference for what
 the injector actually does and why.
 
+**The standing goal is seamless co-op**, and it is written down rather than
+carried in anyone's head. `docs/DS2_SEAMLESS_COOP_DESIGN.md` is the brief —
+the host owns the world, each player keeps their own save, and everything that
+follows from that. `docs/DS2_SEAMLESS_COOP_TASKS.md` is the work left, in
+dependency order; keep it true as pieces land, and read both before starting
+anything co-op. Nothing below M1 there is reachable until a death stops
+tearing the session down.
+
 ## The harness: `ds2os-dev`
 
 `Source/LoaderLinux/target/debug/ds2os-dev` drives everything. Reach for it
