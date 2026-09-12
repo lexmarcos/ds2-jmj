@@ -375,6 +375,32 @@ quer parar, ou a placa que chegou é de outra pessoa. Para dois jogadores no
 servidor a placa que chega é sempre do par; para mais, o hook precisa
 identificar o dono, que é o campo do item que ainda não foi lido.
 
+## Como ligar, e o que a funcionalidade é hoje
+
+Duas peças, uma de cada lado, e as duas nascem desligadas:
+
+| onde | flag | o que faz |
+| --- | --- | --- |
+| servidor | `DS2_AutoRematch` | lembra o último summon de cada dono de placa e sabe reenviar o push; sozinho **não** forma sessão |
+| cliente | `DS2AutoRematch` | o `DS2_RematchHook`: invocar uma vez liga a revanche, e cada placa que chegar depois é invocada sozinha |
+
+No harness: `ds2os-dev up --auto-rematch`, ou
+`ds2os-dev game prepare --auto-rematch` e relançar (a config é lida na
+injeção).
+
+O hook escreve em `DS2_Rematch.log`, ao lado da DLL. Escrever `0` em
+`DS2_Rematch.req` desliga; qualquer outra coisa liga.
+
+**O que é hoje:** depois de um duelo por red sign, o fantasma que voltou
+recoloca a placa e o host o invoca sozinho, sem apertar nada. Vinte e quatro
+segundos entre a placa ir ao chão e a sessão formar, dos quais vinte são o
+intervalo do poll de placas do cliente.
+
+**O que não é:** o hook invoca **qualquer** placa que chegue, não só a do par.
+Com dois jogadores no servidor dá no mesmo; com três, invocaria o primeiro que
+aparecesse. O campo do item que identifica o dono ainda não foi lido, e é o que
+falta para isso ficar certo.
+
 ## O que isso deixa como projeto
 
 Em ordem de valor:
