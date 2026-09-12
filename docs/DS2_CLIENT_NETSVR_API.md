@@ -80,6 +80,50 @@ um `SignHandle` de 32 bits.
 A lista completa das 84 sai em segundos com o `ClassList.java`; não vale a
 pena congelá-la aqui, porque o script é mais confiável que uma cópia.
 
+## O registro de placas do cliente, e como chegar nele
+
+O `NetSvrSummonSignManager` não guarda as placas; quem guarda é o lado de
+jogo. `FUN_1402a41b0` pega o registro assim:
+
+```asm
+1402a41c1:  call   0x1402128d0        ; devolve o registro
+1402a41c6:  mov    (%r14),%r8d        ; o SignHandle
+1402a41ce:  mov    %rax,%rcx
+1402a41d6:  mov    (%rax),%r8         ; a vftable
+1402a41dc:  call   *0x98(%r8)         ; registro->slot 0x98(handle) -> placa
+```
+
+E `FUN_1402128d0` é uma cadeia de ponteiros a partir do global do jogo,
+`DAT_1416148f0`, verificada na memória viva:
+
+| passo | classe (RTTI) | vftable |
+| --- | --- | --- |
+| `*(global) + 0x90` | `SignManager` | `0x1410cb668` |
+| `... + 0x68` | `SignSetCtrlManager` | `0x1410cb4a0` |
+| `... + 0x20` | `SummonSignSetCtrl` | `0x1410cb698` |
+| `... + 0x28` | `SummonSignSetCtrl`, segunda base | `0x1410cb6e8` |
+
+É a segunda base que responde ao slot `+0x98`. Ela é `FUN_140213460`:
+
+```c
+void FUN_140213460(longlong this, undefined4 *handle)
+{
+    uint h = *handle;
+    if (FUN_14020e6f0(*(this - 0x10), &h) == 0) {   // procura na coleção A
+        FUN_14020e6f0(*(this - 8), &h);             // e depois na B
+    }
+}
+```
+
+**Duas coleções**, em `this-0x10` e `this-0x8`, com `FUN_14020e6f0` fazendo a
+busca por handle. Os slots vizinhos `+0xa0` e `+0xa8` chamam o mesmo
+`FUN_14020f660(this - 0x28, x, 2|3, ...)` com discriminadores diferentes, o que
+cheira a "por tipo de placa".
+
+Para a revanche, é daqui que sai o handle da placa nova: percorrer a coleção
+em vez de repetir um handle morto. Falta ler o formato do contêiner
+(`FUN_14020e6f0`) e onde a placa guarda o dono.
+
 ## Por que isso importa agora
 
 A revanche por red sign precisa que o cliente **do host** reemita o summon.
