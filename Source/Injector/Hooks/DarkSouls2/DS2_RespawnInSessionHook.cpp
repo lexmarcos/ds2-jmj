@@ -79,6 +79,14 @@ namespace
     // hanging on a farewell that never comes. It did, for good.
     constexpr uint32_t kReasonGuestDied = 2;
 
+    // The state the join starts from. `FUN_1402c4450` is state 1's handler and
+    // it is the only place state 2 is ever written: it waits for the peer link
+    // (`session+0x100`, field +0xa4, reaching 4), builds a block out of
+    // session+0xd8..+0xf0, and only then moves on. So joining a host's world is
+    // a peer handshake, not a warp - which is why re-issuing the warp put the
+    // guest in the right place of the wrong world.
+    constexpr uint32_t kStateJoining = 1;
+
     struct WarpRequest
     {
         uint32_t Kind;
@@ -122,6 +130,10 @@ namespace
     // rather than "go to this place". Only the join's flag carries a
     // destination, and only the gate stands in its way.
     std::atomic<bool> s_lift{ false };
+    // Instead of sending a warp, hand the session back to the state the join
+    // starts from and let the game redo it. Everything the handshake needs is
+    // still in the session object; nothing here has to be synthesised.
+    std::atomic<bool> s_rejoin{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -170,6 +182,19 @@ namespace
                 Reason, State, Role,
                 (s_enabled.load() && Reason != kReasonGuestDied) ? " (nao foi o convidado que morreu)" : ""));
             s_original_death(Record, Reason);
+            return;
+        }
+
+        if (s_rejoin.load())
+        {
+            // Nothing is emitted: the state machine is put back to where a
+            // join begins and asked to do it again. The record is marked done
+            // either way, or the death screen never clears.
+            *(uint32_t*)((uint8_t*)Session + kSessionState) = kStateJoining;
+            *((uint8_t*)Record + 0xce) = 1;
+            Append(StringFormat(
+                "  morte de fantasma: motivo=%u papel=%u -> reentrando pelo estado %u\n",
+                Reason, Role, kStateJoining));
             return;
         }
 
@@ -286,9 +311,13 @@ namespace
                 s_enabled.store(Choice != '0');
                 s_flag.store(Choice == '2' ? 0 : 1);
                 s_lift.store(Choice == '3');
-                Append(StringFormat("=== renascer na sessao %s, flag %u, portao %s ===\n",
-                    Choice == '0' ? "desligado" : "ligado", (unsigned)s_flag.load(),
-                    s_lift.load() ? "erguido" : "intacto"));
+                s_rejoin.store(Choice == '4');
+                Append(StringFormat("=== renascer na sessao %s, %s ===\n",
+                    Choice == '0' ? "desligado" : "ligado",
+                    s_rejoin.load()
+                        ? "reentrando pelo estado 1"
+                        : (s_flag.load() ? (s_lift.load() ? "flag 1, portao erguido" : "flag 1")
+                                         : "flag 0")));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
