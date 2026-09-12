@@ -287,6 +287,47 @@ Então o alvo do co-op seamless é um byte só: `0x1410c00c1`. Zerar a tabela
 inteira travou a morte; zerar só essa entrada é o teste que ainda falta, e é
 a diferença entre desligar um comportamento e desligá-lo para o papel certo.
 
+## O byte não manda o jogador para casa — só desfaz a sessão
+
+Testado em 12/09, depois de saber o índice: zerar **só** o byte da entrada 7
+(`0x1410c00c1`, `antes=01`), no cliente do fantasma, e então invadir e morrer.
+
+O que aconteceu:
+
+- o `FUN_140190950` **não foi chamado** — o breakpoint armado nele não
+  disparou, o que é a prova de que o ramo mudou: com o byte zerado o código
+  toma o `je 0x140190920`;
+- e mesmo assim o fantasma viu **"You have been vanquished. Returning to your
+  world…"** e voltou.
+
+Os dois ramos terminam no mesmo lugar:
+
+```c
+void FUN_140190920(longlong param_1)          // o ramo "não encerre sessões"
+{
+    FUN_14044fde0(*(undefined8 *)(DAT_1416148f0 + 0x70));
+    *(undefined1 *)(param_1 + 0xce) = 1;
+}
+
+void FUN_14044fde0(undefined8 param_1)        // e este é o "volte para o seu mundo"
+{
+    undefined8 pedido[4] = { -1, -1, 0, 0 };
+    FUN_14044ed40(param_1, pedido);
+    (**(code **)(*DAT_1416148f0 + 0x40))(DAT_1416148f0, pedido, 0);
+}
+```
+
+`FUN_14044fde0` monta um pedido com destino **vazio** (dois `-1`) e o entrega
+ao slot virtual `+0x40` do contexto global do jogo. É a mesma chamada que
+aparece dentro de `FUN_1402c3900`, a rotina que demole a sessão.
+
+**Então a divisão é esta:** o byte da tabela decide se as *sessões* são
+desfeitas; o retorno ao próprio mundo é um **warp**, pedido separadamente. Um
+co-op seamless precisa mexer no warp — suprimi-lo, ou trocar o destino vazio
+pela fogueira do mundo onde o jogador já está. Mexer só na tabela deixa o
+jogador voltando para casa com a sessão pendurada, que é pior que o
+comportamento original.
+
 ## Por que isso importa
 
 Duas funcionalidades pedidas dependem deste caminho:
