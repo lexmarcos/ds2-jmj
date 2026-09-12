@@ -104,10 +104,21 @@ namespace
             return;
         }
 
+        // The whole request goes in as well. Half of these 0x38 bytes are
+        // still unnamed, and a line that only prints the named half cannot
+        // answer a question nobody has asked yet.
+        std::string Raw;
+        const uint8_t* Bytes = (const uint8_t*)Request;
+        for (size_t Index = 0; Index < sizeof(WarpRequest); ++Index)
+        {
+            Raw += StringFormat("%02x", Bytes[Index]);
+        }
+
         Append(StringFormat(
-            "  %s motivo=%u forca=%u tipo=%u mapa=%08x ponto=%08x [+0x0c]=%08x [+0x10]=%08x sabor=%u de=+0x%zx\n",
+            "  %s motivo=%u forca=%u tipo=%u mapa=%08x ponto=%08x [+0x0c]=%08x [+0x10]=%08x sabor=%u de=+0x%zx cru=%s\n",
             What, Request->Reason, (unsigned)Flag, Request->Kind, Request->Map, Request->Spawn,
-            Request->Unknown0c, Request->Unknown10, (unsigned)Request->Flavour, (size_t)From));
+            Request->Unknown0c, Request->Unknown10, (unsigned)Request->Flavour, (size_t)From,
+            Raw.c_str()));
     }
 
     void WarpHook(void* Context, WarpRequest* Request, uint8_t Flag)
