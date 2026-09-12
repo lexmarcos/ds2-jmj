@@ -24,12 +24,10 @@ cliente do invasor.
 
 ## Usar o orbe exige forma humana
 
-Descoberto aqui, e é o obstáculo central da revanche.
-
 Com o personagem **hollow**, apertar X com o Cracked Red Eye Orb selecionado no
 cinto não faz absolutamente nada: sem animação, sem mensagem na tela e sem
-nenhum pedido chegando ao servidor. O mesmo vale para a Red Sign Soapstone.
-Parece um botão que não funciona, e foi assim que custou tempo.
+nenhum pedido chegando ao servidor. Parece um botão que não funciona, e foi
+assim que custou tempo.
 
 O controle que separa as duas explicações possíveis:
 
@@ -44,85 +42,94 @@ A última linha é a que importa: a efígie foi usada sem o personagem dar um
 passo, e o diálogo passou a aparecer. O bloqueio é a forma humana, não a
 fogueira.
 
-**Consequência:** quem morre fica hollow. Um invasor que morreu precisa de uma
-Human Effigy antes de poder invadir de novo. Quem sobrevive continua humano —
-mas isso ainda não foi medido (ver
-[DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md)).
+## Mas morrer como invasor não tira a forma humana
 
-## A cadeia da morte, medida
+Esta é a descoberta que muda o projeto, e ela quase passou batida porque a
+primeira leitura dos dados estava errada.
 
-Invasor morto por queda no mundo do host (relógio do servidor):
+O que hollowa é morrer **no próprio mundo**. Uma morte como invasor, dentro do
+mundo do host, devolve o jogador para casa **ainda humano**.
 
-    01:18:36  3:Chico    última posição dentro do mundo do host
-    01:18:40  1:Samuel   RequestNotifyKillEnemy
-    01:18:52  3:Chico    RequestNotifyLeaveSession          morte + 12s
-    01:18:53  1:Samuel   RequestNotifyLeaveGuestPlayer      morte + 13s
-    01:18:57  3:Chico    Location: de volta ao próprio mundo morte + 17s
+A confusão: na primeira rodada o invasor morreu como fantasma, voltou, e o
+orbe não funcionou — mas entre as duas coisas ele tinha caído de um penhasco
+**no próprio mundo**, e foi essa segunda morte que o deixou hollow. A efígie
+seguinte pareceu ser o que consertou a morte do duelo. Não era.
 
-Os 12 segundos entre a morte e o `LeaveSession` batem com os 12,4s medidos em
-[DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md) numa morte por
-kill. O cliente do morto controla esse tempo; nada no servidor o encurta.
+A medição limpa, sem nenhuma efígie envolvida:
 
-Note o `RequestNotifyKillEnemy` do **host**: o jogo contabiliza o invasor morto
-como inimigo abatido, mesmo quando a morte foi queda e o host estava parado na
-fogueira. Não confunda com `RequestNotifyKillPlayer`.
+    01:42:17  3:Chico   última posição dentro do mundo do host
+      (morte por queda como fantasma)
+    01:42:52  3:Chico   Location: de volta à própria fogueira
+    01:42:54  3:Chico   Break-in target request: target 1
+    01:42:54  servidor  Invading '1:Samuel' across areas.
 
-## O ciclo completo da revanche, dirigido à mão
+Duas invasões seguidas, a segunda dois segundos depois de chegar em casa, sem
+Human Effigy no meio. O contador de efígies não se moveu.
 
-    morte                               t+0
-    LeaveSession                        t+12s
-    de volta ao próprio mundo, hollow   t+17s
-    Human Effigy pelo menu              ~t+30s
-    orbe + confirmar                    ~t+35s
-    pedido de invasão no servidor       t+185s (medido: 01:21:45)
-    fantasma no mundo do host           ~t+205s
+**Consequência:** a revanche não custa item nenhum além do próprio orbe, e a
+exigência de forma humana **não** precisa ser removida para o invasor. Ela só
+apareceria se o mesmo jogador morresse também no mundo dele.
 
-O número grande é ruído meu, não do jogo: inclui uma segunda morte acidental e
-navegação de menu lenta. O piso real, com a efígie já no cinto, é **cerca de um
-minuto**, e ele se divide assim:
+## O ciclo completo da revanche, medido
+
+    morte como invasor                  t+0
+    LeaveSession                        t+12s     (medido na primeira rodada)
+    de volta ao próprio mundo           t+35s
+    X, esquerda, A                      t+37s
+    pedido de invasão no servidor       t+37s
+    fantasma no mundo do host           ~t+55s
 
 | trecho | quem controla | dá para encurtar? |
 | --- | --- | --- |
-| morte → LeaveSession, 12s | cliente do morto | não sem mexer no cliente |
-| volta ao próprio mundo, 5s | carregamento | não |
-| efígie | jogador | sim: cinto, ou remover a exigência |
-| orbe + confirmar | jogador | sim: seria o que um patch automatizaria |
+| morte → LeaveSession, 12s | cliente do morto | só mexendo no cliente |
+| carregar de volta, ~20s | carregamento | não |
+| **três toques de botão, ~2s** | **o jogador** | **é o que a automação elimina** |
 | pareamento + carregar, ~20s | rede e carregamento | não |
 
-Do minuto, aproximadamente 35 segundos são carregamento e a espera fixa do
-cliente. O que um patch pode eliminar é o resto.
+Vale dizer isso claramente: de aproximadamente 55 segundos, o jogador responde
+por **dois**. Uma revanche automática não deixa o duelo mais rápido; ela tira a
+atenção do jogador do laço. Quem quiser cortar o resto teria que atacar a
+espera de 12s ou o próprio fim da sessão — fazer o fantasma renascer no mundo
+do host em vez de voltar para casa, que é como a arena funciona.
 
-## Pareamento: com dois jogadores já é determinístico
+## Sair para o título é recusado durante uma sessão
 
-    3:Chico | Break-in target list: type 0, 1 candidates of 2 clients.
-    3:Chico |  candidate '1:Samuel': invadable yes.
-    3:Chico | Break-in target request: target 1
-    3:Chico | Invading '1:Samuel' across areas.
+O item **Quit Game** aparece no menu de sistema e fica selecionável, mas apertar
+A não faz nada enquanto existe uma sessão PvP — nos dois lados, host e
+fantasma. Foi assim que `game leave` falhou por 180s sem dizer o motivo.
 
-Com dois clientes no servidor a lista de alvos tem exatamente um candidato, e é
-sempre o mesmo par. Um "lembrar o último oponente" no servidor não muda nada
-aqui; só passaria a valer com três ou mais jogadores, que esta máquina não
-consegue testar.
-
-O host não precisa fazer nada: não há consentimento numa invasão. Toda a
-revanche depende de **uma ação de um jogador** — o invasor usar o orbe.
+Uma sessão só termina por morte, pelo temporizador, ou por desconexão.
 
 ## O que isso deixa como projeto
 
-Em ordem de custo:
+Em ordem de valor:
 
-1. **Tirar a exigência de forma humana do item de invasão** (cliente). É um
-   predicado, do mesmo tipo que o `DS2_UnblockMultiPlayHook` já trata. Sem
-   isso, "automático" é impossível: o morto sempre precisa de uma efígie.
-2. **Usar o orbe sozinho** quando a sessão terminou em morte e o par ainda está
-   no ar (cliente). Precisa achar o ponto de entrada que o uso do item chama.
-3. **Lembrar o par no servidor**, para quando houver mais de dois jogadores.
-   Barato, mas sozinho não entrega nada.
+1. **Usar o orbe sozinho** quando a sessão terminou em morte e o par ainda está
+   no ar (cliente). É a funcionalidade pedida, e agora ela é pequena: não
+   precisa de efígie, não precisa mexer na forma humana, só disparar o mesmo
+   caminho que os três toques disparam. Economiza dois segundos de relógio e
+   toda a atenção do jogador.
+2. **Não terminar a sessão na morte** (cliente). É o único caminho que corta
+   os ~50 segundos de verdade, e é muito mais fundo: o fantasma teria que
+   renascer no mundo do host em vez de voltar para o seu.
+3. **Lembrar o par no servidor**. Com dois jogadores a lista de alvos já tem um
+   candidato só; isso só passa a valer com três ou mais, que esta máquina não
+   consegue testar.
+
+O ponto de entrada para (1): os envios estão em `FUN_1406a6300`
+(`RequestGetBreakInTargetList`, 0x3d2) e `FUN_1406a6fb0` (`RequestBreakInTarget`,
+0x3d3), achados procurando os ids do protocolo como imediatos. **Nenhum dos
+dois tem chamador estático** — são virtuais ou chamados por tabela, então o
+caminho até o botão X precisa de um breakpoint em execução (`DS2_Trace.req`),
+não do grafo de chamadas.
 
 ## Ainda não medido
 
-- Se quem **vence** continua humano (o invasor que mata o host, e o host que
-  mata o invasor). Muda se a revanche custa uma efígie de um lado só.
+- Se a Red Sign Soapstone pode ser usada hollow. O teste que parecia provar
+  que sim foi feito com o personagem humano sem que eu soubesse, então não
+  vale nada. O orbe é o único item medido.
+- Se o **host** que morre continua podendo ser invadido sem fazer nada. Ele
+  hollowa, mas ninguém precisa de forma humana para ser invadido.
 - Se a morte por queda e a morte por kill produzem a mesma cadeia: aqui a
   queda não mostrou `RequestNotifyDeath`, mas o censo do servidor só registra a
   **primeira** mensagem de cada tipo por cliente, então isso não é evidência.

@@ -124,12 +124,18 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
-**A hollow character cannot use the online items.** With the Cracked Red Eye
-Orb or a soapstone selected, X does nothing at all — no animation, no message,
-nothing reaching the server — and it reads exactly like a dead button. Burn a
-Human Effigy first (menu → Inventory → the second item). Dying hollows you, so
-this comes back after every death. Standing on a bonfire does **not** block the
-item; that was the first guess and it was wrong.
+**A hollow character cannot use the Cracked Red Eye Orb.** X does nothing at
+all — no animation, no message, nothing reaching the server — and it reads
+exactly like a dead button. Burn a Human Effigy first (menu → Inventory → the
+second item, A, A). Standing on a bonfire does **not** block the item; that was
+the first guess and it was wrong. Dying **in your own world** hollows you;
+dying as an invader in someone else's world does not, so a duel loss costs no
+effigy.
+
+**Quit Game is refused while a PvP session is live**, on both sides. The menu
+entry highlights and A does nothing, so `game leave` sits there pressing
+buttons until it times out. End the session first: a death, the timer, or
+`game stop`.
 
 `game focus <n>`, `pad --focus <n>` and `game shot` all mean the **instance**,
 resolved by the owning process. They used to index the window list, which put

@@ -164,17 +164,21 @@ Worth finding where that table lives and what a present record contains.
 Measured in [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md), with
 two gaps left open:
 
-- whether the **winner** of a duel stays human. Only the loser was
-  checked, and the loser is hollow. If the winner also hollows, every
-  rematch costs an effigy on both sides, not one.
+- whether the Red Sign Soapstone can be used hollow. The test that
+  looked like it proved yes was run on a character who turned out to be
+  human, so it proves nothing. The orb is the only item measured.
 - whether a fall death and a kill death produce the same message chain.
   The fall showed no `RequestNotifyDeath`, but the server census only
   logs the first message of each type per client, so that is not
-  evidence either way.
+  evidence either way. A staged kill needs the two characters next to
+  each other, and the terrain around the Heide bonfire kept killing the
+  phantom on the way over.
 
-Both were left untested because the terrain around the Heide bonfire
-made a controlled kill expensive to stage, not because they do not
-matter.
+The first reading of these measurements was wrong in a way worth
+remembering: a death as an invader looked like it cost human form,
+because an accidental second death **in the invader's own world** sat
+between the duel and the test. The fix was to run the loop again with
+nothing in between.
 
 ## Not started
 
