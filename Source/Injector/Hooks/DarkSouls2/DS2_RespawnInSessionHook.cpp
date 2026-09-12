@@ -65,6 +65,30 @@ namespace
     // the hollowing - and reviving him in the middle of it would race.
     constexpr int kReviveDelayFrames = 90;
 
+    // The predicate the arrival asks before it does anything: `FUN_1402c6570`,
+    // taking the multiplayer manager and the session's role byte. Measured
+    // 12/09 - the eighth attempt reached the arrival with the guard open, the
+    // invitation replayed, and *this* is what refused: the handler went to
+    // state 0xb with reason 0x12, which is its "not allowed" exit.
+    //
+    // It is a pure question, so rather than spend the one replay finding out,
+    // the replay now waits until the answer is yes.
+    //
+    //   FUN_14014ed40(mode, role)  -> a table at 0x141568810, [role + mode*0x14]
+    //   FUN_1402ca190()            -> among other things, ctx+0x70 +0x1b0 == 0
+    //
+    // That last one is the suspect: it plausibly means "this player is still
+    // settling", and standing him up ourselves is exactly what would leave it
+    // set.
+    constexpr size_t kCanJoinOffset = 0x2c6570;
+    constexpr uint8_t kCanJoinBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0x02 };
+
+    // Where the manager lives, and the pieces the predicate reads, so a "no"
+    // says which half said it.
+    constexpr size_t kManagerRoot = 0x1616cf8;
+    constexpr size_t kManagerSlot = 0x18;
+    constexpr size_t kSettling = 0x1b0;   // on *(ctx+0x70)
+
     constexpr size_t kContextOffset = 0x16148f0;
     constexpr size_t kWarpSlot = 0x40;
     constexpr size_t kPrepareArgOffset = 0x22e0;
@@ -199,6 +223,15 @@ namespace
     using Respawn_p = void(*)(void* Record);
     Respawn_p s_respawn = nullptr;
 
+    using CanJoin_p = uint8_t(*)(void* Manager, uint8_t* Role);
+    CanJoin_p s_can_join = nullptr;
+
+    // How long to hold the replay waiting for the predicate, and what it last
+    // said, so the log carries one line per change rather than one per frame.
+    constexpr int kCanJoinWaitFrames = 3600;
+    int s_can_join_waited = 0;
+    uint8_t s_can_join_last = 0xff;
+
     using Dispatch_p = void(*)(void* Session, float Delta);
     Dispatch_p s_original_dispatch = nullptr;
 
@@ -283,6 +316,37 @@ namespace
         {
             Stream << Text;
         }
+    }
+
+    // Asks the arrival's own question, and says what the answer was built
+    // from. Everything here is a read or a pure predicate.
+    uint8_t AskCanJoin(void* Session, std::string* Why)
+    {
+        const uintptr_t Root = *(const uintptr_t*)(s_base + kManagerRoot);
+        if (Root == 0 || s_can_join == nullptr)
+        {
+            if (Why != nullptr) *Why = "sem gerente";
+            return 0;
+        }
+
+        void* Manager = *(void**)(Root + kManagerSlot);
+        uint8_t Role = *(const uint8_t*)((const uint8_t*)Session + kSessionRole);
+        if (Role >= 0x14)
+        {
+            Role = 0;
+        }
+
+        const uint8_t Answer = s_can_join(Manager, &Role);
+
+        if (Why != nullptr)
+        {
+            const uintptr_t Context = *(const uintptr_t*)(s_base + kContextOffset);
+            const uintptr_t Record = Context == 0 ? 0 : *(const uintptr_t*)(Context + kRespawnRecordOffset);
+            const uint32_t Settling = Record == 0 ? 0xffffffff : *(const uint32_t*)(Record + kSettling);
+            *Why = StringFormat("papel=%u assentando=%u", (unsigned)Role, Settling);
+        }
+
+        return Answer;
     }
 
     uint8_t ReadArriveGuard(void* Session)
@@ -376,6 +440,8 @@ namespace
         {
             s_guard_waited = 0;
             s_guard_last = 0xff;
+            s_can_join_waited = 0;
+            s_can_join_last = 0xff;
 
             if (!s_payload_valid.load())
             {
@@ -536,6 +602,8 @@ namespace
                 *(uint32_t*)(Bytes + kSessionState) = kStateJoining;
                 s_guard_waited = 0;
                 s_guard_last = 0xff;
+                s_can_join_waited = 0;
+                s_can_join_last = 0xff;
                 s_pending_arrive.store(true);
             }
             else if (s_rearm_waited % 600 == 0)
@@ -568,18 +636,29 @@ namespace
                         (unsigned)Guard, s_guard_waited));
                 }
 
-                if (Guard != 0)
+                std::string Why;
+                const uint8_t CanJoin = Guard != 0 ? 0 : AskCanJoin(Session, &Why);
+                if (Guard == 0 && CanJoin != s_can_join_last)
                 {
-                    // Not yet. The arrival would go straight to
-                    // EndSession(0x13) and take the staging with it, so the
-                    // replay waits - and gives up out loud rather than
-                    // silently sitting armed.
-                    if (++s_guard_waited >= kGuardWaitFrames)
+                    s_can_join_last = CanJoin;
+                    Append(StringFormat("  pode entrar = %u apos %d quadros (%s)\n",
+                        (unsigned)CanJoin, s_can_join_waited, Why.c_str()));
+                }
+
+                if (Guard != 0 || CanJoin == 0)
+                {
+                    // Not yet. Going ahead would spend the one replay on a
+                    // refusal - the guard sends the arrival to
+                    // EndSession(0x13), and a "no" from the predicate sends it
+                    // to state 0xb. So the replay waits, and gives up out loud
+                    // rather than silently sitting armed.
+                    ++s_can_join_waited;
+                    if (++s_guard_waited >= kGuardWaitFrames + kCanJoinWaitFrames)
                     {
                         s_pending_arrive.store(false);
                         Append(StringFormat(
-                            "  a guarda ficou em %02x por %d quadros; desistindo da repeticao\n",
-                            (unsigned)Guard, s_guard_waited));
+                            "  desistindo: guarda=%02x pode_entrar=%u apos %d quadros (%s)\n",
+                            (unsigned)Guard, (unsigned)CanJoin, s_guard_waited, Why.c_str()));
                     }
                 }
                 else
@@ -592,7 +671,9 @@ namespace
                     memcpy(Saved, Bytes + kReturnBlock, sizeof(Saved));
 
                     Append(StringFormat(
-                        "  estado 2; repetindo o convite do host: mapa=%08x destino=%.2f,%.2f,%.2f\n",
+                        "  estado 2 apos %d quadros, pode entrar (%s); repetindo o convite: "
+                        "mapa=%08x destino=%.2f,%.2f,%.2f\n",
+                        s_can_join_waited, Why.c_str(),
                         Payload[0], *(float*)&Payload[1], *(float*)&Payload[2], *(float*)&Payload[3]));
 
                     s_original_arrive(Session, Payload);
@@ -699,6 +780,7 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
         { kDispatchOffset, kDispatchBytes, sizeof(kDispatchBytes), "despachante" },
         { kArriveOffset, kArriveBytes, sizeof(kArriveBytes), "chegada" },
         { kRespawnOffset, kRespawnBytes, sizeof(kRespawnBytes), "renascimento" },
+        { kCanJoinOffset, kCanJoinBytes, sizeof(kCanJoinBytes), "pode entrar" },
     };
     for (const auto& Check : Checks)
     {
@@ -720,6 +802,7 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
     s_original_dispatch = (Dispatch_p)(s_base + kDispatchOffset);
     s_original_arrive = (Arrive_p)(s_base + kArriveOffset);
     s_respawn = (Respawn_p)(s_base + kRespawnOffset);
+    s_can_join = (CanJoin_p)(s_base + kCanJoinOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
