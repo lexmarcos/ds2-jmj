@@ -117,6 +117,20 @@ A leitura é protegida: um registrador pode apontar para qualquer coisa, e uma
 falha dentro de um handler vetorizado leva o jogo junto. Endereço ilegível sai
 como `[rcx=... ilegivel]` em vez de virar crash.
 
+### Rearmar o mesmo endereço exige `clear`
+
+O tracer guarda todo endereço que já armou, e `Arm` desiste silenciosamente se
+o endereço já está no mapa. Mandar `bp 2a14c0` uma segunda vez **parece
+funcionar** — o log responde `=== armados 1 enderecos ===` — e não arma nada.
+Custou uma rodada inteira de duelo até o hit que não veio explicar isso.
+
+Para medir a mesma função duas vezes:
+
+```
+clear
+bp 2a14c0 deref rdx 4
+```
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
