@@ -90,10 +90,14 @@ public:
     }
 
     // What the client tells us about itself that has no field of its own.
-    // Written out rather than left blank because the harness reads it, and the
-    // one that matters is the effigy count: a hollow character cannot be
-    // summoned as a white phantom, and a whole afternoon went into a staging
-    // that could never have worked because nobody could see that.
+    // Written out rather than left blank because the harness reads it.
+    //
+    // Do not read `human_effigy_burnt` as "is human": it stayed at zero
+    // through a Human Effigy being used and the character visibly returning to
+    // human form, so whatever it counts, it is not current humanity. Left in
+    // because it is what the client sends and someone should work out what it
+    // means; the honest test for hollow is still whether the summon prompt
+    // appears.
     virtual std::string GetStatusDescription() override
     {
         if (!GetPlayerStatus().has_player_status())

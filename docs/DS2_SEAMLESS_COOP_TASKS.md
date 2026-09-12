@@ -35,7 +35,28 @@ ao servidor. Ausência de erro não prova nada.
 
 ---
 
-## M1 — a sessão sobrevive a uma morte
+## M1 — a sessão sobrevive a uma morte — **FEITO em 12/09**
+
+Recusar o pedido de fim de sessão mantém a sessão viva. Medido, com a recusa
+armada só do lado do convidado (`block 2`, `role 1` em `DS2_Session.req`) e o
+fantasma branco morto por queda:
+
+    fim de sessao RECUSADO papel=1 estado=7 motivo=2 de=+0x2c9246
+
+- **nenhum warp aconteceu** — o `DS2_Seamless.log` do convidado ficou vazio, ou
+  seja ele não foi mandado para casa;
+- **o host não pediu nada**, o log dele continuou vazio;
+- e a sessão continuou de pé **nos dois lados**: o HUD do host seguia listando
+  "Chico" com a barra vazia, e o HUD do convidado seguia mostrando a barra do
+  "Samuel".
+
+O que **não** está resolvido, e é o M2: o convidado fica morto onde caiu.
+Nada o levanta. Recusar o fim impede o desmonte; não faz renascer.
+
+Também não está medido quanto tempo a sessão aguenta assim, nem o que acontece
+se o host andar para outra área com um convidado morto pendurado.
+
+### Como era antes
 
 **O marco que destrava o resto.** Hoje: o convidado morre, `FUN_1402c3900`
 (estado 8) manda `RequestNotifyLeaveSession`, a sessão acaba e ele vai para o

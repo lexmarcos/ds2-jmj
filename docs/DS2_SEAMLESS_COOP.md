@@ -417,6 +417,21 @@ aparecem. É a mesma parede que o grafo estático levantou nos envios de invasã
 e vale a mesma conclusão: aqui o inventário honesto é o log em execução, com o
 `de=+0x...` de cada warp, e não a análise.
 
+## A sessão pode sobreviver a uma morte
+
+Medido em 12/09, e é o resultado que muda o resto do plano. O caminho inteiro
+do desmonte pende de um pedido só, `FUN_1402c2f20`, e recusá-lo **do lado de
+quem morreu** basta:
+
+- o estado nunca sai do 7, porque `+0x1cc` nunca fica diferente de zero;
+- nenhum warp é emitido — o log de warp do convidado fica vazio;
+- o host não participa: ele não pede fim de sessão nenhum quando o convidado
+  morre, então não é preciso tocar no cliente dele;
+- os dois HUDs continuam listando o outro jogador.
+
+O convidado fica **morto no lugar onde caiu**. Recusar o fim impede o
+desmonte, não faz renascer — essa é a peça seguinte.
+
 ## O que ainda não se sabe
 
 - Que motivos existem além de 1 e 4, e o que o portão em `0x140248940` cobra.
