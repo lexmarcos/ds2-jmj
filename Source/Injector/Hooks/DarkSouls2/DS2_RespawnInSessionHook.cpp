@@ -54,6 +54,9 @@ namespace
     constexpr size_t kContextOffset = 0x16148f0;
     constexpr size_t kWarpSlot = 0x40;
     constexpr size_t kPrepareArgOffset = 0x22e0;
+    // What the warp entry tests before it looks at the request at all.
+    constexpr size_t kEntryState = 0x24ac;   // must be 0x1e
+    constexpr size_t kEntryFlags = 0x24b1;   // bit 2 must be clear
 
     // Session fields, all read live and all confirmed on a running co-op.
     constexpr size_t kSessionRole = 0xd8;
@@ -93,6 +96,12 @@ namespace
     uintptr_t s_base = 0;
     std::atomic<void*> s_session{ nullptr };
     std::atomic<bool> s_enabled{ false };
+    // Which flag to hand the warp. One is the form a join uses and goes
+    // through the permission gate; zero is the form the teardown uses and
+    // skips it. The first attempt was refused with one, and the teardown's own
+    // warp was accepted in the same instant with zero, so both are worth
+    // trying - the gate is the only thing that reads this.
+    std::atomic<uint8_t> s_flag{ 1 };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -173,13 +182,21 @@ namespace
             s_prepare(PrepareArgument);
         }
 
+        // Read before the attempt, because a refusal is worth nothing without
+        // knowing which of the three tests said no.
+        const uint32_t EntryState = *(const uint32_t*)(Context + kEntryState);
+        const uint8_t EntryFlags = *(const uint8_t*)(Context + kEntryFlags);
+
+        const uint8_t Flag = s_flag.load();
         Warp_p Warp = *(Warp_p*)(*(uintptr_t*)Context + kWarpSlot);
-        const uint8_t Accepted = Warp((void*)Context, &Request, 1);
+        const uint8_t Accepted = Warp((void*)Context, &Request, Flag);
 
         Append(StringFormat(
-            "  morte de fantasma: papel=%u mapa=%08x sabor=%u destino=%.2f,%.2f,%.2f aceito=%u\n",
+            "  morte de fantasma: papel=%u mapa=%08x sabor=%u destino=%.2f,%.2f,%.2f "
+            "flag=%u [+0x24ac]=%08x [+0x24b1]=%02x aceito=%u\n",
             Role, Request.Map, (unsigned)Request.Flavour,
-            Request.X, Request.Y, Request.Z, (unsigned)Accepted));
+            Request.X, Request.Y, Request.Z, (unsigned)Flag,
+            EntryState, (unsigned)EntryFlags, (unsigned)Accepted));
 
         if (!Accepted)
         {
@@ -214,10 +231,13 @@ namespace
                 }
                 std::filesystem::remove(s_request_path, Error);
 
-                const bool Wanted = Contents.find('0') != 0;
-                s_enabled.store(Wanted);
-                Append(Wanted ? "=== renascer na sessao ligado ===\n"
-                              : "=== renascer na sessao desligado ===\n");
+                // "0" off, "1" on with the join's flag, "2" on with the
+                // teardown's flag.
+                const char Choice = Contents.empty() ? '0' : Contents[0];
+                s_enabled.store(Choice != '0');
+                s_flag.store(Choice == '2' ? 0 : 1);
+                Append(StringFormat("=== renascer na sessao %s, flag %u ===\n",
+                    Choice == '0' ? "desligado" : "ligado", (unsigned)s_flag.load()));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
