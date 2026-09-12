@@ -832,10 +832,21 @@ fn shot_into(environment: &Environment, out: Option<PathBuf>) -> Result<(), Stri
             }
         }
     }
+    // A window whose account cannot be resolved keeps a positional name, but
+    // never one an account already took: the games leave their X windows
+    // behind when they are killed, and an old window overwriting `shot-1.png`
+    // is a screenshot of a dead game that reads as the live one.
     for (index, window) in windows.iter().enumerate() {
-        if !claimed.contains(&window.id) {
-            named.push((format!("shot-{}.png", index + 1), window));
+        if claimed.contains(&window.id) {
+            continue;
         }
+        let mut name = format!("shot-{}.png", index + 1);
+        let mut bump = windows.len();
+        while named.iter().any(|(taken, _)| *taken == name) {
+            bump += 1;
+            name = format!("shot-{bump}.png");
+        }
+        named.push((name, window));
     }
 
     for (name, window) in named {
