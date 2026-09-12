@@ -21,25 +21,40 @@ namespace
 {
 #if defined(_WIN32) && defined(_M_X64)
 
-    // In FUN_1401d1330, the white door's init:
+    // A fog wall keeps a mode byte at `this + 0x85`, and everything it does
+    // hangs on it: `0x14` zeroes the door's timer and leaves it alone, `0x0a`
+    // runs the timer up. Measured on a running game, every door reads `0x14`
+    // while the player is alone in a world and `0x0a` from the moment a phantom
+    // is in it — on the host's client as well as the guest's, which is the half
+    // the first attempt at this got wrong.
     //
-    //   +0x1d1362  call 0x140513270         ; [FeManager + 0x3b8]
-    //   +0x1d136f  call 0x14025ea40         ; -> eax, the phantom type   <- here
-    //   +0x1d1374  jmp  +0x1d1378
-    //   +0x1d1376  mov  eax,edi             ; the path that already stamps 0
-    //   +0x1d137b  mov  [rbx+0x80],eax      ; the stamp
+    // The byte is written in two places, both as `call FUN_1403f2d30` followed
+    // by `mov [rbx+0x85],al`:
     //
-    // The branch above already has a "stamp zero" path, for when the frontend
-    // has no player object yet, so zero is a value the rest of the init is
-    // written to accept. Replacing the call with `xor eax,eax` takes that path's
-    // value without taking its branch, and the three NOPs keep the following
-    // instruction where the jump expects it.
-    constexpr size_t kPatchOffset = 0x1d136f;
-    constexpr uint8_t kPatchBytes[] = { 0x31, 0xC0, 0x90, 0x90, 0x90 };       // xor eax,eax ; nop ; nop ; nop
-    constexpr uint8_t kExpectedBytes[] = { 0xE8, 0xCC, 0xD6, 0x08, 0x00 };    // call 0x14025ea40
+    //   +0x1d1381  in the door's init   (FUN_1401d1330)
+    //   +0x1d1931  in its update        (FUN_1401d1920), every frame
+    //
+    // Patching only the init does nothing, because the update writes it again.
+    // Both become `mov al,0x14`, so a door is always in the mode it has when
+    // nobody is visiting.
+    //
+    // `FUN_1403f2d30` itself is left alone: six other gimmicks call it, and
+    // this is meant to change fog walls, not everything that asks that
+    // question.
+    struct Site
+    {
+        size_t Offset;
+        uint8_t Expected[5];
+    };
 
-    uintptr_t s_address = 0;
-    uint8_t s_original[sizeof(kPatchBytes)] = {};
+    constexpr Site kSites[] = {
+        { 0x1d1381, { 0xE8, 0xAA, 0x19, 0x22, 0x00 } },
+        { 0x1d1931, { 0xE8, 0xFA, 0x13, 0x22, 0x00 } },
+    };
+    constexpr uint8_t kPatchBytes[] = { 0xB0, 0x14, 0x90, 0x90, 0x90 };   // mov al,0x14 ; nop ; nop ; nop
+
+    uintptr_t s_addresses[2] = {};
+    uint8_t s_original[2][sizeof(kPatchBytes)] = {};
     bool s_installed = false;
 
     bool WriteCode(uintptr_t Address, const void* From, size_t Length)
@@ -65,32 +80,41 @@ namespace
 bool DS2_PhantomFogHook::Install(Injector& injector)
 {
 #if defined(_WIN32) && defined(_M_X64)
-    s_address = (uintptr_t)injector.GetBaseAddress() + kPatchOffset;
+    const uintptr_t Base = (uintptr_t)injector.GetBaseAddress();
 
-    // Refuse rather than guess: a different build means these bytes belong to
-    // something else, and writing anyway would corrupt it.
-    uint8_t Found[sizeof(kExpectedBytes)] = {};
-    memcpy(Found, (const void*)s_address, sizeof(Found));
-    if (memcmp(Found, kExpectedBytes, sizeof(kExpectedBytes)) != 0)
+    // Check both sites before writing either. Half a patch is worse than none:
+    // the init would lie and the update would correct it every frame, which is
+    // exactly the failure this replaces.
+    for (size_t Index = 0; Index < 2; Index++)
     {
-        Error("[DS2PhantomFog] esperava %02x %02x %02x %02x %02x em +0x%zx, achou %02x %02x %02x %02x %02x; nao aplicado.",
-            kExpectedBytes[0], kExpectedBytes[1], kExpectedBytes[2], kExpectedBytes[3], kExpectedBytes[4],
-            (size_t)kPatchOffset, Found[0], Found[1], Found[2], Found[3], Found[4]);
-        s_address = 0;
-        return false;
+        const uintptr_t Address = Base + kSites[Index].Offset;
+        uint8_t Found[sizeof(kPatchBytes)] = {};
+        memcpy(Found, (const void*)Address, sizeof(Found));
+        if (memcmp(Found, kSites[Index].Expected, sizeof(Found)) != 0)
+        {
+            Error("[DS2PhantomFog] esperava %02x %02x %02x %02x %02x em +0x%zx, achou %02x %02x %02x %02x %02x; nao aplicado.",
+                kSites[Index].Expected[0], kSites[Index].Expected[1], kSites[Index].Expected[2],
+                kSites[Index].Expected[3], kSites[Index].Expected[4], (size_t)kSites[Index].Offset,
+                Found[0], Found[1], Found[2], Found[3], Found[4]);
+            return false;
+        }
     }
 
-    memcpy(s_original, (const void*)s_address, sizeof(s_original));
-
-    if (!WriteCode(s_address, kPatchBytes, sizeof(kPatchBytes)))
+    for (size_t Index = 0; Index < 2; Index++)
     {
-        Error("[DS2PhantomFog] nao foi possivel escrever em +0x%zx.", (size_t)kPatchOffset);
-        s_address = 0;
-        return false;
+        s_addresses[Index] = Base + kSites[Index].Offset;
+        memcpy(s_original[Index], (const void*)s_addresses[Index], sizeof(kPatchBytes));
+        if (!WriteCode(s_addresses[Index], kPatchBytes, sizeof(kPatchBytes)))
+        {
+            Error("[DS2PhantomFog] nao foi possivel escrever em +0x%zx.", (size_t)kSites[Index].Offset);
+            Uninstall();
+            return false;
+        }
     }
 
     s_installed = true;
-    Log("[DS2PhantomFog] portas de nevoa nascem como dono do mundo (+0x%zx).", (size_t)kPatchOffset);
+    Log("[DS2PhantomFog] portas de nevoa presas no modo 0x14 (+0x%zx, +0x%zx).",
+        (size_t)kSites[0].Offset, (size_t)kSites[1].Offset);
 #endif
     return true;
 }
@@ -98,11 +122,15 @@ bool DS2_PhantomFogHook::Install(Injector& injector)
 void DS2_PhantomFogHook::Uninstall()
 {
 #if defined(_WIN32) && defined(_M_X64)
-    if (s_installed && s_address != 0)
+    for (size_t Index = 0; Index < 2; Index++)
     {
-        WriteCode(s_address, s_original, sizeof(s_original));
-        s_installed = false;
+        if (s_addresses[Index] != 0)
+        {
+            WriteCode(s_addresses[Index], s_original[Index], sizeof(kPatchBytes));
+            s_addresses[Index] = 0;
+        }
     }
+    s_installed = false;
 #endif
 }
 

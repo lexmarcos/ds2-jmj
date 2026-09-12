@@ -10,25 +10,25 @@
 
 #include "Injector/Hooks/Hook.h"
 
-/// Creates every fog wall as if the local player owned the world.
+/// Keeps every fog wall in the mode it has when nobody is visiting.
 ///
-/// A fog wall is a `MapObjWhiteDoorComponent`, and its init stamps the local
-/// player's phantom type into the object:
+/// A fog wall is a `MapObjWhiteDoorComponent` and carries a mode byte at
+/// `this + 0x85`. Measured on a running game: every door reads `0x14` while
+/// the player is alone in a world and `0x0a` from the moment a phantom is in
+/// it — on the host's client as well as the guest's — and `0x0a` is the branch
+/// that runs the door's timer instead of zeroing it.
 ///
-///   *(int*)(this + 0x80) = *(*(*(FeManager + 0x3b8) + 0x10) + 0x68);
+/// Two instructions write that byte, one in the door's init and one in its
+/// per-frame update, and both become `mov al,0x14`. Patching only the first
+/// achieves nothing: the update rewrites it on the next frame.
 ///
-/// Measured on a running game, that chain reads 0 for the owner of a world and
-/// 5 for a red phantom, and the five doors of an area carry 0 when the player
-/// is alone and 5 the moment he is a guest in someone else's world — which is
-/// also the moment the barrier that pens a phantom into one area appears.
+/// An earlier attempt patched a different field, `this + 0x80`, which carries
+/// the local player's phantom type. It changed nothing, and a reading already
+/// in hand said why: the host owns his world, his doors carry 0 there in every
+/// state, and the barrier stops him too.
 ///
-/// This zeroes the stamp at the source, by replacing the call that fetches the
-/// type with `xor eax,eax`. Writing 0 over the field afterwards does nothing:
-/// no method of the class reads it again, so whatever it decides is decided
-/// while the door is being built.
-///
-/// It is an experiment, and an honest one only if it can fail: if the barrier
-/// survives this, the stamp is a symptom rather than the cause.
+/// This is still an experiment. If a fog wall pinned to `0x14` leaves the
+/// barrier standing, the mode is not the lever either.
 class DS2_PhantomFogHook : public Hook
 {
 public:
