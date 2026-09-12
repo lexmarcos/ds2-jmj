@@ -120,22 +120,55 @@ busca por handle. Os slots vizinhos `+0xa0` e `+0xa8` chamam o mesmo
 `FUN_14020f660(this - 0x28, x, 2|3, ...)` com discriminadores diferentes, o que
 cheira a "por tipo de placa".
 
-Para a revanche, é daqui que sai o handle da placa nova: percorrer a coleção
-em vez de repetir um handle morto. Falta ler o formato do contêiner
-(`FUN_14020e6f0`) e onde a placa guarda o dono.
+### O formato do contêiner, e a previsão que fechou o modelo
 
-## Por que isso importa agora
+`FUN_14020e6f0(colecao, &handle)` é a busca, e ela revela a interface:
 
-A revanche por red sign precisa que o cliente **do host** reemita o summon.
-Com os nomes na mão, isso deixa de ser arqueologia:
+```c
+count = colecao->vftable[0x18]();                 // quantos
+for (i = 0; i < count; i++) {
+    item = colecao->vftable[0x10](colecao, i);    // o i-esimo
+    if (item[5] < 0 && item[0] == *handle) return item;
+}
+```
 
-    FUN_1402a14c0(NetSvrSummonSignManager*, SignHandle*)
-      -> FUN_1402a41b0   resolve o handle pelo slot virtual +0x98 do manager
-      -> FUN_1402a2ca0
-      -> FUN_1402a5970   constrói o NetSvrSummonSignSummonJob
+As duas coleções são `TSignSet<SummonSignParam>`, e a leitura na memória viva
+dá o resto:
 
-Um hook no injector guarda o ponteiro do manager (ele é estável dentro de uma
-sessão de jogo) e chama essa função de novo. O que falta descobrir é como
-obter o `SignHandle` **da placa nova** — o handle capturado morre com o toque,
-e a placa recolocada é outro objeto. O caminho é o mesmo `GetSummonSignList` /
-o slot que resolve handles no manager.
+| campo | conteúdo |
+| --- | --- |
+| `+0x14` | capacidade (20 na coleção medida) |
+| `+0x18` | **quantidade** — subiu de 5 para 6 no instante em que uma placa nova chegou |
+| `+0x30` | ponteiro do armazenamento |
+| `+0x38` | quantidade, de novo |
+
+E cada item ocupa **0x88 bytes**:
+
+| campo | conteúdo |
+| --- | --- |
+| `+0x00` | o `SignHandle` |
+| `+0x04`, `+0x08`, `+0x0c` | x, y, z do mundo, em float |
+| `+0x14` | bit alto ligado = item válido (é o `item[5] < 0` da busca) |
+
+O que fecha o argumento: com uma placa recém-colocada, o item 5 do
+armazenamento trazia handle `0x80000055` e posição (6.15, -18.5, 209.1) — a
+fogueira de Heide onde ela tinha sido colocada. **Previ que o summon usaria
+`0x80000055` e o breakpoint capturou exatamente isso.** Placas de invocação
+carregam a tag `0x80000000`; a outra coleção tem itens com `0xc0000000`.
+
+## Com isso, a revanche tem desenho completo
+
+Nada mais falta descobrir para escrever o hook do lado do host:
+
+1. andar do global até o `SummonSignSetCtrl` (quatro ponteiros, acima);
+2. percorrer a coleção com a interface `count`/`at`, pegando o item cuja
+   posição bate com a do duelo anterior — ou, mais simples, o único item com a
+   tag `0x80000000` quando só existe um par no servidor;
+3. chamar `FUN_1402a14c0(NetSvrSummonSignManager*, &handle)`.
+
+O ponteiro do manager é estável e já foi capturado (`0x7ffffe591000` em duas
+sessões diferentes, inclusive depois de fechar o jogo), mas o hook deve
+resolvê-lo pelo caminho próprio em vez de fixar o endereço.
+
+O que ainda não foi lido é **qual campo do item identifica o dono** da placa.
+Para dois jogadores isso não é necessário; para mais de dois, é.
