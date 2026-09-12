@@ -24,13 +24,15 @@
 //     player  = *(*(*(0x1416148f0) + 0xa8) + 0xc0)
 //     position = player + 0xa8    three floats, x y z, the live one
 //     facing   = player + 0xbc and + 0xc4, a normalised 2D direction
+//     archetype = player + 0x64, the multiplayer role - the same number the
+//                 server reports, found by diffing a host against a guest
 //
 // There are two more position triples just before `+0xa8`; they do not follow
 // the character, and only this one does. Measured by walking and re-reading.
 //
 // Writes `DS2_Nav.txt` beside the DLL, replaced whole every tick, one line:
 //
-//     <x> <y> <z> <facing x> <facing z> <player pointer> <tick>
+//     <x> <y> <z> <facing x> <facing z> <player pointer> <tick> <archetype>
 //
 // The tick counts samples, and it is there because a reader cannot otherwise
 // tell a character standing still from a file that stopped being written. That

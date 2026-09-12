@@ -36,6 +36,10 @@ namespace
     constexpr size_t kPositionOffset = 0xa8;   // x, y, z - the triple that moves
     constexpr size_t kFacingXOffset = 0xbc;
     constexpr size_t kFacingZOffset = 0xc4;
+    // The multiplayer role. Confirmed against the server, which reports the
+    // same number as `archetype`: 6 and 9 for the two characters here, and the
+    // white co-op phantom's session role is 1 where the red invader's is 7.
+    constexpr size_t kArchetypeOffset = 0x64;
 
     uintptr_t s_base = 0;
 
@@ -125,15 +129,17 @@ namespace
             float Position[3] = {};
             float FacingX = 0.0f;
             float FacingZ = 0.0f;
+            uint32_t Archetype = 0;
 
             if (Resolve(Player) &&
                 ReadGuarded(Player + kPositionOffset, Position, sizeof(Position)) &&
                 ReadGuarded(Player + kFacingXOffset, &FacingX, sizeof(FacingX)) &&
-                ReadGuarded(Player + kFacingZOffset, &FacingZ, sizeof(FacingZ)))
+                ReadGuarded(Player + kFacingZOffset, &FacingZ, sizeof(FacingZ)) &&
+                ReadGuarded(Player + kArchetypeOffset, &Archetype, sizeof(Archetype)))
             {
-                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu\n",
+                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu %u\n",
                     Position[0], Position[1], Position[2], FacingX, FacingZ,
-                    (void*)Player, (unsigned long long)Tick));
+                    (void*)Player, (unsigned long long)Tick, Archetype));
             }
             else
             {

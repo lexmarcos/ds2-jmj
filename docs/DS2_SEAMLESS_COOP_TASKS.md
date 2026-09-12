@@ -112,7 +112,37 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ---
 
-## M2 — respawn na fogueira dentro da sessão
+## M2 — respawn dentro da sessão
+
+Começado em 12/09. O problema está definido com precisão agora, e a peça que
+falta tem nome.
+
+**O estado depois do M1:** o convidado fica **morto onde caiu**, dentro da
+sessão do host. Os dois HUDs continuam listando o outro. Nada o levanta.
+
+Três coisas medidas ao chegar aqui:
+
+- **o pedido de fim de sessão é de uma vez só.** Recusado, não é repetido:
+  escrever `clear` depois não faz o jogo tentar de novo, e o convidado
+  continua morto e na sessão. Ou seja, recusar não adia o desmonte, cancela.
+- **nenhum warp é emitido**, então não há pedido a reescrever — a abordagem de
+  trocar o destino, que resolveu a volta para casa, não tem onde pegar aqui.
+- **`jogador+0x64` é o arquétipo**, o mesmo número que o servidor chama de
+  `archetype`. Achado diffando o struct do host contra o do convidado, e agora
+  publicado pelo `DS2_NavHook`; `ds2os-dev where` mostra como `papel`.
+
+**O que falta é um revive**, e é uma primitiva que o jogo tem de ter: o **Ring
+of Life Protection** ressuscita em pé, com a vida cheia, **sem recarregar
+área** — é o único revive do DS2 que não passa por um carregamento. Achar o
+que esse anel dispara é o caminho mais curto para o M2.
+
+Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
+jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
+mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par
+de inteiros iguais que pareça (vida atual, vida máxima). O HP mora atrás de
+algum sub-objeto.
+
+### O plano original, para referência
 
 Depende de M1. O convidado morre, perde as almas, deixa a bloodstain onde
 morreu e reaparece na fogueira **do mundo do host**, ainda na sessão, e volta

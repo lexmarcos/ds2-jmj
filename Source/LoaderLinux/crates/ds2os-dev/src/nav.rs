@@ -38,6 +38,8 @@ pub struct Pose {
     /// Which sample this is. Two reads with the same tick are the same
     /// reading, however much time passed between them.
     pub tick: u64,
+    /// The multiplayer role, the same number the server calls `archetype`.
+    pub archetype: u32,
 }
 
 fn state_path(install_dir: &Path) -> PathBuf {
@@ -59,7 +61,14 @@ pub fn read(install_dir: &Path) -> Option<Pose> {
         facing_z: next()?,
         // The pointer sits between the facing and the tick and is of no use
         // here - it is the same in both instances.
-        tick: fields.last().and_then(|v| v.parse::<u64>().ok())?,
+        tick: fields
+            .get(6)
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0),
+        archetype: fields
+            .get(7)
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0),
     };
 
     // While an area loads, the chain resolves but everything in it is still

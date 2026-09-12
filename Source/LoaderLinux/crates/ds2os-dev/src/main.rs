@@ -916,8 +916,8 @@ fn where_is(environment: &Environment, instance: &str) -> Result<(), String> {
         let install = install_for(environment, account)?;
         match nav::read(&install.game_dir) {
             Some(pose) => println!(
-                "  conta {account}: x={:.2} y={:.2} z={:.2}  encarando {:.2},{:.2}",
-                pose.x, pose.y, pose.z, pose.facing_x, pose.facing_z
+                "  conta {account}: x={:.2} y={:.2} z={:.2}  encarando {:.2},{:.2}  papel {}",
+                pose.x, pose.y, pose.z, pose.facing_x, pose.facing_z, pose.archetype
             ),
             None => println!("  conta {account}: sem posição (fora do mundo, ou sem injector)"),
         }
