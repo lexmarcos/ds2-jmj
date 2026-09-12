@@ -30,7 +30,15 @@
 //
 // Writes `DS2_Nav.txt` beside the DLL, replaced whole every tick, one line:
 //
-//     <x> <y> <z> <facing x> <facing z> <player pointer>
+//     <x> <y> <z> <facing x> <facing z> <player pointer> <tick>
+//
+// The tick counts samples, and it is there because a reader cannot otherwise
+// tell a character standing still from a file that stopped being written. That
+// difference is a walk that arrived against a walk that is stuck, and getting
+// it wrong once already cost a wrong diagnosis.
+//
+// The pointer is **not** a way to tell the two instances apart: with no ASLR,
+// two copies of the game land on the same heap address, and both publish it.
 //
 // It reads and never writes game memory, so it is always on for Dark Souls II
 // and there is nothing to verify before installing.

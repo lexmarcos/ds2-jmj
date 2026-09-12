@@ -82,8 +82,12 @@ namespace
 
     void Publish(const std::string& Line)
     {
-        // Replaced whole, and through a rename, because the reader polls and
-        // would otherwise catch a half-written line.
+        // Written through a rename so a polling reader never catches half a
+        // line. The rename can fail - it did, under Wine, while the reader had
+        // the file open - and swallowing that leaves the old sample in place,
+        // which reads as a current position and is the worst kind of wrong. So
+        // a failed rename falls back to writing in place: a torn read fails to
+        // parse and is discarded, and the tick below catches what is left.
         {
             std::ofstream Stream(s_temp_path, std::ios::trunc);
             if (!Stream)
@@ -95,12 +99,28 @@ namespace
 
         std::error_code Error;
         std::filesystem::rename(s_temp_path, s_state_path, Error);
+        if (Error)
+        {
+            std::ofstream Stream(s_state_path, std::ios::trunc);
+            if (Stream)
+            {
+                Stream << Line;
+            }
+        }
     }
 
     void Run()
     {
+        // Counts samples, not milliseconds. A reader cannot tell a position
+        // that has not changed from a file that has not been written, and the
+        // difference decides whether a character is standing still or the
+        // publisher stopped - which is a walk that arrived against a walk that
+        // is stuck.
+        uint64_t Tick = 0;
+
         while (s_running.load())
         {
+            ++Tick;
             uintptr_t Player = 0;
             float Position[3] = {};
             float FacingX = 0.0f;
@@ -111,14 +131,15 @@ namespace
                 ReadGuarded(Player + kFacingXOffset, &FacingX, sizeof(FacingX)) &&
                 ReadGuarded(Player + kFacingZOffset, &FacingZ, sizeof(FacingZ)))
             {
-                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p\n",
-                    Position[0], Position[1], Position[2], FacingX, FacingZ, (void*)Player));
+                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu\n",
+                    Position[0], Position[1], Position[2], FacingX, FacingZ,
+                    (void*)Player, (unsigned long long)Tick));
             }
             else
             {
                 // No world loaded, or the player was torn down mid-read. Saying
                 // so beats leaving a stale position that reads as current.
-                Publish("sem jogador\n");
+                Publish(StringFormat("sem jogador %llu\n", (unsigned long long)Tick));
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
