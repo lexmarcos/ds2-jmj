@@ -343,6 +343,24 @@ botão A chama.
 **É a metade que faltava.** O servidor sabe lembrar o par, e agora o cliente do
 host sabe recomeçar.
 
+### O sinal canônico, com o censo zerado
+
+A rodada acima aconteceu num servidor que já tinha gasto o "primeiro de cada
+tipo" nas mensagens de entrada, então ela não prova sozinha. Repetida às 05:39
+logo depois de um `reload`:
+
+    05:39:13  3:Chico   Sign 1000 created
+    05:39:37  hook      "revanche: invocando a placa 80000015 que acabou de chegar"
+    05:39:37  1:Samuel  Summoning sign 1000
+    05:39:43  3:Chico   Sign 1000 removed by its owner
+    05:39:47  1:Samuel  First RequestNotifyJoinGuestPlayer
+    05:39:49  3:Chico   First RequestNotifyJoinSession
+
+As duas últimas linhas são o sinal que este projeto exige, e elas aparecem
+depois de um summon que **nenhum jogador pediu**. Vinte e quatro segundos entre
+a placa ir ao chão e a sessão formar, dos quais vinte são o intervalo do poll
+de placas do cliente — é o que dá para encurtar depois, se valer a pena.
+
 ### O que ainda não é automático
 
 A revanche é armada por um arquivo de pedido (`DS2_Rematch.req`), não pela
