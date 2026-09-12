@@ -11,7 +11,7 @@ server.
 | [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md) | What stands between a death and the next invasion of the same pair, measured |
 | [DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md) | The client's path from a death to `RequestNotifyLeaveSession`, traced at runtime |
 | [DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md) | **The client's multiplayer classes carry RTTI names and full method signatures** |
-| [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) | Seamless co-op: what is known before the work starts, and why the warp is the piece |
+| [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) | Seamless co-op: the one call every warp goes through, the request it carries, and the field that says "bonfire" instead of "home" |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas; carries corrections where it was wrong |
 | [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md) | **Multiplayer in Majula and the other closed areas: the three things required, how to apply and verify them** |
 | [DS2_SERVER_DEPLOY.md](DS2_SERVER_DEPLOY.md) | **Running the server on a small shared host: build here, seed the config, the service, the firewall, the key** |

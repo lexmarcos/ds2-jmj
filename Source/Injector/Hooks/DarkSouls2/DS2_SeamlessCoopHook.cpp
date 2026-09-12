@@ -49,7 +49,12 @@ namespace
 
     // What the warp entry reads out of the request before it queues it.
     constexpr uint32_t kReasonBonfire = 1;
-    constexpr uint32_t kReasonGoHome = 4;
+    constexpr uint32_t kReasonSession = 4;
+
+    // Motive 4 alone is not "go home": the same motive carries a guest into
+    // the host's world. The game separates the two on the third argument, and
+    // so does this hook - see the note on WarpHook.
+    constexpr uint8_t kForced = 0;
 
     // 0x38 bytes, laid out by the game's own builder at 0x14044ed40.
     struct WarpRequest
@@ -91,7 +96,7 @@ namespace
         }
     }
 
-    void Describe(const char* What, const WarpRequest* Request, uintptr_t From)
+    void Describe(const char* What, const WarpRequest* Request, uint8_t Flag, uintptr_t From)
     {
         if (Request == nullptr)
         {
@@ -100,8 +105,8 @@ namespace
         }
 
         Append(StringFormat(
-            "  %s motivo=%u tipo=%u mapa=%08x ponto=%08x [+0x0c]=%08x [+0x10]=%08x sabor=%u de=+0x%zx\n",
-            What, Request->Reason, Request->Kind, Request->Map, Request->Spawn,
+            "  %s motivo=%u forca=%u tipo=%u mapa=%08x ponto=%08x [+0x0c]=%08x [+0x10]=%08x sabor=%u de=+0x%zx\n",
+            What, Request->Reason, (unsigned)Flag, Request->Kind, Request->Map, Request->Spawn,
             Request->Unknown0c, Request->Unknown10, (unsigned)Request->Flavour, (size_t)From));
     }
 
@@ -114,10 +119,17 @@ namespace
         // for it, and a mistake in the test below would recurse.
         const bool Reentrant = s_inside.load();
 
-        Describe(Reentrant ? "(reentrada)" : "warp", Request, From);
+        Describe(Reentrant ? "(reentrada)" : "warp", Request, Flag, From);
 
+        // The third argument is the whole test. The entry point reads it
+        // itself: motive 4 skips the permission gate only when the argument is
+        // zero, and that is the forced return home the session teardown asks
+        // for. Motive 4 with the argument set to one is the ordinary request
+        // that carries a guest *into* a host's world - redirecting that one
+        // cancels the summon, which is how this was found.
         if (!Reentrant && s_redirect.load() && Request != nullptr &&
-            Request->Reason == kReasonGoHome && Context != nullptr && s_respawn != nullptr)
+            Request->Reason == kReasonSession && Flag == kForced &&
+            Context != nullptr && s_respawn != nullptr)
         {
             void* Record = *(void**)((uint8_t*)Context + kRespawnRecordOffset);
             if (Record != nullptr)

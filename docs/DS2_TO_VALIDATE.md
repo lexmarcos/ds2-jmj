@@ -207,6 +207,29 @@ Em aberto, em ordem de quanto bloqueiam:
   no mesmo ponto (efígie, prompt aparece). Vale repetir num outro lugar
   antes de virar regra.
 
+### O warp, e o co-op seamless
+
+O caminho do warp está mapeado e o hook existe
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)). O que ele entrega é
+**onde o jogador aterrissa**, não a sessão: o
+`RequestNotifyLeaveSession` continua saindo e a sessão continua
+acabando. Em aberto:
+
+- **A sessão pode sobreviver a uma morte?** O jogo nunca carrega área
+  dentro do mundo do host para um convidado, então isto pode
+  simplesmente não existir. É a pergunta que decide se o co-op seamless
+  de verdade é possível ou se o caminho é morrer e se reencontrar pela
+  revanche.
+- **Que outros motivos de warp existem** além de 1 (fogueira) e 4 (para
+  casa), e o que o portão em `0x140248940` cobra de quem não é nenhum
+  dos dois. O `DS2_Seamless.log` responde sozinho com uso.
+- **O registro de renascimento de um convidado**, `*(contexto+0x70)`,
+  ainda aponta para a fogueira dele enquanto ele é fantasma no mundo
+  alheio? Se apontar para o mapa do host, o redirecionamento manda o
+  convidado para um lugar que não é dele.
+- **A morte do host com fantasma dentro** ainda não foi medida: não se
+  sabe qual motivo o cliente do convidado vê, nem por qual caminho.
+
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena
