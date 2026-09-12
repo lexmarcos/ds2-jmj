@@ -303,6 +303,21 @@ namespace
     std::atomic<bool> s_revive{ false };
     std::atomic<bool> s_revive_pending{ false };
     int s_revive_waited = 0;
+
+    // The ninth, and it is one word different from the eighth.
+    //
+    // The eighth worked on the guest's side - he stood up, the guard opened,
+    // the invitation replayed, and the arrival took its success branch - and
+    // then died waiting at state 3 for an answer the host never sent. The host
+    // asked for nothing and logged nothing: its session did not end by
+    // request, it fell apart because the peer link blinked.
+    //
+    // And what blinks it is ours. Going back to state 1 re-runs the handshake
+    // in `FUN_1402c4450`, which is the part the host sees. But the arrival
+    // only ever asked for `state == 2`; the handshake was never its
+    // precondition, only the road the game happens to take there. So this goes
+    // straight to 2 and leaves the link alone.
+    std::atomic<bool> s_direct{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -597,9 +612,12 @@ namespace
             {
                 s_rearm_pending.store(false);
                 Append(StringFormat(
-                    "  de pe de novo apos %d quadros, guarda=%02x; recomecando o join\n",
-                    s_rearm_waited, (unsigned)Guard));
-                *(uint32_t*)(Bytes + kSessionState) = kStateJoining;
+                    "  de pe de novo apos %d quadros, guarda=%02x; indo para o estado %u%s\n",
+                    s_rearm_waited, (unsigned)Guard,
+                    s_direct.load() ? kStateArriving : kStateJoining,
+                    s_direct.load() ? " (sem refazer o handshake)" : ""));
+                const uint32_t Into = s_direct.load() ? kStateArriving : kStateJoining;
+                *(uint32_t*)(Bytes + kSessionState) = Into;
                 s_guard_waited = 0;
                 s_guard_last = 0xff;
                 s_can_join_waited = 0;
@@ -748,10 +766,13 @@ namespace
                 s_lift.store(Choice == '3');
                 s_rejoin.store(Choice == '4');
                 s_rearm.store(Choice == '5');
-                s_revive.store(Choice == '6');
+                s_revive.store(Choice == '6' || Choice == '7');
+                s_direct.store(Choice == '7');
                 Append(StringFormat("=== renascer na sessao %s, %s ===\n",
                     Choice == '0' ? "desligado" : "ligado",
-                    s_revive.load()
+                    s_direct.load()
+                        ? "morte normal, levantar, e chegar sem refazer o handshake"
+                        : s_revive.load()
                         ? "morte normal, levantar na fogueira e puxar de volta"
                         : s_rearm.load()
                         ? "morte normal, e puxar de volta quando ele levantar"
