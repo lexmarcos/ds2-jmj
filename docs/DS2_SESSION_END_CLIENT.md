@@ -139,6 +139,112 @@ Estes dois têm chamador estático, ao contrário do resto do caminho:
     FUN_1402bddb0  ->  FUN_1402bf440     (a rotina que põe a razão)
     FUN_1402c3630  ->  FUN_1402c3900     (a rotina que encerra)
 
+## A máquina de estados da sessão
+
+`FUN_1402c3630` é o passo por quadro do objeto de sessão. Ele despacha pelo
+estado guardado em `+0xf8`:
+
+| estado | handler | o que é |
+| --- | --- | --- |
+| 0 | `FUN_1402c37a0` | |
+| 1 | `FUN_1402c4450` | |
+| 4 | inline | conta tempo e, ao estourar, chama o slot virtual `+0x30` com motivo `0xf` |
+| 5 | `FUN_1402c3c80` | |
+| 6 | `FUN_1402c45b0` | |
+| 7 | `FUN_1402c3830` | **em sessão** — é aqui que a saída é decidida |
+| 8 | `FUN_1402c3900` | demole: despacha o evento, manda o `LeaveSession`, põe o estado em 9 |
+| 10 | `FUN_1402c4240` | |
+| 0xb | inline | estado := 0xc |
+
+Uma única instrução no binário inteiro escreve 8 nesse campo —
+`1402c386a`, dentro do handler do estado 7 — e a condição dela é de uma
+simplicidade que surpreende:
+
+```c
+void FUN_1402c3830(longlong *param_1, float param_2)
+{
+    ...
+    if (*(int *)((longlong)param_1 + 0x1cc) != 0) {
+        *(undefined4 *)(param_1 + 0x1f) = 8;      // +0xf8 := 8, encerrar
+    }
+    ...
+}
+```
+
+`+0x1cc` não é um booleano: é **o motivo pelo qual alguém pediu o fim**, e
+`FUN_1402c2f20` é a porta por onde o pedido entra:
+
+```c
+void FUN_1402c2f20(longlong *param_1, undefined4 param_2)   // slot virtual +0x30
+{
+    if ((**(code **)(*param_1 + 0xa8))() != '\0') {
+        *(undefined4 *)((longlong)param_1 + 0x1cc) = param_2;
+        ...
+    }
+}
+```
+
+Os motivos que o binário passa para esse slot, achados por padrão de chamada:
+`0xe`, `0xf`, `0x10`, `0x12`, `0x13`, `0x18`. São de uma escala diferente da
+do `+0x198`, então em algum ponto um é traduzido no outro.
+
+## O que a morte faz, medido
+
+Breakpoint em `FUN_1402c2f20` no cliente do fantasma, invasão por orbe montada,
+fantasma morto por queda:
+
+    alcancado +0x2c2f20 de=+0x2c9246 rdx=2 r8=0x1410c0050
+      pilha: +0x2c9246 +0x190989 +0x18f773 +0x470b9 ...
+
+**O motivo da morte é 2.** Subindo a pilha:
+
+    FUN_1402c9220(manager, motivo)     percorre a lista de sessões (+0x48..+0x50)
+                                       e chama o slot +0xe8 de cada uma
+    FUN_140190950(obj, motivo)         "manda todas as sessões terminarem"
+    FUN_14018f760(tarefa)              invocador de tarefa: +0x18 é o ponteiro de
+                                       função, +0x20 e +0x28 os argumentos capturados
+
+Ou seja, a morte **enfileira** a saída como tarefa; quando ela roda, a decisão
+já foi tomada e não está mais na pilha.
+
+## A tabela que decide se um tipo de morte desfaz a sessão
+
+O chamador direto de `FUN_140190950` é um salto guardado por uma consulta a
+uma tabela:
+
+```asm
+14018ffcf:  test   %rdx,%rdx              ; sem motivo, volta
+14018ffd2:  je     0x140190006
+14018ffd4:  movzbl 0xe0(%rcx),%r8d        ; o "tipo", byte do objeto
+14018ffdf:  cmp    $0x14,%r8b             ; 20 tipos
+14018ffe3:  cmovb  %r8d,%r9d
+14018ffe7:  lea    0xf30062(%rip),%r8     ; a tabela: 0x1410c0050
+14018fff2:  add    %rax,%rax
+14018fff5:  cmpb   $0x0,0x1(%r8,%rax,8)   ; entrada[tipo].byte1
+14018fffb:  je     0x140190920            ; zero: NÃO encerra as sessões
+140190001:  jmp    0x140190950            ; diferente de zero: encerra todas
+```
+
+Entradas de 16 bytes, lidas da memória viva em `mod 10c0050 140`:
+
+    +0x000  00 00 00 00  07 17 00 00     tipo 0  -> byte1 = 0, não encerra
+    +0x010  02 01 01 02  03 02 01 02     tipo 1  -> byte1 = 1, encerra
+    +0x020  02 01 02 02  03 02 00 02     tipo 2  -> encerra
+    +0x030  02 01 01 03  03 02 01 02     tipo 3  -> encerra
+    +0x040  02 01 02 03  03 02 00 02     tipo 4  -> encerra
+    +0x050  02 02 01 07  01 03 00 06     tipo 5  -> encerra
+    +0x060  01 02 01 08  01 05 00 07     tipo 6  -> encerra
+    +0x070  01 01 01 04  01 07 00 03     tipo 7  -> encerra
+    +0x080  01 02 01 04  01 07 00 04     tipo 8  -> encerra
+
+**É aqui que o co-op seamless pode nascer.** Zerar o byte `+1` da entrada certa
+faz a morte daquele tipo deixar de desmanchar as sessões — e é um patch de
+*dado*, não de `.text`, da mesma família do `DS2_TimerParamPatch`.
+
+Falta saber qual índice é a morte do fantasma: o tipo vem de `rcx+0xe0`, e o
+`rcx` desse ponto ainda não foi capturado. O próximo passo é um breakpoint em
+`FUN_140190950` para ler o `rcx` e sondar esse byte.
+
 ## Por que isso importa
 
 Duas funcionalidades pedidas dependem deste caminho:
