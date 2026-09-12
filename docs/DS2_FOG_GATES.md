@@ -304,6 +304,33 @@ cannot be what raises it.
 The hook stays in the tree, off by default, because the measurement it makes
 is worth keeping: it proves the stamp is not the lever.
 
+### The mode, and why that failed too
+
+The state that really tracks a session is the mode byte at `this + 0x85`:
+`0x14` with the player alone, `0x0a` with a phantom in the world, on the host's
+client as much as the guest's. It is written twice, in the door's init and in
+its per-frame update (`FUN_1401d1920`), and the update is why patching the init
+alone could never have worked.
+
+Both writes were pinned to `0x14` — verified in memory, both clients, both
+sites reading `b0 14 90 90 90`. **The barrier appeared again and still could
+not be crossed.** The invasion also took noticeably longer to start, which is
+either coincidence or a side effect worth remembering.
+
+So `MapObjWhiteDoorComponent` is not the barrier at all. Its state follows a
+session the way a thermometer follows a fever.
+
+### The census that comes next
+
+`.?AVMapObj*Component` and `.?AVMapArea*` give 74 classes, and their vtables
+are recoverable from RTTI in one pass. Scanning the running game for each
+vtable pointer counts the live objects of every class at once, and the class
+whose count changes when a session forms is the one that builds the barrier.
+
+With a session up, the counts run 162 for most components and 149 for
+`MapObjGimmickComponent`. The other half of that measurement — the same census
+with nobody visiting — is what settles which class to read next.
+
 ## How to carry on
 
 Take a character to a fog wall, then measure three things while standing in it:
