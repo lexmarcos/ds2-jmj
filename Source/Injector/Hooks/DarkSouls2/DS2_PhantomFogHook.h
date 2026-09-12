@@ -10,25 +10,22 @@
 
 #include "Injector/Hooks/Hook.h"
 
-/// Keeps every fog wall in the mode it has when nobody is visiting.
+/// Keeps every fog wall in the state it has when nobody is visiting.
 ///
-/// A fog wall is a `MapObjWhiteDoorComponent` and carries a mode byte at
-/// `this + 0x85`. Measured on a running game: every door reads `0x14` while
-/// the player is alone in a world and `0x0a` from the moment a phantom is in
-/// it — on the host's client as well as the guest's — and `0x0a` is the branch
-/// that runs the door's timer instead of zeroing it.
+/// `FUN_1401d24a0` decides what a fog wall should be, from the door's kind and
+/// the field at `this + 0x80`, and every branch that matters turns on that
+/// field being non-zero. Measured on a running game it reads 0 while the player
+/// is alone in a world and 5 from the moment a phantom is in it — on the host's
+/// client as much as the guest's, which is what makes it the session and not
+/// the player.
 ///
-/// Two instructions write that byte, one in the door's init and one in its
-/// per-frame update, and both become `mov al,0x14`. Patching only the first
-/// achieves nothing: the update rewrites it on the next frame.
+/// Two instructions write it, one in the door's init and one in its per-frame
+/// update, and both become `xor eax,eax`. An earlier attempt patched only the
+/// init: the update wrote the value back on the next frame, which is exactly
+/// the kind of failure that looks like a wrong hypothesis and is not.
 ///
-/// An earlier attempt patched a different field, `this + 0x80`, which carries
-/// the local player's phantom type. It changed nothing, and a reading already
-/// in hand said why: the host owns his world, his doors carry 0 there in every
-/// state, and the barrier stops him too.
-///
-/// This is still an experiment. If a fog wall pinned to `0x14` leaves the
-/// barrier standing, the mode is not the lever either.
+/// The mode byte at `this + 0x85` also moves with a session. Pinning it changed
+/// nothing, so it is left alone.
 class DS2_PhantomFogHook : public Hook
 {
 public:

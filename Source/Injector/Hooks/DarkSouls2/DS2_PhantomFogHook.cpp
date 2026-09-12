@@ -21,26 +21,29 @@ namespace
 {
 #if defined(_WIN32) && defined(_M_X64)
 
-    // A fog wall keeps a mode byte at `this + 0x85`, and everything it does
-    // hangs on it: `0x14` zeroes the door's timer and leaves it alone, `0x0a`
-    // runs the timer up. Measured on a running game, every door reads `0x14`
-    // while the player is alone in a world and `0x0a` from the moment a phantom
-    // is in it — on the host's client as well as the guest's, which is the half
-    // the first attempt at this got wrong.
+    // `FUN_1401d24a0` is the door's decision: it takes the door's kind and the
+    // value at `this + 0x80` and returns the state the door should be in.
+    // Every branch that matters turns on that field being non-zero —
     //
-    // The byte is written in two places, both as `call FUN_1403f2d30` followed
-    // by `mov [rbx+0x85],al`:
+    //   kind 0:  return (this->0x80 != 0) ? 4 : 0
+    //   kind 3:  return (this->0x80 != 0) ? 5 : 0
+    //   kind 2:  the closed state only when it is 0
     //
-    //   +0x1d1381  in the door's init   (FUN_1401d1330)
-    //   +0x1d1931  in its update        (FUN_1401d1920), every frame
+    // — and measured on a running game, `+0x80` is 0 while the player is alone
+    // in a world and 5 from the moment a phantom is in it, on the host's client
+    // as much as the guest's.
     //
-    // Patching only the init does nothing, because the update writes it again.
-    // Both become `mov al,0x14`, so a door is always in the mode it has when
-    // nobody is visiting.
+    // It is written in two places, both as `call FUN_14025ea40` followed by
+    // `mov [rbx+0x80],eax`:
     //
-    // `FUN_1403f2d30` itself is left alone: six other gimmicks call it, and
-    // this is meant to change fog walls, not everything that asks that
-    // question.
+    //   +0x1d136f  in the door's init    (FUN_1401d1330)
+    //   +0x1d195f  in its update         (FUN_1401d1920), every frame
+    //
+    // The first attempt patched only the init, and the update wrote 5 back on
+    // the next frame. Both become `xor eax,eax`.
+    //
+    // The mode byte at `this + 0x85` moves with a session too, and pinning it
+    // changed nothing; it is left alone here so this experiment says one thing.
     struct Site
     {
         size_t Offset;
@@ -48,10 +51,10 @@ namespace
     };
 
     constexpr Site kSites[] = {
-        { 0x1d1381, { 0xE8, 0xAA, 0x19, 0x22, 0x00 } },
-        { 0x1d1931, { 0xE8, 0xFA, 0x13, 0x22, 0x00 } },
+        { 0x1d136f, { 0xE8, 0xCC, 0xD6, 0x08, 0x00 } },
+        { 0x1d195f, { 0xE8, 0xDC, 0xD0, 0x08, 0x00 } },
     };
-    constexpr uint8_t kPatchBytes[] = { 0xB0, 0x14, 0x90, 0x90, 0x90 };   // mov al,0x14 ; nop ; nop ; nop
+    constexpr uint8_t kPatchBytes[] = { 0x31, 0xC0, 0x90, 0x90, 0x90 };   // xor eax,eax ; nop ; nop ; nop
 
     uintptr_t s_addresses[2] = {};
     uint8_t s_original[2][sizeof(kPatchBytes)] = {};
@@ -113,7 +116,7 @@ bool DS2_PhantomFogHook::Install(Injector& injector)
     }
 
     s_installed = true;
-    Log("[DS2PhantomFog] portas de nevoa presas no modo 0x14 (+0x%zx, +0x%zx).",
+    Log("[DS2PhantomFog] portas de nevoa nascem e seguem como mundo proprio (+0x%zx, +0x%zx).",
         (size_t)kSites[0].Offset, (size_t)kSites[1].Offset);
 #endif
     return true;
