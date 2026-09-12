@@ -28,6 +28,9 @@
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DiffTracker.h"
 
+#include <cstdio>
+#include <filesystem>
+
 #include <cmath>
 
 DS2_SignManager::DS2_SignManager(Server* InServerInstance, GameService* InGameServiceInstance)
@@ -77,6 +80,111 @@ void DS2_SignManager::RemoveSignAndNotifyAware(const std::shared_ptr<SummonSign>
 
 void DS2_SignManager::Poll()
 {
+    PollRematchRequest();
+}
+
+// Starts the remembered duel again: the phantom's client is told the same host
+// is summoning it, with the same blob that host sent the first time.
+//
+// This only means anything because of where the phantom's client is standing.
+// It has just placed a sign and is waiting to be called; a push that arrives
+// then is the push it is expecting. The break-in equivalent does nothing,
+// because an invader who has not used an orb is not waiting for anything —
+// see docs/DS2_REMATCH_AFTER_DEATH.md.
+bool DS2_SignManager::ReplaySummon(uint32_t OwnerPlayerId, std::string& OutReason)
+{
+    auto Iter = LastSummonOfOwner.find(OwnerPlayerId);
+    if (Iter == LastSummonOfOwner.end())
+    {
+        OutReason = "that player has never been summoned, so there is no host blob to repeat";
+        return false;
+    }
+    const RememberedSummon& Remembered = Iter->second;
+
+    std::shared_ptr<GameClient> OwnerClient = GameServiceInstance->FindClientByPlayerId(OwnerPlayerId);
+    if (!OwnerClient)
+    {
+        OutReason = "the sign's owner is not connected";
+        return false;
+    }
+
+    std::vector<std::shared_ptr<SummonSign>> Owned = LiveCache.GetRecentSetGlobal(1,
+        [OwnerPlayerId](const std::shared_ptr<SummonSign>& Candidate) {
+            return Candidate->PlayerId == OwnerPlayerId && Candidate->BeingSummonedByPlayerId == 0;
+        });
+    if (Owned.empty())
+    {
+        OutReason = "that player has no free sign out; a rematch needs the sign back on the ground";
+        return false;
+    }
+    std::shared_ptr<SummonSign> Sign = Owned[0];
+
+    DS2_Frpg2RequestMessage::PushRequestSummonSign PushMessage;
+    PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestSummonSign);
+    PushMessage.set_player_id(Remembered.HostPlayerId);
+    PushMessage.set_player_steam_id(Remembered.HostSteamId);
+    PushMessage.set_sign_id(Sign->SignId);
+    PushMessage.set_player_struct(Remembered.PlayerStruct.data(), Remembered.PlayerStruct.size());
+
+    if (!OwnerClient->MessageStream->Send(&PushMessage))
+    {
+        OutReason = "failed to send PushRequestSummonSign";
+        return false;
+    }
+
+    Sign->BeingSummonedByPlayerId = Remembered.HostPlayerId;
+    LogS(OwnerClient->GetName().c_str(), "Rematch: replayed the summon of sign %u by player %u, %.0fs after the original.",
+        Sign->SignId, Remembered.HostPlayerId, GetSeconds() - Remembered.Time);
+    return true;
+}
+
+// "<sign owner player id>" dropped into Saved/<server>/debug_summon.req starts
+// the remembered duel again. It exists to answer one question that no amount
+// of reading settles: whether a client holding a sign acts on a summon nobody
+// asked for. Player ids are the ones the server prints on login.
+void DS2_SignManager::PollRematchRequest()
+{
+    const RuntimeConfig& Config = ServerInstance->GetConfig();
+    if (!Config.DS2_AutoRematch)
+    {
+        return;
+    }
+
+    double Now = GetSeconds();
+    if (Now < NextRematchPollTime)
+    {
+        return;
+    }
+    NextRematchPollTime = Now + 1.0;
+
+    std::filesystem::path RequestPath = ServerInstance->GetSavedPath() / "debug_summon.req";
+    if (!std::filesystem::exists(RequestPath))
+    {
+        return;
+    }
+
+    std::string Contents;
+    if (!ReadTextFromFile(RequestPath, Contents))
+    {
+        WarningS("Signs", "Could not read %s.", RequestPath.string().c_str());
+        std::filesystem::remove(RequestPath);
+        return;
+    }
+    std::filesystem::remove(RequestPath);
+
+    uint32_t OwnerPlayerId = 0;
+    if (sscanf(Contents.c_str(), "%u", &OwnerPlayerId) != 1)
+    {
+        WarningS("Signs", "debug_summon.req wants '<sign owner player id>', got '%s'.", Contents.c_str());
+        return;
+    }
+
+    std::string Reason;
+    if (!ReplaySummon(OwnerPlayerId, Reason))
+    {
+        WarningS("Signs", "Rematch: cannot replay the summon of player %u: %s.", OwnerPlayerId, Reason.c_str());
+        return;
+    }
 }
 
 MessageHandleResult DS2_SignManager::OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
@@ -545,6 +653,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
         else
         {
             Sign->BeingSummonedByPlayerId = Player.GetPlayerId();
+
+            // Keep what it would take to do this again. The host's player
+            // struct is opaque to the server and cannot be built, only
+            // repeated, so a rematch is only possible for a pair that has
+            // already duelled once.
+            RememberedSummon& Remembered = LastSummonOfOwner[Sign->PlayerId];
+            Remembered.HostPlayerId = Player.GetPlayerId();
+            Remembered.HostSteamId = Player.GetSteamId();
+            Remembered.PlayerStruct = Request->player_struct();
+            Remembered.Time = GetSeconds();
         }
     }
 
