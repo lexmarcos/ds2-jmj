@@ -136,6 +136,48 @@ of Life Protection** ressuscita em pé, com a vida cheia, **sem recarregar
 área** — é o único revive do DS2 que não passa por um carregamento. Achar o
 que esse anel dispara é o caminho mais curto para o M2.
 
+### O que a varredura achou, e o que ela não achou
+
+Varredura de breakpoints sobre as 385 funções de `0x140185000`–`0x140195000`,
+com o jogo ocioso primeiro e depois uma morte comum: dispararam mais de 130.
+A faixa inteira é o subsistema do personagem e uma morte toca quase tudo, então
+a lista em si não aponta nada. Os **chamadores**, sim: `+0x44e9c8`, `+0x44ee7c`,
+`+0x44eec6`, `+0x44eee7`, `+0x44ef6e`, `+0x44ef80` — todos colados no construtor
+do pedido de warp.
+
+Isso estabelece que `0x44e9b0`–`0x44fde0` é o **gerenciador de estado do
+jogador**, e que ele opera sobre o mesmo `*(contexto+0x70)` que o renascimento
+já usa:
+
+| função | o que faz |
+| --- | --- |
+| `FUN_14044e9b0(obj, x)` | repassa `x` para sete sub-objetos |
+| `FUN_14044ed40(obj, saida)` | monta o pedido de warp a partir do registro |
+| `FUN_14044ee60(obj)` | **reseta** dez sub-objetos (`+0x40`…`+0xb8`) e limpa `*(obj+0x10)+0x21` |
+| `FUN_14044fde0(obj)` | renascer na última fogueira |
+
+`FUN_14044ee60` é chamado em `0x1401bf730` como `mov rcx,[rbx+0x70]; call`, o
+que confirma o objeto — mas o código em volta é de **desmontagem**, uma fila de
+"se o ponteiro existe, reseta", não de ressurreição.
+
+**O revive não foi encontrado.** A evidência acumula na direção de que o DS2
+não tem um, fora do caminho do Ring of Life Protection: o levantar-se está
+embutido no carregamento de área que vem depois da morte.
+
+### A hipótese que o M1 abriu, e que é o próximo teste
+
+Se o revive vem junto do carregamento de área, a pergunta deixa de ser "como
+ressuscitar em pé" e passa a ser:
+
+> **a sessão sobrevive a um carregamento de área do convidado?**
+
+O M1 provou que o objeto da sessão sobrevive a uma morte. Falta saber se ele
+sobrevive a um load. Dá para medir sem escrever uma linha de código: com uma
+sessão de pé e o convidado **vivo**, mandá-lo usar uma Homeward Bone — que é um
+carregamento de área voluntário — e ver se a sessão continua listada nos dois
+HUDs. Se sobreviver, o M2 vira "deixe a morte seguir o caminho normal e reentre
+no estado 2", e não precisa de revive nenhum.
+
 Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
 jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
 mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par
