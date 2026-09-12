@@ -136,13 +136,32 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
-**A hollow character cannot use the Cracked Red Eye Orb.** X does nothing at
-all — no animation, no message, nothing reaching the server — and it reads
-exactly like a dead button. Burn a Human Effigy first (menu → Inventory → the
-second item, A, A). Standing on a bonfire does **not** block the item; that was
-the first guess and it was wrong. Dying **in your own world** hollows you;
+**A hollow character cannot use the Cracked Red Eye Orb — nor place a white
+summon sign.** X does nothing at all — no animation, no message, nothing
+reaching the server, not even a `RequestCreateSign` — and it reads exactly
+like a dead button. Standing on a bonfire does **not** block the item; that
+was the first guess and it was wrong. Dying **in your own world** hollows you;
 dying as an invader in someone else's world does not, so a duel loss costs no
 effigy.
+
+**So burn a Human Effigy before every staging, rather than checking first** —
+and burn it through **Inventory**, not the belt. Both characters carry 90+ of
+them. Pressing X on the effigy in the belt has repeatedly done nothing while
+the menu path (menu → Inventory → Human Effigy → A → Use → A) worked a minute
+later on the same character, so a belt count that does not move proves
+nothing; the menu's count dropping is the only honest check. Burn it **after**
+the instance is in the world — a killed client never saves, so an effigy burnt
+before a `game stop` is gone when the game comes back.
+
+Being human is **necessary but not sufficient**, and the rest is still open:
+on 12/09 Chico refused to place a sign with the effigy confirmed consumed
+(90 → 89), the client online, the seamless hooks switched off and the
+character standing on the exact spot where a sign had gone down an hour
+earlier. Ruled out that day: hollowing, an offline client, the seamless
+hooks, the arrival guard byte (0), the multiplay counter at `ctx+0xd0 +0x168`
+(positive), position, and X not reaching the game (it opens item info in the
+menu). Whatever it is, it survives a full `down`/`up` of server and both
+instances.
 
 **Two games open on the same account break every session, and the symptom
 points somewhere else.** After a failed relaunch left a second client running
