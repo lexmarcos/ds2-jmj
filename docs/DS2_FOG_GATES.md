@@ -54,7 +54,7 @@ Virtual methods that matter so far:
 
 | slot | address | what it does |
 | --- | --- | --- |
-| 2 | `FUN_1401d1330` | init: allocates two objects into `+0x68` and `+0x70`, links itself into the map's list, caches a flag at `+0x85` |
+| 2 | `FUN_1401d1330` | init: allocates two `EventKeyGuideCtrl` into `+0x68` and `+0x70`, links itself into the map's list, caches a flag at `+0x85` |
 | 3 | `FUN_1401d1040` | teardown: releases both, unlinks |
 | 6 | `FUN_1401d18c0` | the per-frame act — see below |
 | 7 | `FUN_1403f2500` | an "is this thing allowed to act" check shared with other gimmicks |
@@ -98,15 +98,43 @@ So **standing inside a fog wall sets one byte in the frontend**, every frame,
 and that is the only thing this path does. `DAT_1416148f0 + 0x22f0` is the same
 FeManager the title-screen work uses.
 
+Two things sharpen what that means:
+
+- `FUN_1405137e0` has exactly **one caller**, the test above. The byte means
+  "the player is standing in a white door" and nothing else can set it.
+- The object it writes into lives at `FeManager + 0x3c0`, is `0x100` bytes,
+  built by `FUN_140250940` inside `FUN_140513be0` and released in
+  `FUN_1405138c0`.
+
+## It is the prompt half, not the wall
+
+The two objects init allocates are `EventKeyGuideCtrl` — the on-screen button
+guide (`FUN_1404533d0` writes `EventKeyGuideCtrl::vftable`, and `FUN_140453a10`
+takes it off the HUD list at `[DAT_1416148f0 + 0x70]`). So a fog wall carries
+two button prompts and a test that says when the player is inside it.
+
+That is worth stating plainly because it decides where a patch can go:
+`MapObjWhiteDoorComponent` **does not block anyone**. Nothing in it touches
+collision, and its whole per-frame job is
+
+```c
+FUN_1403f3000(this + 0x48, arg);   // the act every gimmick runs
+if (kind_is_tested) set_the_frontend_byte_when_the_player_is_inside();
+```
+
+Whatever stops the player, and whatever moves them to the next area, is
+somewhere else: the map's own collision, the generic gimmick act through
+`this + 0x48`, or the event scripts, which are not in the executable at all.
+
 ## What is not known yet
 
-- **What that byte drives.** It is written every frame while the player is
-  inside, so writing 0 over it from outside would only fight the writer. The
-  readers have not been found, and until they are, nothing here says whether
-  the byte is the prompt, the transition, or only a hint for the HUD.
-- **Where the blocking lives.** A fog wall stops the player physically, and
-  nothing above touches collision. The two objects init allocates at `+0x68`
-  and `+0x70` are the obvious suspects and have not been looked at.
+- **What that byte drives.** Its writer is known and its readers are not. The
+  likeliest reader is the code that puts the key guide on screen, but that is
+  a guess, and writing 0 over the byte from outside would only fight the
+  writer anyway.
+- **Where the blocking lives.** Not in this component. The candidates are the
+  map's collision, the shared gimmick act reached through `this + 0x48`
+  (`FUN_1403f3000`), and the event scripts.
 - **What `MapObjectWhiteDoorParam` holds.** The table is registered but no
   column has been read yet. If the behaviour is a column, the patch is the same
   shape as `DS2_UnblockMultiPlayHook` — rewrite rows, never `.text`.
