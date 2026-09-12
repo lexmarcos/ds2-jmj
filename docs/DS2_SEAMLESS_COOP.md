@@ -172,7 +172,30 @@ Há uma trava de reentrância porque o warp substituto passa pela mesma entrada.
 Escrever `0` em `DS2_Seamless.req` desliga a troca e deixa só o registro;
 qualquer outra coisa religa. O log fica em `DS2_Seamless.log`, ao lado da DLL,
 e sai uma linha por warp com motivo, mapa, ponto e o endereço de retorno de
-quem pediu — o `de=+0x...` é o que identifica o caminho.
+quem pediu — o `de=+0x...` é o que identifica o caminho, e o `cru=` traz os
+`0x38` bytes inteiros, porque metade deles ainda não tem nome e uma linha que
+só imprime a metade nomeada não responde pergunta que ninguém fez ainda.
+
+### Como ligar, e como jogar um co-op hoje
+
+```
+ds2os-dev up --auto-rematch --seamless
+```
+
+`--seamless` liga este hook; `--auto-rematch` liga o
+[DS2_RematchHook](DS2_REMATCH_AFTER_DEATH.md), e os dois juntos são o laço que
+existe hoje:
+
+1. o convidado usa a **Small White Sign Soapstone** ou a
+   **White Sign Soapstone** (inventário → categoria de consumíveis → 7 para
+   baixo, 2 para a direita → Use; funciona hollow);
+2. o host invoca **sozinho**, sem apertar nada, assim que a placa chega — é o
+   hook da revanche, que não olha o tipo da placa;
+3. jogam juntos;
+4. quem morre vai para a última fogueira e a sessão acaba;
+5. o convidado põe a placa de novo, e o passo 2 se repete.
+
+O passo 5 é o único que ainda precisa de mão, e é o próximo pedaço óbvio.
 
 ## O resultado que vira o enunciado do avesso
 
