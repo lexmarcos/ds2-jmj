@@ -71,7 +71,10 @@ namespace
     };
     static_assert(sizeof(WarpRequest) == 0x38, "the warp request is 0x38 bytes");
 
-    using Warp_p = void(*)(void* Context, WarpRequest* Request, uint8_t Flag);
+    // It returns a byte, and the caller reads it: the session state machine
+    // goes to state 0x13 when the warp is refused (0x1402c2ee6). A detour
+    // declared void would hand that caller whatever happened to be in al.
+    using Warp_p = uint8_t(*)(void* Context, WarpRequest* Request, uint8_t Flag);
     Warp_p s_original_warp = nullptr;
 
     using Respawn_p = void(*)(void* Record);
@@ -121,7 +124,7 @@ namespace
             Raw.c_str()));
     }
 
-    void WarpHook(void* Context, WarpRequest* Request, uint8_t Flag)
+    uint8_t WarpHook(void* Context, WarpRequest* Request, uint8_t Flag)
     {
         const uintptr_t From = s_base == 0 ? 0 : (uintptr_t)_ReturnAddress() - s_base;
 
@@ -149,13 +152,13 @@ namespace
                 s_inside.store(true);
                 s_respawn(Record);
                 s_inside.store(false);
-                return;
+                return 1;
             }
 
             Append("  co-op: sem registro de renascimento; deixando o warp original passar\n");
         }
 
-        s_original_warp(Context, Request, Flag);
+        return s_original_warp(Context, Request, Flag);
     }
 
     bool BytesMatch(uintptr_t Address, const uint8_t* Expected, size_t Length)
