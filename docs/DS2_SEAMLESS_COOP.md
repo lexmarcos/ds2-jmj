@@ -630,3 +630,52 @@ pokeabs fim <sessao+0x1cc> 02000000 00000000
 Medido: o convidado foi do fundo d'água para a própria fogueira, vivo, em
 segundos. É a confirmação de ponta a ponta de que `+0x1cc` é o gatilho único
 do 7 para o 8.
+
+### A oitava: a guarda abre quando o jogador levanta
+
+A sétima mostrou que ninguém levanta um fantasma cuja sessão não desmonta. A
+oitava levanta ele — `FUN_14044fde0(*(ctx+0x70))`, noventa quadros depois da
+morte, para não correr por cima do que a morte ainda tem a fazer. Medida em
+12/09, com a encenação completa:
+
+```
+morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
+fim de sessao RECUSADO  papel=1 estado=7 motivo=2
+levantando na ultima fogueira apos 90 quadros
+warp motivo=1 forca=0 tipo=3 mapa=0a1f0000 de=+0x44fe22 / warp aceito=1
+de pe de novo apos 421 quadros, guarda=00; recomecando o join
+estado 2; repetindo o convite do host: mapa=0a1f0000 destino=6.09,-18.50,209.16
+depois da chegada: estado=11
+```
+
+Linha por linha, tudo o que as sete tentativas anteriores tentaram adivinhar:
+
+- **o warp de renascimento é aceito** mesmo com a sessão de pé no estado 7;
+- **a guarda da chegada abre** — de `01` para `00` — assim que o jogador está
+  de pé. Ela não é "esta chegada não pode", é "você não está em condição", e a
+  condição é estar vivo em algum lugar;
+- a sessão volta ao estado 1, anda sozinha até o 2, e a repetição do convite
+  **roda**;
+- o tratador da chegada entra, e sai pelo **0xb**.
+
+### O que o 0xb quer dizer
+
+É a saída "não pode" de `FUN_1402c6570`, que faz duas perguntas:
+
+```c
+FUN_14014ed40(modo, papel)   // uma tabela em 0x141568810, índice papel + modo*0x14
+FUN_1402ca190()              // entre outras coisas: *(ctx+0x70 + 0x1b0) == 0
+```
+
+O segundo é o suspeito. Se `+0x1b0` quer dizer "este jogador ainda está se
+assentando", levantá-lo à mão é exatamente o que o deixaria aceso — e a
+repetição foi emitida no primeiro quadro em que a guarda abriu, que é o pior
+momento possível para perguntar.
+
+É uma pergunta pura e barata, então a repetição passou a **esperar a resposta
+ser sim** em vez de gastar a única tentativa descobrindo. O log diz de que a
+resposta foi feita a cada vez que ela muda.
+
+O convidado terminou vivo na própria fogueira, fora da sessão, sem travar
+nada — a falha mais limpa que este caminho já teve, e a primeira em que o
+jogo recusou por um motivo que tem nome.
