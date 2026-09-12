@@ -78,6 +78,10 @@ pub enum Outcome {
     Arrived { steps: u32, distance: f32 },
     Stuck { steps: u32, distance: f32 },
     Fell { steps: u32, drop: f32 },
+    /// The character was moved by something other than the walk: a death and
+    /// respawn, a Homeward Bone, an area load. Whatever it was, the walk is no
+    /// longer about the same journey.
+    Teleported { steps: u32, jumped: f32 },
     LostPlayer { steps: u32 },
     TimedOut { steps: u32, distance: f32 },
 }
@@ -167,6 +171,16 @@ pub fn walk_to(
             let moved_x = pose.x - previous.x;
             let moved_z = pose.z - previous.z;
             let moved = (moved_x * moved_x + moved_z * moved_z).sqrt();
+
+            // One burst cannot cover this much ground, so something else moved
+            // the character - a death and respawn, most often. Saying so beats
+            // walking on from wherever they landed: two characters were killed
+            // by this walk before it could tell, and the runs after them were
+            // measuring nothing.
+            if moved > 8.0 {
+                return Ok(Outcome::Teleported { steps, jumped: moved });
+            }
+
             if moved < 0.20 {
                 // The character turns before it walks, and a burst that ends
                 // during the turn covers no ground - measured, a 700 ms one

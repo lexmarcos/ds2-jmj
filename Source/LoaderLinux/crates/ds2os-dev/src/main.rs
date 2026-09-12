@@ -8,6 +8,7 @@
 //! Instance 1 belongs to Steam. The harness configures it and notices when it
 //! appears, but Steam is what starts it.
 
+mod api;
 mod drive;
 mod env;
 mod game;
@@ -20,6 +21,7 @@ mod proc;
 mod screen;
 mod server;
 mod settings;
+mod watch;
 
 use std::path::PathBuf;
 
@@ -82,6 +84,14 @@ enum Command {
     /// back. Use it for a server change; a new injector still needs a real
     /// relaunch, because the DLL is only read when the process starts.
     Reload,
+    /// Who the server has connected, and everything it knows about them
+    Players,
+    /// Watches for anything that would silently ruin a test, above all a death
+    Watch {
+        /// How long to watch, in seconds
+        #[arg(long, default_value_t = 120)]
+        seconds: u64,
+    },
     /// Where a character is standing, as the game itself sees it
     Where {
         /// 1, 2, or both
@@ -429,6 +439,15 @@ fn run(command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Reload => reload(&environment),
+        Command::Players => players(&environment),
+        Command::Watch { seconds } => {
+            println!("  olhando por {seconds}s; só fala quando algo muda");
+            watch::run(
+                &environment,
+                std::time::Duration::from_secs(seconds),
+                |event| println!("  {} {}", event.at, event.what),
+            )
+        }
         Command::Where { instance } => where_is(&environment, &instance),
         Command::Goto { instance, to, to_instance, radius, seconds } => {
             goto(&environment, instance, to, to_instance, radius, seconds)
@@ -842,6 +861,39 @@ fn steam2(action: Steam2Action) -> Result<(), String> {
 /// followed drove the wrong game, silently, because both look alike. The
 /// lookup by owning process is the same one the unattended walks already use,
 /// and it keeps the positional meaning only for a window that publishes no pid.
+/// Everything the server knows about who is connected. The client keeps the
+/// same facts somewhere in its memory, and each of them is an afternoon to
+/// find; the server was told all of it already.
+fn players(environment: &Environment) -> Result<(), String> {
+    let server = environment
+        .server
+        .as_ref()
+        .ok_or("o servidor não está compilado; rode `ds2os-dev doctor`")?;
+    let list = api::players(server, api::web_port(&server.config))?;
+
+    if list.is_empty() {
+        println!("  ninguém conectado");
+        return Ok(());
+    }
+
+    for player in list {
+        println!("  {} (id {}, steam {})", player.name, player.player_id, player.steam_id);
+        println!(
+            "    nível {}  almas {}  soul memory {}",
+            player.soul_level, player.souls, player.soul_memory
+        );
+        println!(
+            "    mortes {}  multiplayer {}  covenant {}",
+            player.death_count, player.multiplay_count, player.covenant
+        );
+        println!(
+            "    área {}  estado {}  jogando há {}",
+            player.location, player.status, player.play_time
+        );
+    }
+    Ok(())
+}
+
 fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, String> {
     environment
         .installs
@@ -931,6 +983,9 @@ fn goto(
         nav::Outcome::Fell { steps, drop } => {
             Err(format!("caiu {drop:.1} m no passo {steps}"))
         }
+        nav::Outcome::Teleported { steps, jumped } => Err(format!(
+            "saltou {jumped:.1} m no passo {steps}: morreu e renasceu, ou algo o teletransportou.              Confira com `ds2os-dev players`"
+        )),
         nav::Outcome::LostPlayer { steps } => {
             Err(format!("perdi o jogador no passo {steps}; carregando área?"))
         }
