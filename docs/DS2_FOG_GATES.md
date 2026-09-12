@@ -363,9 +363,10 @@ The patch makes every fog wall behave as it does when nobody is visiting. That
 is the right answer for the barrier at an area boundary, and it is untested for
 everything else a fog wall does:
 
-- **Boss fog during a session.** A boss gate is a white door too. Whether a
-  phantom can still be brought through one, and whether the gate still works at
-  all, has not been tried.
+- ~~**Boss fog during a session.**~~ Tried: a boss gate is a white door too,
+  and with the patch on it still stands, still reads as a boss gate and still
+  lets an invader up to it. That was the risk worth checking first, because it
+  is the one thing a fog wall does that nobody wants removed.
 - **Any area but Heide**, and any door kind but the five measured there.
 - **The host's side over a long session**, and what happens when a guest walks
   somewhere the game never expected a guest to be: the server's own area
