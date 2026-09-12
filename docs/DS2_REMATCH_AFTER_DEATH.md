@@ -162,6 +162,26 @@ Uma versão intermediária que não precisa de patch nenhum: o fantasma recoloca
 a placa (um toque), o host aperta A nela (um toque). Nada é consumido, e a
 placa reaparece no mesmo lugar, ao lado do host.
 
+## Onde o cliente manda cada mensagem de placa
+
+Achado procurando os ids do protocolo como imediatos
+(`FindImmediate.java`, em `/home/suel/tools/scripts`). Todos caem na mesma
+vizinhança dos envios de invasão, o que reforça que ali é a camada de rede do
+jogo e não código de jogabilidade:
+
+| função | imediato | mensagem |
+| --- | --- | --- |
+| `FUN_1406a2610` | `MOV EDX,0x398` | `RequestSummonSign` — **a ação do host**, o botão A na placa |
+| `FUN_1406a24f0` | `MOV EDX,0x396` | `RequestRemoveSign` |
+| `FUN_1406a1170`, `FUN_1406a1de0` | `MOV EDX,0x394` | `RequestCreateSign` |
+| `FUN_1406a0910` | `MOV EDX,0x39b` | `PushRequestSummonSign` |
+| `FUN_1406a1840` | `SUB EBX,0x39b` | despacho por id |
+| `FUN_1406a6300` | `MOV EDX,0x3d2` | `RequestGetBreakInTargetList` |
+| `FUN_1406a6fb0` | `MOV EDX,0x3d3` | `RequestBreakInTarget` |
+
+`FUN_1406a2610` é o alvo se a revanche precisar de patch no cliente: é o envio
+que só acontece depois que o host encosta na placa.
+
 ## O que isso deixa como projeto
 
 Em ordem de valor:

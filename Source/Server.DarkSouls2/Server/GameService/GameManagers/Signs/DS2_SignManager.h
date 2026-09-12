@@ -57,6 +57,12 @@ protected:
     // to it and pressed the button. Returns why it could not, for the log.
     bool ReplaySummon(uint32_t OwnerPlayerId, std::string& OutReason);
 
+    // Tells the host a visitor is arriving, the way a covenant invasion does.
+    // The point of it is which side opens the session: an invasion push goes to
+    // the *host* and the host reaches for its peer, which is the half a
+    // replayed summon is missing.
+    bool PushVisitToHost(uint32_t OwnerPlayerId, uint32_t VisitType, std::string& OutReason);
+
     void PollRematchRequest();
 
 private:

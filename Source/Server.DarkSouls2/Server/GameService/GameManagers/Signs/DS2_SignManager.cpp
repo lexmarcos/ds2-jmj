@@ -138,6 +138,67 @@ bool DS2_SignManager::ReplaySummon(uint32_t OwnerPlayerId, std::string& OutReaso
     return true;
 }
 
+// The other half of a rematch, and the one the replayed summon lacks.
+//
+// Who opens the session is not the same in the two flows the game already has.
+// A break-in push goes to the **host**, and the host answers by reaching for
+// its peer — which is why an invasion can be started by the server while a
+// summon cannot. A visit push is the same shape: it names a visitor and is
+// delivered to the host. So this sends the phantom's own blob, the one it put
+// in its sign, to the host as an arriving visitor.
+bool DS2_SignManager::PushVisitToHost(uint32_t OwnerPlayerId, uint32_t VisitType, std::string& OutReason)
+{
+    auto Iter = LastSummonOfOwner.find(OwnerPlayerId);
+    if (Iter == LastSummonOfOwner.end())
+    {
+        OutReason = "that player has never been summoned, so no host is remembered";
+        return false;
+    }
+    const RememberedSummon& Remembered = Iter->second;
+
+    std::shared_ptr<GameClient> HostClient = GameServiceInstance->FindClientByPlayerId(Remembered.HostPlayerId);
+    std::shared_ptr<GameClient> OwnerClient = GameServiceInstance->FindClientByPlayerId(OwnerPlayerId);
+    if (!HostClient || !OwnerClient)
+    {
+        OutReason = !HostClient ? "the remembered host is not connected" : "the sign's owner is not connected";
+        return false;
+    }
+
+    std::vector<std::shared_ptr<SummonSign>> Owned = LiveCache.GetRecentSetGlobal(1,
+        [OwnerPlayerId](const std::shared_ptr<SummonSign>& Candidate) {
+            return Candidate->PlayerId == OwnerPlayerId;
+        });
+    if (Owned.empty())
+    {
+        OutReason = "that player has no sign out, and the sign is where its player blob comes from";
+        return false;
+    }
+    std::shared_ptr<SummonSign> Sign = Owned[0];
+
+    auto& Host = HostClient->GetPlayerStateType<DS2_PlayerState>();
+
+    DS2_Frpg2RequestMessage::PushRequestVisit PushMessage;
+    PushMessage.set_push_message_id(DS2_Frpg2RequestMessage::PushID_PushRequestVisit);
+    PushMessage.set_player_id(OwnerClient->GetPlayerState().GetPlayerId());
+    PushMessage.set_player_steam_id(OwnerClient->GetPlayerState().GetSteamId());
+    PushMessage.set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
+    PushMessage.set_type((DS2_Frpg2RequestMessage::VisitorType)VisitType);
+    // The same rewrite the break-in push needs: the host has to be told
+    // something is happening where **it** stands, not where the visitor is.
+    PushMessage.set_online_area_id((uint32_t)Host.GetCurrentArea());
+    PushMessage.set_cell_id((uint32_t)Host.GetCurrentOnlineActivityArea());
+
+    if (!HostClient->MessageStream->Send(&PushMessage))
+    {
+        OutReason = "failed to send PushRequestVisit";
+        return false;
+    }
+
+    LogS(HostClient->GetName().c_str(), "Rematch: told the host that player %u is visiting, type %u, area 0x%08x cell %d.",
+        OwnerPlayerId, VisitType, (uint32_t)Host.GetCurrentArea(), Host.GetCurrentOnlineActivityArea());
+    return true;
+}
+
 // "<sign owner player id>" dropped into Saved/<server>/debug_summon.req starts
 // the remembered duel again. It exists to answer one question that no amount
 // of reading settles: whether a client holding a sign acts on a summon nobody
@@ -172,18 +233,33 @@ void DS2_SignManager::PollRematchRequest()
     }
     std::filesystem::remove(RequestPath);
 
-    uint32_t OwnerPlayerId = 0;
-    if (sscanf(Contents.c_str(), "%u", &OwnerPlayerId) != 1)
+    // "<owner> [mode] [visit type]". Mode 0 replays the summon to the phantom,
+    // 1 tells the host a visitor is coming, 2 does both — host first, because
+    // the side that opens the session has to be ready before the other side
+    // tries to reach it.
+    uint32_t OwnerPlayerId = 0, Mode = 0, VisitType = 1;
+    if (sscanf(Contents.c_str(), "%u %u %u", &OwnerPlayerId, &Mode, &VisitType) < 1)
     {
-        WarningS("Signs", "debug_summon.req wants '<sign owner player id>', got '%s'.", Contents.c_str());
+        WarningS("Signs", "debug_summon.req wants '<sign owner player id> [mode] [visit type]', got '%s'.", Contents.c_str());
         return;
     }
 
     std::string Reason;
-    if (!ReplaySummon(OwnerPlayerId, Reason))
+    if (Mode == 1 || Mode == 2)
     {
-        WarningS("Signs", "Rematch: cannot replay the summon of player %u: %s.", OwnerPlayerId, Reason.c_str());
-        return;
+        if (!PushVisitToHost(OwnerPlayerId, VisitType, Reason))
+        {
+            WarningS("Signs", "Rematch: cannot tell the host about player %u: %s.", OwnerPlayerId, Reason.c_str());
+            return;
+        }
+    }
+    if (Mode == 0 || Mode == 2)
+    {
+        if (!ReplaySummon(OwnerPlayerId, Reason))
+        {
+            WarningS("Signs", "Rematch: cannot replay the summon of player %u: %s.", OwnerPlayerId, Reason.c_str());
+            return;
+        }
     }
 }
 
