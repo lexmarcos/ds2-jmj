@@ -707,3 +707,53 @@ A cura que escala é o save. O servidor privado guarda o seu
 
 Copiar antes do teste e devolver depois leva segundos e torna o corte
 irrelevante. Com o jogo parado — um cliente vivo reescreve o arquivo na saída.
+
+### O predicado era transitório, e a chegada funciona
+
+Com a repetição travada até `FUN_1402c6570` responder sim, medido em 12/09:
+
+```
+morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
+fim de sessao RECUSADO  papel=1 estado=7 motivo=2
+levantando na ultima fogueira apos 90 quadros
+warp motivo=1 ... de=+0x44fe22 / warp aceito=1
+de pe de novo apos 421 quadros, guarda=00; recomecando o join
+pode entrar = 0 apos 0 quadros (papel=1 assentando=0)
+pode entrar = 1 apos 96 quadros (papel=1 assentando=0)
+estado 2 apos 96 quadros, pode entrar; repetindo o convite: destino=6.16,-18.50,209.16
+depois da chegada: estado=3
+warp motivo=4 forca=1 tipo=0 mapa=0a1f0000 ponto=40c50000 de=+0x2c2e48 / warp aceito=1
+```
+
+**O predicado era transitório**: não no quadro zero, sim 96 quadros depois — e
+`assentando` valia 0 nas duas leituras, então quem recusava era uma das outras
+metades de `FUN_1402ca190`, provavelmente o par de virtuais `+0x48`/`+0x50`
+que perguntam se o jogo está carregando. A oitava tentativa tinha disparado a
+repetição no primeiro quadro possível, que era o único errado.
+
+Com a espera, **o tratador da chegada sai pelo estado 3**, que é o ramo de
+sucesso — não mais pelo 0xb — e emite o seu warp, que é aceito. Do lado do
+convidado a reentrada está resolvida: ele sai da morte, levanta, refaz o join
+e chega.
+
+### O que falta é o host
+
+E ali para. O estado 3 é onde o convidado espera a resposta do par, e ela não
+vem: pouco depois nenhum dos dois clientes tem mais objeto de sessão —
+`bp 2c3630` não dispara em nenhum. O convidado terminou vivo no próprio mundo,
+o host sozinho.
+
+O host **não pede fim de sessão nenhuma vez** — o log dele fica vazio, o que
+confirma de novo que ele não participa da morte do convidado. Então a sessão
+do host não morreu por um pedido: ela se desfez porque o elo com o par caiu, e
+o que derruba o elo é justamente devolver a máquina do convidado ao estado 1.
+
+Duas direções a partir daqui, e a segunda parece mais barata que a primeira:
+
+1. **Segurar o host.** Descobrir o que no host solta o slot do convidado
+   quando o elo pisca, e segurá-lo pelos poucos segundos da reentrada.
+2. **Reinvocar em vez de reentrar.** `DS2_RematchHook` já faz exatamente isso
+   para marcas vermelhas depois de um duelo — o host reinvoca o mesmo jogador
+   sozinho. Aplicá-lo à marca branca depois de uma morte de co-op reaproveita
+   código provado e entrega o que o desenho pede ("morreu, renasce e continua
+   na sessão") ao custo de um carregamento.
