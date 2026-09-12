@@ -14,10 +14,11 @@
 // Every warp the game performs, written down - and a lever on the one that
 // sends a player home when a session ends.
 //
-// The lever starts **off**, and that is a result rather than caution: the game
-// already sends a phantom who dies back to their last bonfire. Measured, twice,
-// on both sides. What a death actually costs a co-op run is the session, not
-// the landing spot.
+// Who died decides what the lever is worth, and both halves are measured:
+// a red invader is already sent to his last bonfire by the game, so nothing
+// changes; a co-op phantom is sent back to the spot he stood on when he was
+// summoned, and that is the one this replaces. What a death still costs a
+// co-op run is the session itself, which nothing here touches.
 //
 // Every warp in the game passes through one virtual call, slot +0x40 of the
 // global context (`0x1416148f0`), and the request it carries says why:

@@ -191,9 +191,10 @@ mesmo ponto `0x7ba7`. E `0x7ba7` é o ponto da última fogueira do convidado:
 está medido à parte, numa morte comum dele no próprio mundo, que produziu
 `motivo=1 tipo=3 mapa=0a1f0000 ponto=00007ba7`.
 
-Ou seja: **o Dark Souls II já manda para a última fogueira o fantasma que
-morre.** O enunciado "em vez de voltar para o mundo, volta para a última
-fogueira" já é o comportamento de fábrica para esse caso.
+Ou seja: para um **invasor de placa vermelha**, o Dark Souls II já manda para a
+última fogueira quem morre. O enunciado "em vez de voltar para o mundo, volta
+para a última fogueira" já é o comportamento de fábrica nesse caso — e por um
+tempo isso pareceu ser o fim da história. Não é: **depende de quem morreu.**
 
 O código confirma sem depender da medição. `FUN_1402c3900` monta **dois**
 destinos e escolhe um:
@@ -235,12 +236,40 @@ Três bytes por papel — `+0x2c`, `+0x2d`, `+0x2e` — dizem, para cada motivo 
 fim de sessão, se o jogador volta para a fogueira ou para onde estava. É um
 interruptor de dados, e mexer nele não precisa de detour nenhum.
 
-Por isso **o redirecionamento nasce desligado**. Ele foi provado e continua
-disponível, mas nos finais que hoje usam a forma posição ele trocaria "de volta
-para onde você estava" por "de volta para a fogueira", que é pior, e nos finais
-que já usam a fogueira ele não muda nada.
+### O co-op escolhe a outra forma, e aí o hook faz diferença
 
-**O que uma morte custa a um co-op não é o lugar de chegada. É a sessão.**
+A mesma medição, feita de novo com um **fantasma branco de co-op** — placa
+branca, `Sign ... type 1`, invocada sozinha pela revanche — dá o contrário.
+
+Com o redirecionamento **desligado**:
+
+    warp motivo=4 forca=0 tipo=0 mapa=0a1f0000 ponto=40c5efa4 de=+0x2c3bde
+    cru=00000000 04000000 00001f0a ffffffff 00000000 03000000
+        a4efc540 002294c1 9a0d5143 0000803f ...
+
+`tipo=0` é a **forma posição**, e os três floats são `6.1855, -18.516, 209.05`
+— exatamente onde o convidado estava no próprio mundo quando foi invocado, o
+mesmo que o servidor tinha registrado (`position 6.2 -18.5 209.1`).
+
+Com o redirecionamento **ligado**, mesma morte:
+
+    warp motivo=4 forca=0 tipo=0 mapa=0a1f0000 ponto=40c5efa4 de=+0x2c3bde
+    co-op: em vez de voltar para o proprio mundo, ultima fogueira
+    (reentrada) motivo=1 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x44fe22
+
+A forma posição virou a forma fogueira. **Para o co-op, que é o caso do
+enunciado, o hook muda o destino de verdade.** Por isso ele fica ligado; para
+o invasor de vermelho ele continua sendo um não-operação, o que é correto.
+
+Resumo do que os três bytes de param decidem, medido:
+
+| quem morre | forma escolhida pelo jogo | o hook muda? |
+| --- | --- | --- |
+| invasor de placa vermelha | fogueira (`tipo 3`, ponto do registro) | não, já era |
+| fantasma branco de co-op | posição (`tipo 0`, onde ele estava) | **sim** |
+
+**Mas o que uma morte custa a um co-op continua não sendo o lugar de chegada.
+É a sessão** — e essa ainda acaba.
 
 ## O que isto **não** faz
 
@@ -248,9 +277,8 @@ Ser honesto aqui importa mais que a feature:
 
 - **A sessão continua acabando.** O `RequestNotifyLeaveSession` sai antes do
   warp, e a demolição em `FUN_1402c3900` não é tocada.
-- E, pela medição acima, **o destino não muda** no caso que importa: numa morte
-  de fantasma o jogo já escolhe a fogueira sozinho. O hook entrega controle
-  sobre o warp, não um comportamento novo.
+- Para um invasor de vermelho **o destino não muda**: o jogo já escolhe a
+  fogueira sozinho. Para o fantasma de co-op muda, e é o caso do enunciado.
 - Portanto isto ainda não é o co-op seamless do enunciado. Para "zerar o jogo
   de ponta a ponta juntos" faltam duas coisas, e só uma delas é código nosso:
   1. a sessão sobreviver a uma morte, o que o jogo nunca faz — um fantasma

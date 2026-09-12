@@ -82,13 +82,16 @@ namespace
 
     uintptr_t s_base = 0;
 
-    // Off by default, and the reason is a measurement: the game already
-    // sends a phantom who dies back to their last bonfire, and the endings
-    // that do *not* - the ones that put the player back where they stood -
-    // would be made worse, not better, by forcing the bonfire on them. The
-    // lever stays because it is proven and because the log is the instrument;
-    // writing anything but "0" to DS2_Seamless.req turns it on.
-    std::atomic<bool> s_redirect{ false };
+    // On, and what it is worth depends on who died - measured both ways:
+    //
+    //   red invader   the game already asks for the bonfire. No change.
+    //   co-op phantom the game asks to be put back where he stood when he was
+    //                 summoned (kind 0, a position). This replaces it.
+    //
+    // Writing "0" to DS2_Seamless.req leaves the log on and stops the
+    // substitution, which is how the two halves of that measurement were
+    // taken.
+    std::atomic<bool> s_redirect{ true };
     std::atomic<bool> s_running{ false };
     std::atomic<bool> s_inside{ false };
     std::thread s_thread;
