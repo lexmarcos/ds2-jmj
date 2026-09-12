@@ -381,6 +381,26 @@ recusa, o handler joga a máquina para o estado `0x13` (`0x1402c2ee6`). Ou seja
 **o warp devolve um byte**, e um detour declarado `void` entrega ao chamador o
 que sobrou em `al` — foi um bug real deste hook, corrigido.
 
+### O estado 7 só sai por um campo
+
+E o desmonte não começa sozinho. O handler do estado 7 — `FUN_1402c3830`, o
+estado em que a sessão fica enquanto se joga — tem uma linha só que interessa:
+
+```c
+if (*(int *)(sessao + 0x1cc) != 0) {
+    sessao[0x1f] = 8;          // +0xf8, o estado: vai para o desmonte
+}
+```
+
+`+0x1cc` é o **motivo do fim**, e quem escreve nele é `FUN_1402c2f20`, o slot
+`+0x30` da sessão — "encerre, e este é o motivo". Ele confere um virtual
+`+0xa8` antes, guarda `FUN_1402d4750(papel, motivo)` em `+0x1c8` e avisa o
+resto do jogo.
+
+Ou seja: **manter `+0x1cc` em zero mantém a sessão no estado 7**, e recusar
+aquela função é suficiente para isso — não é palpite, é o único caminho do 7
+para o 8. É nisso que o `DS2_SeamlessSessionHook` se apoia.
+
 Isto é também o desenho do próximo passo. Se numa morte de convidado a máquina
 fosse levada de volta ao estado 2 com um destino novo, em vez de ao estado 8, o
 convidado renasceria **dentro do mundo do host**. Não está testado, e há contas
