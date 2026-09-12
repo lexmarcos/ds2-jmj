@@ -181,10 +181,23 @@ pub fn launch(
     account: u8,
     second_steam: Option<&std::path::Path>,
 ) -> Result<u32, String> {
-    if account != 1 {
-        return launch_through_steam(environment, second_steam);
+    // Account 1 runs through Proton directly and account 2 through its own
+    // Steam client. Not for elegance: account 2 has to come from that client or
+    // it logs in as account 1, and account 1 cannot come from Steam at all
+    // while Steam still believes the app is running, which it does for a while
+    // after the other instance stops.
+    if account == 1 {
+        return launch_with_proton(environment, account, second_steam);
     }
+    return launch_through_steam(environment, account, second_steam);
+}
 
+/// Proton directly, without Steam.
+pub fn launch_with_proton(
+    environment: &Environment,
+    account: u8,
+    second_steam: Option<&std::path::Path>,
+) -> Result<u32, String> {
     if let Some(pid) = proc::running(&paths::instance_pid(account), "Injector.exe") {
         return Ok(pid);
     }
@@ -279,16 +292,26 @@ pub fn launch(
 /// Measured, both ways, on this machine.
 fn launch_through_steam(
     environment: &Environment,
+    account: u8,
     second_steam: Option<&std::path::Path>,
 ) -> Result<u32, String> {
-    let home = second_steam
-        .ok_or("nenhuma segunda Steam configurada; rode `ds2os-dev steam2 init`")?
-        .to_path_buf();
+    // Steam takes the gamepad for itself and hands it to the games it starts.
+    // A game started outside Steam, in parallel with one started by it, simply
+    // never sees the pad: the harness presses buttons into a window that
+    // ignores them, and the only symptom is a game that sits at its title
+    // screen while every command reports success. So both accounts come up the
+    // same way, through their own client.
+    let home = match account {
+        1 => paths::home(),
+        _ => second_steam
+            .ok_or("nenhuma segunda Steam configurada; rode `ds2os-dev steam2 init`")?
+            .to_path_buf(),
+    };
     let steam = ds2os_core::steam::Steam::discover_in(&home)
         .map_err(|e| format!("não achei uma Steam em {}: {e}", home.display()))?;
     let root = steam.root().to_path_buf();
 
-    if let Ok(prefix) = compat_data(environment, 2) {
+    if let Ok(prefix) = compat_data(environment, account) {
         let running = instance_pids(&prefix);
         if let Some(pid) = running.first() {
             return Ok(*pid);
@@ -320,8 +343,8 @@ fn launch_through_steam(
         &["-applaunch", &APP_ID.to_string()],
         &root,
         &[("HOME", home.display().to_string())],
-        &paths::instance_log(2),
-        &paths::instance_pid(2),
+        &paths::instance_log(account),
+        &paths::instance_pid(account),
         false,
     )
     .map_err(|e| format!("não consegui pedir à segunda Steam que abra o jogo: {e}"))?;
