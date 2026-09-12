@@ -191,10 +191,18 @@ The cure is not an item, it is the save. The private server keeps its own
 <prefix>/drive_c/users/steamuser/AppData/Roaming/DarkSoulsII/<steamid>/DS2SOFS0000.ds3os
 ```
 
-`~/ds2-saves-backup/` holds copies. **Snapshot both before a co-op test and
-restore the guest afterwards** — it takes seconds and makes the ban a
-non-issue. Copy them with the game stopped, or the client writes over the
-restore on its way out.
+`ds2os-dev save backup|restore|list` does exactly that, keeping snapshots in
+`~/.local/share/ds2os-dev/saves`. **Snapshot both before a co-op test and
+restore the guest afterwards.** `restore` refuses while the client is open
+unless given `--stop`, because a running game rewrites the save on its way out
+and the restore looks like it silently failed; and it snapshots what it is
+about to overwrite, so a wrong label is recoverable.
+
+**The `.bak` files sitting next to the live saves are not what they look
+like.** The ones dated 9/9 are from the moment `EnableSeperateSaveFiles`
+created the private save out of the retail one: a level 1 character in Things
+Betwixt with five minutes on the clock. Restoring one throws the character
+away. Check the Data List screen before pressing A on a restored save.
 
 **Two games open on the same account break every session, and the symptom
 points somewhere else.** After a failed relaunch left a second client running
