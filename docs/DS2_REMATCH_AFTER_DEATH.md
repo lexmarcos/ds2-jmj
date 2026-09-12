@@ -72,11 +72,13 @@ apareceria se o mesmo jogador morresse também no mundo dele.
 
 ## O ciclo completo da revanche, medido
 
-    morte como invasor                  t+0
+    morte como invasor                  t+0       (±10s: a queda só é visível
+                                                   na tela, e a última posição
+                                                   no mundo do host é de 01:42:17)
     LeaveSession                        t+12s     (medido na primeira rodada)
-    de volta ao próprio mundo           t+35s
-    X, esquerda, A                      t+37s
-    pedido de invasão no servidor       t+37s
+    de volta ao próprio mundo           ~t+35s
+    X, esquerda, A                      ~t+37s
+    pedido de invasão no servidor       ~t+37s
     fantasma no mundo do host           ~t+55s
 
 | trecho | quem controla | dá para encurtar? |
@@ -98,7 +100,8 @@ O item **Quit Game** aparece no menu de sistema e fica selecionável, mas aperta
 A não faz nada enquanto existe uma sessão PvP — nos dois lados, host e
 fantasma. Foi assim que `game leave` falhou por 180s sem dizer o motivo.
 
-Uma sessão só termina por morte, pelo temporizador, ou por desconexão.
+Pelo que foi visto aqui, resta a morte, o temporizador e a desconexão. Os
+itens de saída (Separation Crystal, Homeward Bone) não foram testados.
 
 ## O que isso deixa como projeto
 
@@ -118,10 +121,13 @@ Em ordem de valor:
 
 O ponto de entrada para (1): os envios estão em `FUN_1406a6300`
 (`RequestGetBreakInTargetList`, 0x3d2) e `FUN_1406a6fb0` (`RequestBreakInTarget`,
-0x3d3), achados procurando os ids do protocolo como imediatos. **Nenhum dos
-dois tem chamador estático** — são virtuais ou chamados por tabela, então o
-caminho até o botão X precisa de um breakpoint em execução (`DS2_Trace.req`),
-não do grafo de chamadas.
+0x3d3), achados procurando os ids do protocolo como imediatos.
+`getCallingFunctions` não achou chamador para nenhum dos dois — o que num
+projeto aberto com `-noanalysis` não prova que não existam. Se o grafo de
+chamadas não levar ao botão X, o caminho é um breakpoint em execução
+(`DS2_Trace.req`) em `FUN_1406a6fb0`, que é o envio que só acontece **depois**
+do YES; o da lista de alvos pode sair antes, para o jogo decidir se mostra o
+diálogo.
 
 ## Ainda não medido
 
