@@ -125,6 +125,12 @@ pub fn focus(window: &GameWindow) -> Result<(), String> {
     let (conn, screen_index) = x11rb::connect(None).map_err(|e| e.to_string())?;
     let root = conn.setup().roots[screen_index].root;
 
+    // Already there: return without the settle below, because a walk focuses
+    // before every burst and would otherwise pay for it ten times over.
+    if active_window(&conn, root) == Some(id) {
+        return Ok(());
+    }
+
     let atom = conn
         .intern_atom(false, b"_NET_ACTIVE_WINDOW")
         .map_err(|e| e.to_string())?
@@ -156,7 +162,13 @@ pub fn focus(window: &GameWindow) -> Result<(), String> {
     for attempt in 0..10 {
         std::thread::sleep(std::time::Duration::from_millis(150));
         match active_window(&conn, root) {
-            Some(active) if active == id => return Ok(()),
+            Some(active) if active == id => {
+                // X says the window is active before the game starts reading
+                // the pad again, and the press sent into that gap is simply
+                // lost - which looked like a menu that would not open, twice.
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                return Ok(());
+            }
             _ => {}
         }
         if attempt >= 2 {
