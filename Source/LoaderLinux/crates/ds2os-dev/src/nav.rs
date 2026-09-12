@@ -47,13 +47,22 @@ pub fn read(install_dir: &Path) -> Option<Pose> {
     let text = std::fs::read_to_string(state_path(install_dir)).ok()?;
     let mut parts = text.split_whitespace();
     let mut next = || parts.next().and_then(|v| v.parse::<f32>().ok());
-    Some(Pose {
+    let pose = Pose {
         x: next()?,
         y: next()?,
         z: next()?,
         facing_x: next()?,
         facing_z: next()?,
-    })
+    };
+
+    // While an area loads, the chain resolves but everything in it is still
+    // zero. The facing is a normalised direction and is never (0, 0) on a
+    // character that exists, so it is the honest liveness test - and a walk
+    // that started from a zeroed pose would drive off in a straight line.
+    if pose.facing_x == 0.0 && pose.facing_z == 0.0 {
+        return None;
+    }
+    Some(pose)
 }
 
 /// How a walk ended.

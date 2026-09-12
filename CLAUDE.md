@@ -326,6 +326,16 @@ assumptions: re-running your own classifier over your own result agrees with
 itself by construction and proves nothing. This mistake shipped a patch that
 crashed the game on save load.
 
+**A killed client leaves its sign behind, and it looks real.** The server
+does clean up — `DS2_SignManager::OnLostPlayer` removes the player's signs and
+pushes `PushRequestRemoveSign` to everyone aware of them — but only once it
+notices the client is gone, and `game stop` is not a graceful disconnect. Until
+the connection times out the sign is still in the cache: the other player polls
+it, sees it on the ground, and can touch it. The summon then fails because
+nobody is waiting behind it, which reads as a summoning bug and is not one.
+After stopping an instance, wait for the server to say `0 signs cached` before
+believing anything about signs.
+
 **Two Steam accounts on one machine cannot make a third player.** Anything
 about three or more players in a session is untestable here, and the honest
 report says so rather than implying it works.
