@@ -82,19 +82,30 @@ que deu os nomes:
 Quando o construtor não reconhece o registro ele copia os `0x38` bytes inteiros
 do destino padrão, que vem de `FUN_14039a9a0`.
 
-### A tabela de motivos
+### A tabela de motivos, e a armadilha que ela esconde
 
-O que está medido até agora, cada linha vinda de um `[rdx]` capturado em
+O que está medido até agora, cada linha vinda de um pedido capturado em
 execução:
 
-| motivo | quem pede | destino |
-| --- | --- | --- |
-| `1` | `FUN_140190920` → `FUN_14044fde0` | a última fogueira |
-| `4` | `FUN_1402c3900`, `0x1402c3996` escreve o `4` à mão | o próprio mundo |
+| motivo | terceiro argumento | quem pede | o que é |
+| --- | --- | --- | --- |
+| `1` | `0` | `FUN_140190920` → `FUN_14044fde0` | morte comum: a última fogueira |
+| `4` | `0` | `FUN_1402c3900`, `0x1402c3bdb` | **volta forçada para o próprio mundo** |
+| `4` | `1` | `0x1402c2e45` | a entrada do convidado **no mundo do host** |
+
+**O motivo 4 sozinho não quer dizer "para casa".** A primeira versão do hook
+trocou todo motivo 4 e quebrou a invocação: o convidado viu "Summoning
+canceled.", o host viu "Summoning failed. The sign has disappeared.", e a
+sessão nunca nasceu. As duas coisas passam pela mesma porta com o mesmo motivo.
+
+Quem separa é o **terceiro argumento** — e não é palpite, é o que a própria
+entrada testa: motivo 4 só pula o portão de permissão quando o argumento é
+zero. O desmonte manda `xor r8d,r8d` (`0x1402c3bd8`); a entrada no mundo do
+host manda `mov r8b,1` (`0x1402c2e42`). O hook testa exatamente isso.
 
 Qualquer outro motivo precisa passar por `0x140248940`; nenhum outro foi visto
-ainda. O `DS2_Seamless.log` do hook abaixo escreve uma linha por warp, e é por
-ele que essa tabela cresce.
+ainda. O `DS2_Seamless.log` escreve uma linha por warp, com motivo, argumento e
+o endereço de retorno de quem pediu, e é por ele que essa tabela cresce.
 
 ### Os dois pedidos, byte a byte
 
@@ -110,7 +121,8 @@ Morte comum (Samuel caiu no mar em Majula), capturada com
     +0x18  a7 7b 00 00   ponto 0x7ba7
     +0x1c  48 6e 3d 41   lixo de pilha daqui para baixo
 
-Morte de fantasma no mundo do host, capturada com `bp 2c3bdb deref rdx 32`:
+Volta forçada de um convidado, capturada com `bp 2c3bdb deref rdx 32` numa
+morte de fantasma no mundo do host:
 
     +0x00  03 00 00 00
     +0x04  04 00 00 00   motivo 4 - de volta ao próprio mundo
@@ -150,7 +162,7 @@ renascimento do próprio jogo**, sem montar struct nenhum à mão.
 `+0x1c2a80` e `+0x44fde0` conferidos antes de escrever qualquer coisa:
 
 ```
-se o pedido tem motivo 4:
+se o pedido tem motivo 4 e o terceiro argumento é 0:
     FUN_14044fde0(*(contexto + 0x70))   // última fogueira, do jeito do jogo
 senão:
     passa adiante
@@ -178,6 +190,15 @@ Ser honesto aqui importa mais que a feature:
      exatamente o que a revanche por placa vermelha já faz.
 - Com dois jogadores em uma máquina não dá para testar três; ver
   [DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md).
+
+## Os sítios que chamam o warp não saem do Ghidra
+
+`Xrefs.java` em `0x1416148f0` devolve 40 leituras e **nenhuma** delas é uma das
+três da tabela acima. A lista não é uma amostra ruim, é incompleta: os sítios
+conhecidos (`0x1402c3bca`, `0x1402c2e2f`, `0x14044fe0d`) simplesmente não
+aparecem. É a mesma parede que o grafo estático levantou nos envios de invasão,
+e vale a mesma conclusão: aqui o inventário honesto é o log em execução, com o
+`de=+0x...` de cada warp, e não a análise.
 
 ## O que ainda não se sabe
 
