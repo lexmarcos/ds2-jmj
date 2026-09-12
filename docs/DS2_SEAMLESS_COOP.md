@@ -72,7 +72,7 @@ que deu os nomes:
 | --- | --- | --- |
 | `+0x00` | `3`, `4` ou `2` conforme `registro+0x168` | família do destino |
 | `+0x04` | sempre `1` no construtor | **motivo** — é o que a entrada lê |
-| `+0x08` | `registro+0x164` | id do mapa (`0x0a1f0000` = Majula) |
+| `+0x08` | `registro+0x164` | id do mapa (`0x0a1f0000` = Heide's Tower of Flame) |
 | `+0x0c` | fica `-1` da inicialização | — |
 | `+0x10` | fica `0` | — |
 | `+0x14` | byte `3` | — |
@@ -109,12 +109,12 @@ o endereço de retorno de quem pediu, e é por ele que essa tabela cresce.
 
 ### Os dois pedidos, byte a byte
 
-Morte comum (Samuel caiu no mar em Majula), capturada com
+Morte comum (Samuel caiu na água em Heide's Tower of Flame), capturada com
 `bp 1c2a80 deref rdx 56`:
 
     +0x00  03 00 00 00   família 3
     +0x04  01 00 00 00   motivo 1 - última fogueira
-    +0x08  00 00 1f 0a   mapa 0x0a1f0000, Majula
+    +0x08  00 00 1f 0a   mapa 0x0a1f0000, Heide's Tower of Flame
     +0x0c  ff ff ff ff
     +0x10  00 00 00 00
     +0x14  03 eb b0 c1   o byte 3; o resto é lixo de pilha
@@ -126,7 +126,7 @@ morte de fantasma no mundo do host:
 
     +0x00  03 00 00 00
     +0x04  04 00 00 00   motivo 4 - de volta ao próprio mundo
-    +0x08  00 00 1f 0a   mesmo mapa: o duelo foi em Majula
+    +0x08  00 00 1f 0a   mesmo mapa: o duelo foi ali
     +0x0c  ff ff ff ff
     +0x10  00 00 00 00
     +0x14  03 7f 00 00
@@ -174,14 +174,83 @@ qualquer outra coisa religa. O log fica em `DS2_Seamless.log`, ao lado da DLL,
 e sai uma linha por warp com motivo, mapa, ponto e o endereço de retorno de
 quem pediu — o `de=+0x...` é o que identifica o caminho.
 
+## O resultado que vira o enunciado do avesso
+
+Com o hook instalado e o redirecionamento ligado, um fantasma morreu no mundo
+do host. O log do convidado, de cima a baixo:
+
+    warp motivo=4 forca=1 tipo=0 mapa=0a1f0000 ponto=c26abe77 de=+0x2c2e48   <- entrada, passou
+    warp motivo=4 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x2c3bde   <- volta forçada
+    co-op: em vez de voltar para o proprio mundo, ultima fogueira
+    (reentrada) motivo=1 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x44fe22
+
+Funcionou: só a volta forçada foi trocada, a entrada passou intacta e a sessão
+nasceu (`RequestNotifyJoinGuestPlayer` seguido de `RequestNotifyJoinSession`).
+Mas **os dois pedidos apontam para o mesmo lugar** — `tipo=3`, mesmo mapa,
+mesmo ponto `0x7ba7`. E `0x7ba7` é o ponto da última fogueira do convidado:
+está medido à parte, numa morte comum dele no próprio mundo, que produziu
+`motivo=1 tipo=3 mapa=0a1f0000 ponto=00007ba7`.
+
+Ou seja: **o Dark Souls II já manda para a última fogueira o fantasma que
+morre.** O enunciado "em vez de voltar para o mundo, volta para a última
+fogueira" já é o comportamento de fábrica para esse caso.
+
+O código confirma sem depender da medição. `FUN_1402c3900` monta **dois**
+destinos e escolhe um:
+
+```c
+cVar3 = FUN_1402d47a0(sessao+0xd8 /* papel */, sessao+0x1cc /* por que acabou */);
+local_d4 = 4;                       // motivo, sempre
+if (cVar3 == 1) {                   // forma fogueira
+    local_d0 = sessao+0x1b8;        // mapa   ) tirados do registro de
+    local_c0 = sessao+0x1c0;        // ponto  ) renascimento do convidado
+    local_d8 = 3;                   // tipo
+} else if (cVar3 == 0) {            // forma posição
+    local_d8 = 0;
+    local_c0 = sessao+0x1a4;        // x, y, z de onde ele estava quando entrou
+}
+```
+
+Os dois retratos são tirados **na entrada**, no handler do estado 2: o registro
+de renascimento (`*(contexto+0xe)` → `+0x164/+0x168/+0x16c`) e a posição do
+jogador no próprio mundo.
+
+E quem decide é uma **linha de param**, não código:
+
+```c
+undefined1 FUN_1402d47a0(papel, porQueAcabou)
+{
+  linha = FUN_14016f540(papel);          // *(contexto+0x18) é o gerenciador de params
+  if (linha) {
+    if (porQueAcabou == 1) return linha[0x2c];
+    if (porQueAcabou == 2) return linha[0x2e];
+    if (porQueAcabou == 3) return linha[0x2d];
+    if (porQueAcabou == 4) return 2;
+  }
+  return 1;                               // o padrão é a fogueira
+}
+```
+
+Três bytes por papel — `+0x2c`, `+0x2d`, `+0x2e` — dizem, para cada motivo de
+fim de sessão, se o jogador volta para a fogueira ou para onde estava. É um
+interruptor de dados, e mexer nele não precisa de detour nenhum.
+
+Por isso **o redirecionamento nasce desligado**. Ele foi provado e continua
+disponível, mas nos finais que hoje usam a forma posição ele trocaria "de volta
+para onde você estava" por "de volta para a fogueira", que é pior, e nos finais
+que já usam a fogueira ele não muda nada.
+
+**O que uma morte custa a um co-op não é o lugar de chegada. É a sessão.**
+
 ## O que isto **não** faz
 
 Ser honesto aqui importa mais que a feature:
 
 - **A sessão continua acabando.** O `RequestNotifyLeaveSession` sai antes do
-  warp, e a demolição em `FUN_1402c3900` não é tocada. O que muda é só **onde
-  o jogador aterrissa dentro do próprio mundo**: na última fogueira em vez do
-  ponto de retorno.
+  warp, e a demolição em `FUN_1402c3900` não é tocada.
+- E, pela medição acima, **o destino não muda** no caso que importa: numa morte
+  de fantasma o jogo já escolhe a fogueira sozinho. O hook entrega controle
+  sobre o warp, não um comportamento novo.
 - Portanto isto ainda não é o co-op seamless do enunciado. Para "zerar o jogo
   de ponta a ponta juntos" faltam duas coisas, e só uma delas é código nosso:
   1. a sessão sobreviver a uma morte, o que o jogo nunca faz — um fantasma

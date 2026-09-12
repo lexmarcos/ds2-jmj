@@ -11,8 +11,13 @@
 
 #include "Injector/Hooks/Hook.h"
 
-// A death inside somebody else's world sends the player home. This turns that
-// into the same thing an ordinary death does: back to the last bonfire.
+// Every warp the game performs, written down - and a lever on the one that
+// sends a player home when a session ends.
+//
+// The lever starts **off**, and that is a result rather than caution: the game
+// already sends a phantom who dies back to their last bonfire. Measured, twice,
+// on both sides. What a death actually costs a co-op run is the session, not
+// the landing spot.
 //
 // Every warp in the game passes through one virtual call, slot +0x40 of the
 // global context (`0x1416148f0`), and the request it carries says why:
@@ -20,9 +25,10 @@
 //   reason 1   you died in your own world - go to the last bonfire
 //   reason 4   the session is over - go back to your own world
 //
-// The entry point switches on exactly that field before it queues anything
-// (`0x1401c2ab6`), so swapping the request is enough; nothing else in the
-// chain needs to be touched. See docs/DS2_SEAMLESS_COOP.md.
+// Motive 4 alone is not "go home": the same motive carries a guest *into* a
+// host's world. The game separates the two on the third argument, and so does
+// this hook - redirecting the wrong one cancels the summon, which is how it was
+// found. See docs/DS2_SEAMLESS_COOP.md.
 //
 // The replacement is not hand built. The game's own "respawn where you last
 // rested" call is reachable from the same context the warp arrives with

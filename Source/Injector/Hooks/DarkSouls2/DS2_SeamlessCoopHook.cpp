@@ -82,7 +82,13 @@ namespace
 
     uintptr_t s_base = 0;
 
-    std::atomic<bool> s_redirect{ true };
+    // Off by default, and the reason is a measurement: the game already
+    // sends a phantom who dies back to their last bonfire, and the endings
+    // that do *not* - the ones that put the player back where they stood -
+    // would be made worse, not better, by forcing the bonfire on them. The
+    // lever stays because it is proven and because the log is the instrument;
+    // writing anything but "0" to DS2_Seamless.req turns it on.
+    std::atomic<bool> s_redirect{ false };
     std::atomic<bool> s_running{ false };
     std::atomic<bool> s_inside{ false };
     std::thread s_thread;
