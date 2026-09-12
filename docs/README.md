@@ -17,6 +17,7 @@ server.
 | [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md) | The probe, the tracer and the oracle, and what they cost to learn |
 | [DS2_SOUL_MEMORY_MATCHMAKING.md](DS2_SOUL_MEMORY_MATCHMAKING.md) | Soul Memory matchmaking tiers and how to open them up |
 | [DS2_PVP_CODEMAP.md](DS2_PVP_CODEMAP.md) | Where the DS2 PvP flows live in the source tree |
+| [DS2_FOG_GATES.md](DS2_FOG_GATES.md) | The area-transition fog walls: the class, the per-frame test, and what is still unknown |
 
 The two leave-session documents are historical records: the tracing they
 describe was scaffolding and is not part of this branch.

@@ -99,6 +99,18 @@ Calibrations 2.02. A patch moves them all. The mask hook finds its param
 by type name and survives; the two code patches do not, though the new
 one at least refuses rather than corrupting.
 
+### The fog patch, in one area and one pair
+
+`DS2RemovePhantomFog` takes away the barrier that pens a phantom into the
+host's area, by holding every fog wall in the state it has when nobody is
+visiting. Confirmed in Heide, one invasion, one pair of players: the barrier
+does not appear, both move freely, and the boss gate still works.
+
+Not tried: any other area, a white sign summon rather than an invasion, a
+session that lasts, more than one guest, and what the server makes of a guest
+who walks somewhere its own area filtering did not expect. It is off by
+default and off in the loader for exactly that reason.
+
 ## Changes made along the way that nobody has checked
 
 ### Partial protobuf parsing

@@ -100,6 +100,13 @@ perfectly normal there. `game enter` notices — nothing renames the connection
 Two smaller rules, both learned by losing an afternoon:
 
 - **The pad has to exist before the game starts.** `up` orders it that way.
+- **Steam takes the pad for the games it starts.** Account 2 comes up through
+  its own Steam client, and while Steam is bringing a game up it holds the
+  virtual pad; presses aimed at the other instance during that window are
+  simply lost, and the only symptom is a game sitting at its title screen
+  while every command reports success. Account 1 therefore still starts
+  through Proton directly — which is also the only way, since Steam refuses
+  `-applaunch` for a while after it has seen the app running.
 - **Focus is not a formality.** The game ignores the pad while another window
   is active, so every press focuses first and checks that the focus landed.
 
