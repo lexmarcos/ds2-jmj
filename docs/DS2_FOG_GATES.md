@@ -287,6 +287,23 @@ so every door comes up as if the local player owned the world. That is the
 same shape as the patches this project already ships, and it is the next thing
 to build.
 
+### The hook, and why it failed
+
+`DS2_PhantomFogHook` replaces the call that fetches the phantom type with
+`xor eax,eax`, so every door is built stamped 0. Verified in the running game:
+`+0x1d136f` reads `31 c0 90 90 90`, both clients relaunched, session formed.
+
+**The barrier appeared exactly as before, and still could not be crossed.**
+
+So the stamp is a symptom. And there was a reading already on the table that
+said so, which should have been noticed before building anything: the **host**
+owns his world, his doors carry 0 in every state, and he sees the same barrier
+and is stopped by it too. A field that is 0 for someone the barrier blocks
+cannot be what raises it.
+
+The hook stays in the tree, off by default, because the measurement it makes
+is worth keeping: it proves the stamp is not the lever.
+
 ## How to carry on
 
 Take a character to a fog wall, then measure three things while standing in it:
