@@ -62,8 +62,29 @@ A hipótese a testar, nessa ordem:
    mapa do host, posição de destino — em vez do warp de volta;
 3. ver se o host continua enxergando o fantasma e se a sessão continua viva.
 
-Como provar: sem novo `RequestNotifyLeaveSession` no servidor, e o fantasma
-visível na tela do host depois do respawn.
+### Medido em 12/09: quem pede o fim, e com que motivo
+
+Com um co-op de verdade formado (`RequestNotifyJoinGuestPlayer` seguido de
+`RequestNotifyJoinSession`) e o convidado morto por queda, o hook registrou,
+**no cliente do convidado**:
+
+    fim de sessao pedido  papel=1  estado=7  motivo=2  motivo_anterior=0  de=+0x2c9246
+
+E no **host, nada**. O log dele ficou vazio.
+
+Três coisas saem daí:
+
+- o estado era **7**, como o caminho estático previa, e o motivo **2** é o que
+  vai parar em `+0x1cc` e empurra a máquina para o estado 8;
+- o papel do fantasma branco de co-op é **1** (o invasor de vermelho é 7);
+- **o desmonte nasce inteiramente do lado de quem morreu.** O host não pede
+  nada. Isso é o que torna o M1 plausível com um hook só: recusar do lado do
+  convidado pode bastar, sem tocar no cliente do host.
+
+Quem pede é `+0x2c9246`, ainda não decifrado.
+
+Como provar o resto: sem novo `RequestNotifyLeaveSession` no servidor, e o
+fantasma visível na tela do host depois do respawn.
 
 Risco conhecido: o warp **devolve um byte**, e o estado `0x13` é para onde a
 máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
