@@ -540,3 +540,45 @@ a um convidado que ele já conta como dentro, ninguém sabe. O rastro de estado
 depois da chegada responde isso num teste só — `3→5→6→7` é o join fechando,
 `3` parado é o host ignorando, e `3→4` seguido de `0xf` é o join estourando o
 temporizador do case 4.
+
+### A guarda da chegada
+
+A sexta tentativa não chegou a acontecer, e o motivo é uma linha que só
+apareceu porque o handler foi decompilado antes de ser chamado:
+
+```c
+if (*(char*)(*(sessao+0x108) + 8) != 0) { EndSession(0x13); return; }
+```
+
+É o **primeiro** teste de `FUN_1402c2a80`, antes de qualquer outra coisa — e o
+mesmo teste abre `FUN_1402c37a0`, o estado 0, que é onde um join começa. Ou
+seja não é "esta chegada não pode": é **"você não está em condição de entrar em
+lugar nenhum"**.
+
+Medido com a encenação inteira de pé — convite, invocação, sessão viva,
+convidado morto de propósito na água:
+
+```
+chegada: mapa=0a1f0000 destino=6.09,-18.50,209.16 giro=2.548 [6]=0101 [7]=1 [8]=01
+guarda da chegada: antes=00 depois=00
+morte de fantasma: motivo=2 papel=1 -> reentrando pelo estado 1
+guarda da chegada = 01; a chegada seria recusada. Nao repetindo.
+```
+
+O destino copiado bate com onde os dois estavam (6.19, −18.52, 209.05), e bate
+também com o warp que o próprio jogo emitiu no join — `ponto=40c30000` é
+6.09375, o mesmo X. O formato do payload está certo.
+
+**A guarda vale 0 num convite de verdade e 1 no instante da morte.** E não
+abre sozinha: lida ao vivo minutos depois, pelo endereço que o próprio
+despachante entrega (`bp 2c3630 deref rcx+108`), continuava em `01`, com a
+sessão parada no estado 2. Repetir a chegada ali teria caído direto em
+`EndSession(0x13)`, levando a encenação junto e sem dizer por quê — foi a
+verificação que sobrou com o achado em vez de com nada.
+
+Isso mata a sexta tentativa na forma em que ela foi pensada, e aponta a
+sétima: em vez de segurar o convidado morto no lugar onde caiu, **deixar a
+morte correr como o jogo a escreveu** — ele levanta na própria fogueira, vivo —
+e só então puxá-lo de volta. A sessão sobrevive à viagem porque o desmonte é
+recusado à parte, que é a única coisa já provada deste caminho todo: o estado
+7 continua lá quando ele se levanta.
