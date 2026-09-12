@@ -99,6 +99,46 @@ Quem escreve `+0x198` decide **por que** a sessão termina, e é aí que mora a
 diferença entre morrer, o temporizador estourar e usar um item de saída. Esse
 ponto ainda não foi localizado.
 
+## O campo da razão, e seu vocabulário
+
+`+0x198` não é um booleano de "saiu": é o **motivo**, e o jogo tem um
+vocabulário para ele. Procurando as escritas imediatas nesse deslocamento
+(sintaxe AT&T, `movl $0x?,0x198(%reg)`, faixa 0x140200000–0x140400000):
+
+    1402bd018   movl $0xd,0x198(%rdi)
+    1402bd622   movl $0x2,0x198(%rdi)
+    1402bd781   movl $0x1,0x198(%rdi)
+    1402bdcda   movl $0x1,0x198(%rbx)
+    1402be5a2   movl $0x4,0x198(%rsi)
+    1402be7a9   movl $0x4,0x198(%rsi)
+    1402beeb2   movl $0x7,0x198(%rdi)
+    1402bf4f7   movl $0x6,0x198(%r14)      <-- o único que escreve 6
+    1402bf63a   movl $0x1,0x198(%r14)
+    1402c04bb   movl $0x1,0x198(%rdi)
+    1403f3914   movl $0x1,0x198(%rbx)
+
+Um único sítio escreve 6, dentro de `FUN_1402bf440`, e ele tem a forma de um
+**padrão**, não de uma decisão:
+
+```c
+if (*(int *)(param_1 + 0x198) == 0) {
+    *(undefined4 *)(param_1 + 0x198) = 6;     // o outro ramo põe 1
+}
+if (*(int *)(param_1 + 0x150) != 0) {
+    FUN_1402ce5f0(*(undefined4 *)(param_1 + 0x198), param_1 + 0xb0);
+}
+```
+
+Quem escreveu primeiro ganha: a razão só é preenchida se ainda estiver zerada.
+Então quem sabe *por que* a sessão acabou escreve antes, e `FUN_1402bf440` só
+completa o que ficou em branco. Trocar o 6 por outro valor aqui muda o rótulo,
+não o comportamento.
+
+Estes dois têm chamador estático, ao contrário do resto do caminho:
+
+    FUN_1402bddb0  ->  FUN_1402bf440     (a rotina que põe a razão)
+    FUN_1402c3630  ->  FUN_1402c3900     (a rotina que encerra)
+
 ## Por que isso importa
 
 Duas funcionalidades pedidas dependem deste caminho:
@@ -118,6 +158,7 @@ alvo certo é o código do evento, não o envio.
 
 ## O que ainda falta
 
-- Onde `+0x198` recebe 6, e o que mais pode escrever ali.
+- Quem escreve `+0x198` **antes** de `FUN_1402bf440`, que é quem realmente
+  decide o motivo. O sítio do 6 é só o padrão.
 - O que são os códigos 5 e 6 exatamente (5 aparece no par da saída).
 - Se `FUN_1402c3900` é chamada uma vez por sessão ou por quadro.
