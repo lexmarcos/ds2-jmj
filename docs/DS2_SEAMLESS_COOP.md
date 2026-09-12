@@ -679,3 +679,31 @@ resposta foi feita a cada vez que ela muda.
 O convidado terminou vivo na própria fogueira, fora da sessão, sem travar
 nada — a falha mais limpa que este caminho já teve, e a primeira em que o
 jogo recusou por um motivo que tem nome.
+
+### O custo de cada tentativa
+
+Medido em 12/09, e é um limite prático do caminho todo: **o experimento corta
+o convidado.** Chico colocou a marca 1001 sem problema às 19:26, o teste da
+oitava rodou às 19:31, e às 19:40 ele não colocava mais marca nenhuma e tinha
+parado até de pedir a lista delas ao servidor. Nada mais aconteceu no meio.
+
+Do lado do jogo é justo — um convidado que recusa o desmonte e depois sai *é*
+uma desconexão ilegal, e o jogo conta. O aviso aparece uma vez, só na tela do
+cliente, e nada disso chega a log nenhum:
+
+> Due to repeated illegal multiplayer disconnects, your connection to other
+> worlds was lost. Only a Bone of Order can restore your connection.
+
+Um jogador cortado não coloca marca, não usa orbe e **não invoca** — então
+inverter os papéis não contorna. A cura pelo item não escala: existem poucos
+Bones of Order numa jogatina e os dois personagens gastaram os seus.
+
+A cura que escala é o save. O servidor privado guarda o seu
+(`EnableSeperateSaveFiles`), um arquivo por conta:
+
+```
+<prefixo>/drive_c/users/steamuser/AppData/Roaming/DarkSoulsII/<steamid>/DS2SOFS0000.ds3os
+```
+
+Copiar antes do teste e devolver depois leva segundos e torna o corte
+irrelevante. Com o jogo parado — um cliente vivo reescreve o arquivo na saída.

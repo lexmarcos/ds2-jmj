@@ -173,9 +173,28 @@ measured and cleared before the game finally said what was wrong — and it only
 said it on the client's own screen, never in any log.
 
 So: **`game stop` while a session is live costs a strike.** End the session
-first (a death, the timer), and when a test leaves a session wedged, expect to
-spend a Bone of Order before the next staging. If a character suddenly cannot
-place a sign, look at its screen before measuring anything.
+first (a death, the timer). If a character suddenly cannot place a sign, look
+at its screen before measuring anything.
+
+**And the M2 experiment itself costs a strike.** Measured 12/09: Chico placed
+sign 1001 without trouble at 19:26, the seamless-respawn test ran at 19:31,
+and by 19:40 he could not place a sign and had stopped polling for them
+entirely. Nothing else happened in between. From the game's side that is fair
+— a guest who refuses the session teardown and then leaves *is* an illegal
+disconnect — but it means **every run of this experiment burns the guest**,
+and there are only so many Bones of Order in a playthrough. We spent both.
+
+The cure is not an item, it is the save. The private server keeps its own
+(`EnableSeperateSaveFiles`), so the whole thing is one file per account:
+
+```
+<prefix>/drive_c/users/steamuser/AppData/Roaming/DarkSoulsII/<steamid>/DS2SOFS0000.ds3os
+```
+
+`~/ds2-saves-backup/` holds copies. **Snapshot both before a co-op test and
+restore the guest afterwards** — it takes seconds and makes the ban a
+non-issue. Copy them with the game stopped, or the client writes over the
+restore on its way out.
 
 **Two games open on the same account break every session, and the symptom
 points somewhere else.** After a failed relaunch left a second client running
