@@ -51,6 +51,20 @@ namespace
     constexpr size_t kPrepareOffset = 0x500fd0;
     constexpr uint8_t kPrepareBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20 };
 
+    // "Send the player to where they last rested." Builds its own warp request
+    // out of the respawn record and calls the warp itself. The seventh attempt
+    // proved this call is the piece nobody else will make: a phantom's death
+    // does not stand him up, the session teardown does, and the teardown is
+    // exactly what M1 refuses. So the standing up has to be ours.
+    constexpr size_t kRespawnOffset = 0x44fde0;
+    constexpr uint8_t kRespawnBytes[] = { 0x48, 0x83, 0xec, 0x68, 0x48, 0x8d, 0x54, 0x24, 0x20 };
+    constexpr size_t kRespawnRecordOffset = 0x70;
+
+    // Frames to let the death finish before standing him up. The death
+    // terminal has bookkeeping of its own to do - the bloodstain, the souls,
+    // the hollowing - and reviving him in the middle of it would race.
+    constexpr int kReviveDelayFrames = 90;
+
     constexpr size_t kContextOffset = 0x16148f0;
     constexpr size_t kWarpSlot = 0x40;
     constexpr size_t kPrepareArgOffset = 0x22e0;
@@ -182,6 +196,9 @@ namespace
     using Prepare_p = void(*)(void* Argument);
     Prepare_p s_prepare = nullptr;
 
+    using Respawn_p = void(*)(void* Record);
+    Respawn_p s_respawn = nullptr;
+
     using Dispatch_p = void(*)(void* Session, float Delta);
     Dispatch_p s_original_dispatch = nullptr;
 
@@ -244,6 +261,15 @@ namespace
     std::atomic<bool> s_rearm{ false };
     std::atomic<bool> s_rearm_pending{ false };
     int s_rearm_waited = 0;
+
+    // The eighth attempt, and the one the seventh's failure designs. Same as
+    // option 5 - the death runs in full, the teardown is refused, the session
+    // stays at 7 - except that this one does not wait for the game to stand
+    // the guest up, because the seventh measured that it never will. It calls
+    // the respawn itself, and only then waits for the arrival guard to open.
+    std::atomic<bool> s_revive{ false };
+    std::atomic<bool> s_revive_pending{ false };
+    int s_revive_waited = 0;
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -321,16 +347,27 @@ namespace
             return;
         }
 
-        if (s_rearm.load())
+        if (s_rearm.load() || s_revive.load())
         {
             // Nothing is taken away from the death: it runs exactly as the
-            // game wrote it, warp and all. The only addition is a note to come
-            // back for him once he is standing.
+            // game wrote it. What follows differs - option 5 waits for the
+            // game to stand him up, option 6 knows it will not and does it.
+            const bool Revive = s_revive.load();
             Append(StringFormat(
-                "  morte de fantasma: motivo=%u papel=%u -> morte normal, e depois puxar de volta\n",
-                Reason, Role));
-            s_rearm_pending.store(true);
-            s_rearm_waited = 0;
+                "  morte de fantasma: motivo=%u papel=%u -> morte normal, e depois %s\n",
+                Reason, Role, Revive ? "levantar e puxar de volta" : "puxar de volta"));
+
+            if (Revive)
+            {
+                s_revive_pending.store(true);
+                s_revive_waited = 0;
+            }
+            else
+            {
+                s_rearm_pending.store(true);
+                s_rearm_waited = 0;
+            }
+
             s_original_death(Record, Reason);
             return;
         }
@@ -450,6 +487,36 @@ namespace
         // The rejoin parks itself in state 2 and waits for a message that will
         // never come: nobody is going to invite a player who is already here.
         // So the host's own invitation is played again.
+        // Standing him up ourselves, a frame or so after the death has had its
+        // say. Nothing else is going to: measured 12/09, a guest whose
+        // teardown is refused stays dead where he fell for as long as anyone
+        // cares to watch.
+        if (s_revive_pending.load())
+        {
+            if (++s_revive_waited >= kReviveDelayFrames)
+            {
+                s_revive_pending.store(false);
+
+                const uintptr_t Context = *(uintptr_t*)(s_base + kContextOffset);
+                void* Record = Context == 0
+                    ? nullptr
+                    : *(void**)(Context + kRespawnRecordOffset);
+
+                if (Record != nullptr)
+                {
+                    Append(StringFormat("  levantando na ultima fogueira apos %d quadros\n",
+                        s_revive_waited));
+                    s_respawn(Record);
+                    s_rearm_pending.store(true);
+                    s_rearm_waited = 0;
+                }
+                else
+                {
+                    Append("  sem registro de renascimento; nao da para levantar\n");
+                }
+            }
+        }
+
         // Waiting for the guest to be back on his feet in his own world, with
         // the session still standing because the teardown was refused. When
         // the guard opens, the join is started over from the top.
@@ -592,16 +659,20 @@ namespace
                 // "4" no warp at all: the session is put back to the state a
                 // join starts from and the host's own invitation is replayed,
                 // "5" the death runs normally and the guest is pulled back
-                // once he is standing again.
+                // once he is standing again, "6" the same but standing him up
+                // is done here, because the game will not.
                 const char Choice = Contents.empty() ? '0' : Contents[0];
                 s_enabled.store(Choice != '0');
                 s_flag.store(Choice == '2' ? 0 : 1);
                 s_lift.store(Choice == '3');
                 s_rejoin.store(Choice == '4');
                 s_rearm.store(Choice == '5');
+                s_revive.store(Choice == '6');
                 Append(StringFormat("=== renascer na sessao %s, %s ===\n",
                     Choice == '0' ? "desligado" : "ligado",
-                    s_rearm.load()
+                    s_revive.load()
+                        ? "morte normal, levantar na fogueira e puxar de volta"
+                        : s_rearm.load()
                         ? "morte normal, e puxar de volta quando ele levantar"
                         : s_rejoin.load()
                         ? "reentrando pelo estado 1 e repetindo o convite"
@@ -627,6 +698,7 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
         { kPrepareOffset, kPrepareBytes, sizeof(kPrepareBytes), "preparo" },
         { kDispatchOffset, kDispatchBytes, sizeof(kDispatchBytes), "despachante" },
         { kArriveOffset, kArriveBytes, sizeof(kArriveBytes), "chegada" },
+        { kRespawnOffset, kRespawnBytes, sizeof(kRespawnBytes), "renascimento" },
     };
     for (const auto& Check : Checks)
     {
@@ -647,6 +719,7 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
     s_prepare = (Prepare_p)(s_base + kPrepareOffset);
     s_original_dispatch = (Dispatch_p)(s_base + kDispatchOffset);
     s_original_arrive = (Arrive_p)(s_base + kArriveOffset);
+    s_respawn = (Respawn_p)(s_base + kRespawnOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
