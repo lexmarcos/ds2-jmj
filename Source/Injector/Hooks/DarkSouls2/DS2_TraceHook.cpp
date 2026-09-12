@@ -47,6 +47,7 @@ namespace
         // dereference away, in a local the caller built and will reuse. By the
         // time a request file could read that address the memory is gone.
         std::string DerefRegister;
+        size_t DerefOffset = 0;
         size_t DerefLength = 0;
     };
 
@@ -210,10 +211,13 @@ namespace
                     }
                     else
                     {
+                        At += Point.DerefOffset;
                         uint8_t Bytes[64] = {};
                         if (ReadGuarded(At, Bytes, Point.DerefLength))
                         {
-                            Followed = StringFormat(" [%s]=", Which.c_str());
+                            Followed = Point.DerefOffset == 0
+                                ? StringFormat(" [%s]=", Which.c_str())
+                                : StringFormat(" [%s+%zx]=", Which.c_str(), Point.DerefOffset);
                             for (size_t i = 0; i < Point.DerefLength; i++)
                             {
                                 Followed += StringFormat("%02x", Bytes[i]);
@@ -262,7 +266,7 @@ namespace
         s_breakpoints.clear();
     }
 
-    void Arm(size_t Offset, const std::string& DerefRegister = std::string(), size_t DerefLength = 0)
+    void Arm(size_t Offset, const std::string& DerefRegister = std::string(), size_t DerefOffset = 0, size_t DerefLength = 0)
     {
         const uintptr_t Address = s_base + Offset;
 
@@ -276,6 +280,7 @@ namespace
         Point.Address = Address;
         Point.Offset = Offset;
         Point.DerefRegister = DerefRegister;
+        Point.DerefOffset = DerefOffset;
         Point.DerefLength = DerefLength > 64 ? 64 : DerefLength;
         Point.Original = *(volatile uint8_t*)Address;
 
@@ -293,7 +298,7 @@ namespace
     }
 
     // Requests, one per line:
-    //   bp <hex offset from the module base> [deref <registrador> <bytes>]
+    //   bp <hex offset from the module base> [deref <registrador>[+<hex>] <bytes>]
     //   clear
     //   report
     //
@@ -341,14 +346,23 @@ namespace
                 std::string Follow;
                 std::string Register;
                 size_t Length = 0;
+                size_t FieldOffset = 0;
                 Parts >> Follow;
                 if (Follow == "deref")
                 {
                     Parts >> Register >> Length;
+                    // "rcx+e0" reads a field instead of the head of the
+                    // object, which is what most questions here actually are.
+                    const size_t Plus = Register.find('+');
+                    if (Plus != std::string::npos)
+                    {
+                        FieldOffset = (size_t)strtoull(Register.c_str() + Plus + 1, nullptr, 16);
+                        Register = Register.substr(0, Plus);
+                    }
                 }
                 if (!Where.empty())
                 {
-                    Arm((size_t)strtoull(Where.c_str(), nullptr, 16), Register, Length);
+                    Arm((size_t)strtoull(Where.c_str(), nullptr, 16), Register, FieldOffset, Length);
                     Added++;
                 }
             }
