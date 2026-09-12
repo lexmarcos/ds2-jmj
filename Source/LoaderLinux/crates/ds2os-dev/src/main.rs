@@ -506,18 +506,15 @@ fn run(command: Command) -> Result<(), String> {
                 println!("  dump da estrutura pedido; sai no DS2_AreaProbe.log");
                 Ok(())
             }
-            GameAction::Shot { out } => shot(out),
+            GameAction::Shot { out } => shot(&environment, out),
             GameAction::Focus { window } => {
-                let windows = screen::windows()?;
-                let target = windows
-                    .get(window.saturating_sub(1))
-                    .ok_or_else(|| format!("só existem {} janelas", windows.len()))?;
-                screen::focus(target)?;
+                let target = focus_target(&environment, window)?;
+                screen::focus(&target)?;
                 println!("  foco em {} ({})", target.id, window);
                 Ok(())
             }
         },
-        Command::Pad { action } => pad_command(action),
+        Command::Pad { action } => pad_command(&environment, action),
         Command::Steam2 { action } => steam2(action),
         Command::Logs { which, lines, grep, follow } => {
             let path = log_path(&environment, which)
@@ -637,7 +634,7 @@ fn announce_account(home: Option<&std::path::Path>) {
     }
 }
 
-fn pad_command(action: PadAction) -> Result<(), String> {
+fn pad_command(environment: &Environment, action: PadAction) -> Result<(), String> {
     let report = |index: u8, command: String| -> Result<(), String> {
         pad::send(index, &command).map(|_| println!("  ok"))
     };
@@ -691,11 +688,8 @@ fn pad_command(action: PadAction) -> Result<(), String> {
         }
         PadAction::Seq { script, focus, shot, gap, index } => {
             if let Some(which) = focus {
-                let windows = screen::windows()?;
-                let target = windows
-                    .get(which.saturating_sub(1))
-                    .ok_or_else(|| format!("só existem {} janelas", windows.len()))?;
-                screen::focus(target)?;
+                let target = focus_target(environment, which)?;
+                screen::focus(&target)?;
                 println!("  foco em {}", target.id);
             }
 
@@ -716,7 +710,7 @@ fn pad_command(action: PadAction) -> Result<(), String> {
             }
 
             if shot {
-                shot_into(None)?;
+                shot_into(environment, None)?;
             }
             Ok(())
         }
@@ -795,14 +789,27 @@ fn steam2(action: Steam2Action) -> Result<(), String> {
     }
 }
 
+/// The window a `--focus N` or `game focus N` means.
+///
+/// N names an **instance**, not a position on screen. The two games put their
+/// windows up in whatever order they finish booting, so indexing the window
+/// list picked the other account about half the time — and the presses that
+/// followed drove the wrong game, silently, because both look alike. The
+/// lookup by owning process is the same one the unattended walks already use,
+/// and it keeps the positional meaning only for a window that publishes no pid.
+fn focus_target(environment: &Environment, instance: usize) -> Result<screen::GameWindow, String> {
+    let account = u8::try_from(instance).map_err(|_| format!("instância {instance} não existe"))?;
+    drive::window_for(environment, account)
+}
+
 /// Writes one PNG per game window. Naming them by index keeps the paths stable
 /// between calls, so a later capture overwrites the earlier one rather than
 /// filling the directory.
-fn shot(out: Option<PathBuf>) -> Result<(), String> {
-    shot_into(out)
+fn shot(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
+    shot_into(environment, out)
 }
 
-fn shot_into(out: Option<PathBuf>) -> Result<(), String> {
+fn shot_into(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
     let dir = out.unwrap_or_else(paths::log_dir);
     let windows = screen::windows()?;
 
@@ -810,8 +817,29 @@ fn shot_into(out: Option<PathBuf>) -> Result<(), String> {
         return Err("nenhuma janela do Dark Souls II aberta".into());
     }
 
+    // `shot-1.png` has to be instance 1's screen. Naming the files by the order
+    // X happens to list the windows in made them swap places between runs, and
+    // a screenshot of the wrong account is worse than no screenshot: it reads
+    // as evidence. Windows whose account cannot be resolved keep the old
+    // positional names, after the ones that could.
+    let mut named: Vec<(String, &screen::GameWindow)> = Vec::new();
+    let mut claimed: Vec<String> = Vec::new();
+    for account in 1..=2u8 {
+        if let Ok(window) = drive::window_for(environment, account) {
+            if let Some(found) = windows.iter().find(|other| other.id == window.id) {
+                named.push((format!("shot-{account}.png"), found));
+                claimed.push(window.id.clone());
+            }
+        }
+    }
     for (index, window) in windows.iter().enumerate() {
-        let path = dir.join(format!("shot-{}.png", index + 1));
+        if !claimed.contains(&window.id) {
+            named.push((format!("shot-{}.png", index + 1), window));
+        }
+    }
+
+    for (name, window) in named {
+        let path = dir.join(&name);
         match screen::capture(window, &path) {
             Ok(written) => println!(
                 "  janela {} ({}x{})  {}",
@@ -963,7 +991,7 @@ fn up(
     if pad::running(1) {
         println!("  já no ar");
     } else {
-        pad_command(PadAction::Start { index: 1, foreground: false })?;
+        pad_command(environment, PadAction::Start { index: 1, foreground: false })?;
     }
 
     println!("\nservidor");

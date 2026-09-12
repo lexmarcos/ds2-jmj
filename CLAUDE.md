@@ -124,6 +124,18 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
+**A hollow character cannot use the online items.** With the Cracked Red Eye
+Orb or a soapstone selected, X does nothing at all — no animation, no message,
+nothing reaching the server — and it reads exactly like a dead button. Burn a
+Human Effigy first (menu → Inventory → the second item). Dying hollows you, so
+this comes back after every death. Standing on a bonfire does **not** block the
+item; that was the first guess and it was wrong.
+
+`game focus <n>`, `pad --focus <n>` and `game shot` all mean the **instance**,
+resolved by the owning process. They used to index the window list, which put
+`shot-1.png` on either account depending on boot order, and sent presses to the
+wrong game.
+
 ### Two installations, two accounts
 
 **Never start the second instance from the first Steam.** The session

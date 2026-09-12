@@ -159,6 +159,23 @@ would not need a code patch at all.
 
 Worth finding where that table lives and what a present record contains.
 
+### The rematch after a death
+
+Measured in [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md), with
+two gaps left open:
+
+- whether the **winner** of a duel stays human. Only the loser was
+  checked, and the loser is hollow. If the winner also hollows, every
+  rematch costs an effigy on both sides, not one.
+- whether a fall death and a kill death produce the same message chain.
+  The fall showed no `RequestNotifyDeath`, but the server census only
+  logs the first message of each type per client, so that is not
+  evidence either way.
+
+Both were left untested because the terrain around the Heide bonfire
+made a controlled kill expensive to stage, not because they do not
+matter.
+
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena
