@@ -284,6 +284,36 @@ Ou o host precisa ser avisado por outro caminho, ou o hook precisa distinguir
 "o convidado morreu" de "o host morreu" — no segundo caso não há nada a salvar,
 a sessão acaba de qualquer jeito e substituir a despedida só trava os dois.
 
+### A medição no caso certo, e a parede
+
+Com o convidado morrendo (motivo 2, o caso do M2), o hook em flag 1 e o portão
+erguido:
+
+    morte de fantasma: papel=1 mapa=0a1f0000 sabor=1 destino=6.19,-18.52,209.05
+    flag=1 [+0x24ac]=1e [+0x24b1]=40 portao=0 (erguido) aceito=1
+
+- **`portao=0`** — o contador está **zerado no instante da morte do convidado**,
+  e positivo (811) na morte do host. É exatamente por isso que a primeira
+  tentativa com flag 1 foi recusada e a terceira não. O portão é o
+  `*(mgr+0x168)` de `*(contexto+0xd0)`, erguido por uma chamada e devolvido.
+- **`aceito=1`** com a forma da entrada.
+- **Nenhum pedido de fim de sessão**, nos dois lados.
+- O convidado ficou **vivo e de pé**, e o host continuou listando "Chico".
+
+**Mas ele não está no mundo do host.** Movi o host e a tela do convidado não
+mudou; ele tem a própria bloodstain aos pés. Reprodutível: aconteceu igual nas
+duas medições que chegaram a este ponto.
+
+**A parede, dita com precisão:** o pedido do estado 2 funciona *porque a máquina
+de estados o emite enquanto transita para dentro do mundo do host*, com toda a
+preparação de peer em volta. Reemitir só o warp reproduz **o movimento**, não a
+**entrada**. O warp move o jogador dentro do mundo em que ele já está; quem
+decide em qual mundo ele está é a sessão, não o destino do pedido.
+
+Ou seja: o M2 não é um pedido de warp, é uma **reentrada no estado 2** — e o
+handler desse estado recebe um `param_2` que vem da rede, com mapa, posição e
+orientação. Sem esse payload (ou sem sintetizá-lo), não há entrada.
+
 Onde **não** procurar, já verificado: os primeiros `0x200` bytes do objeto do
 jogador não têm HP nem bandeira de morte. Um diff vivo-contra-morto ali só
 mostra nome, arquétipo e posição, e uma varredura de 2 KB não achou nenhum par
