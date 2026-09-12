@@ -31,6 +31,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -188,6 +189,11 @@ bool Injector::Init()
             if (Config.DS2RemovePhantomFog)
             {
                 Hooks.push_back(std::make_unique<DS2_PhantomFogHook>());
+            }
+
+            if (Config.DS2AutoRematch)
+            {
+                Hooks.push_back(std::make_unique<DS2_RematchHook>());
             }
 
             // Always on for Dark Souls II: it only polls, and it is the only

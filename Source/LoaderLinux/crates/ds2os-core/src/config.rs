@@ -43,6 +43,7 @@ pub struct InjectorConfig {
     /// Build every fog wall as if the local player owned the world, which
     /// is what a phantom's area barrier appears to hang on.
     pub DS2RemovePhantomFog: bool,
+    pub DS2AutoRematch: bool,
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,

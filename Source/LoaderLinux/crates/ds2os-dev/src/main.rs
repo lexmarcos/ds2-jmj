@@ -66,6 +66,9 @@ enum Command {
         /// Leave the closed areas closed, the way retail has them
         #[arg(long)]
         no_force_zone: bool,
+        /// Summon the pair's red sign again from the host, after a duel
+        #[arg(long)]
+        auto_rematch: bool,
     },
     /// Stops the server and the second instance
     Down,
@@ -250,6 +253,9 @@ enum GameAction {
         /// experiment for a phantom's area barrier
         #[arg(long)]
         remove_fog: bool,
+        /// Summon the pair's red sign again from the host, after a duel
+        #[arg(long)]
+        auto_rematch: bool,
     },
     /// Starts the game, in its own Proton prefix, without Steam
     Launch {
@@ -377,8 +383,8 @@ fn run(command: Command) -> Result<(), String> {
 
     match command {
         Command::Doctor { json } => doctor(&environment, json),
-        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog } => {
-            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog)
+        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch } => {
+            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog, auto_rematch)
         }
         Command::Down => {
             let stopped_game = game::stop_second();
@@ -426,7 +432,7 @@ fn run(command: Command) -> Result<(), String> {
             }
         },
         Command::Game { action } => match action {
-            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone, remove_fog } => {
+            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch } => {
                 // The timer patch installs its own exception handler and single
                 // steps through a software breakpoint. Two handlers competing
                 // for the same exception would muddy what the watch reports, so
@@ -435,7 +441,7 @@ fn run(command: Command) -> Result<(), String> {
                 if watch_reads && !no_timer {
                     println!("  timer desligado enquanto o watch estiver ligado");
                 }
-                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone, remove_fog)
+                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch)
             }
             GameAction::Launch { steam_home, instance } => {
                 let home = resolve_second_steam(steam_home)?;
@@ -928,13 +934,14 @@ fn prepare(
     probe_zone: bool,
     force_zone: bool,
     remove_fog: bool,
+    auto_rematch: bool,
 ) -> Result<(), String> {
     if environment.installs.is_empty() {
         return Err("nenhuma instalação do Dark Souls II encontrada".into());
     }
 
     for install in &environment.installs {
-        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads, area_address.clone(), probe_zone, force_zone, remove_fog)?;
+        let prepared = game::prepare(environment, install, timer_seconds, timer_patch, probe_area, watch_reads, area_address.clone(), probe_zone, force_zone, remove_fog, auto_rematch)?;
         println!("  conta {}", prepared.account);
         println!("    pasta   {}", prepared.game_dir.display());
         if !prepared.copied.is_empty() {
@@ -986,6 +993,7 @@ fn up(
     no_enter: bool,
     force_zone: bool,
     remove_fog: bool,
+    auto_rematch: bool,
 ) -> Result<(), String> {
     let problems = environment.problems();
     if !problems.is_empty() {
@@ -1016,7 +1024,7 @@ fn up(
     // human pressed Play; now that `up` launches the game, leaving it off is
     // how a Majula test quietly fails.
     println!("\njogo");
-    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, force_zone, remove_fog)?;
+    prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, force_zone, remove_fog, auto_rematch)?;
 
     println!("\ninstâncias");
     if environment.installs.len() < 2 {
