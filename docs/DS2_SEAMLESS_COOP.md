@@ -197,6 +197,34 @@ existe hoje:
 
 O passo 5 é o único que ainda precisa de mão, e é o próximo pedaço óbvio.
 
+### Onde começa o passo 5
+
+O caminho da placa já está localizado, por breakpoint numa colocação de placa
+branca de verdade. `FindImmediate.java 0x394` (o id de `RequestCreateSign`) dá
+cinco candidatos; colocar a placa acendeu **dois**:
+
+    alcancado +0x6a1de0 de=+0x29ec4a ...
+    alcancado +0x6a1170 de=+0x284f52 ...
+
+e o servidor registrou `Sign 1000 created: type 1` logo depois. O interessante
+é o chamador do primeiro:
+
+```c
+void FUN_14029ec00(longlong trabalho, longlong *dono, undefined8 p3)
+{
+  interface = (**(code **)(*dono + 0xe8))(dono);
+  (**(code **)(*interface + 8))
+      (interface, p3, trabalho[0x28], trabalho[0x2c], trabalho+0x30,
+       trabalho[0x5c], trabalho+0x60);
+}
+```
+
+É o mesmo desenho Manager / Interface / Job do resto do subsistema
+([DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md)): o **job** em
+`param_1` já carrega tudo que a placa precisa, e quem o monta está acima, em
+`+0x286239` na pilha capturada. Repor a placa sozinho é achar esse construtor e
+chamá-lo — o mesmo movimento que o `DS2_RematchHook` já faz do lado do host.
+
 ## O resultado que vira o enunciado do avesso
 
 Com o hook instalado e o redirecionamento ligado, um fantasma morreu no mundo
