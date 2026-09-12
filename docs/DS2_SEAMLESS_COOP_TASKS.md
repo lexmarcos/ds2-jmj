@@ -194,11 +194,26 @@ Medido em 12/09, com uma sessão de co-op de pé e o convidado **vivo** no mundo
 do host: abrir o inventário dele e escolher a Homeward Bone mostra o menu de
 ação com **"Use" acinzentado**. Um fantasma invocado não pode usá-la.
 
-Isso não é um detalhe de item. É o jogo fechando, de propósito, toda porta pela
-qual um convidado poderia carregar área sem sair da sessão: fantasma não
-descansa em fogueira, não viaja rápido e não usa Homeward Bone. A frase que
-estava no desenho como suposição — *"o jogo nunca carrega área nenhuma dentro
-do mundo do host para um convidado"* — deixa de ser suposição.
+E não é só o convidado. **O host também não pode**: com a mesma sessão de pé,
+o inventário do Samuel mostra "Use" acinzentado na Homeward Bone exatamente
+igual. A regra não é sobre ser fantasma — é sobre **haver sessão**. Enquanto um
+grupo existe, ninguém dos dois lados carrega área por vontade própria.
+
+Isso é mais forte que a suposição que estava no desenho, e mais útil: a porta a
+abrir não é "deixe o fantasma usar itens", é **"permita carregar área com
+sessão viva"**, um interruptor só, que vale para os dois lados.
+
+Também ficou descartado o caminho mais óbvio para ela. A entrada do warp recusa
+motivos fora de 1 e 4 consultando `FUN_140248940`, que devolve o inverso de um
+virtual no slot `+0x1b0` de `*(contexto+0xd0)`. Esse virtual é
+`0x140314440`, quatro instruções:
+
+    xor eax,eax ; cmp dword [rcx+0x168],eax ; setg al ; ret
+
+ou seja `*(mgr+0x168) > 0`. Medido nos dois clientes com a sessão de pé: **777
+no host e 811 no convidado**, ambos positivos e crescendo — é um contador de
+tempo, não uma permissão. O portão do warp deixa o motivo 5 passar nos dois
+lados; quem barra é a camada de menu, antes de o warp chegar a ser pedido.
 
 **O que isso faz com o M2.** As duas saídas viram uma só:
 
