@@ -291,6 +291,22 @@ Resumo do que os três bytes de param decidem, medido:
 | invasor de placa vermelha | fogueira (`tipo 3`, ponto do registro) | não, já era |
 | fantasma branco de co-op | posição (`tipo 0`, onde ele estava) | **sim** |
 
+### O host que morre leva o convidado pelo mesmo caminho
+
+A terceira medição, a que faltava: o **host** morreu com o fantasma de co-op
+dentro. Os dois logs, lado a lado:
+
+    host     warp motivo=1 forca=0 tipo=3 ponto=00007ba7 de=+0x44fe22
+    convidado warp motivo=4 forca=0 tipo=0 ponto=40c5efa4 de=+0x2c3bde
+              co-op: em vez de voltar para o proprio mundo, ultima fogueira
+              (reentrada) motivo=1 forca=0 tipo=3 ponto=00007ba7 de=+0x44fe22
+
+O host faz uma morte comum e vai para a própria fogueira — o hook nem encosta,
+porque o motivo é 1. E o convidado passa **exatamente pelo mesmo caminho** de
+quando é ele quem morre: mesma função, mesmo motivo, mesma forma posição, mesma
+troca. Ou seja, um hook só cobre os dois casos do enunciado, "se o phantom ou o
+host morrer", sem nenhum código específico para cada um.
+
 **Mas o que uma morte custa a um co-op continua não sendo o lugar de chegada.
 É a sessão** — e essa ainda acaba.
 

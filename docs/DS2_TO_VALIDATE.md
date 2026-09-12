@@ -227,9 +227,10 @@ acabando. Em aberto:
   fogueira dele enquanto ele é fantasma?~~ **Sim**: o redirecionamento
   de um fantasma de co-op devolveu `mapa=0a1f0000 ponto=00007ba7`, que é
   o mesmo ponto de uma morte comum dele no próprio mundo.
-- **A morte do host com fantasma dentro** ainda não foi medida: não se
-  sabe qual motivo o cliente do convidado vê, nem por qual caminho. É o
-  caso que mais importa para o co-op, porque o mundo da run é o do host.
+- ~~A morte do host com fantasma dentro~~ **medida em 12/09**: o host faz
+  uma morte comum (motivo 1, para a própria fogueira) e o convidado passa
+  pelo mesmo `+0x2c3bde` com a mesma forma posição de quando é ele quem
+  morre. Um hook só cobre os dois casos.
 - **Os três bytes de param** (`+0x2c/+0x2d/+0x2e` da linha do papel) só
   foram lidos por dedução do comportamento. Falta ler a linha na memória
   e conferir papel por papel, e falta saber o que é o motivo de fim 4,
