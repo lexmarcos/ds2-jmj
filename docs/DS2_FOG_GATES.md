@@ -191,6 +191,38 @@ is a guest in another player's world is drawn by something other than
 frontend byte — is about the *placed* fog walls of a map, not about the
 boundary a phantom runs into.
 
+## What the boundary is not, and where it probably is
+
+The fog that appears when a phantom joins, walls off the area the session may
+use, and stops host and guest alike, is a different thing again. Two systems
+have been ruled out by measurement rather than by reading:
+
+- **`MapObjWhiteDoorComponent`**, above: its table is not loaded and its test
+  never fires while that fog is on screen.
+- **`MapObjPlayGoDoorComponent`** (vtable `0x1410c5c88`, constructor
+  `FUN_1401cd500`), whose param *is* resident everywhere. Its init
+  (`FUN_1401cd7c0`) copies the door's transform and then sets its one flag from
+  `[[DAT_1416751f8 + 0x368] + 0x38] < row[0]` — a comparison against an install
+  chunk index. It is the streaming-install door, and it has nothing to do with
+  sessions. Its per-frame slot is the generic gimmick act, so it does nothing
+  else.
+
+What is left, by name, is the multiplay zone:
+
+| what | where |
+| --- | --- |
+| `MapAreaMultiPlayZoneCtrl` | vtable `0x1410c7c40`, constructor `FUN_1401e8d90` |
+| `EventConditionMap_IsPlayerInsideMultiPlayZone` | an event-script condition, so part of this logic lives in the game's data, not the executable |
+
+That is the same zone the injector already lies about: `DS2ForceMultiPlayZone`
+makes every area claim to be in Heide's zone `103110`. If the boundary is built
+out of the zone the player is in, the patch should change where the fog appears
+— and the session that produced the measurements above ran with the patch
+**off**, so nobody has seen the two together yet.
+
+That is the next test, and it is cheap: relaunch with the patch on, summon
+again, and look.
+
 ## How to carry on
 
 Take a character to a fog wall, then measure three things while standing in it:
