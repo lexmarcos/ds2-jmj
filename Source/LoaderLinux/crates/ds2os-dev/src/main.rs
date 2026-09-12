@@ -12,6 +12,7 @@ mod drive;
 mod env;
 mod game;
 mod logs;
+mod nav;
 mod pad;
 mod paths;
 mod probe;
@@ -81,6 +82,34 @@ enum Command {
     /// back. Use it for a server change; a new injector still needs a real
     /// relaunch, because the DLL is only read when the process starts.
     Reload,
+    /// Where a character is standing, as the game itself sees it
+    Where {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+    },
+    /// Walks a character to a place, without anyone watching the screen
+    ///
+    /// The target is either a coordinate pair (`--to x,z`) or another
+    /// instance's current position (`--to-instance 2`), which is what "go and
+    /// stand on their summon sign" means in practice.
+    Goto {
+        /// Which character walks
+        #[arg(long)]
+        instance: u8,
+        /// World coordinates, as `x,z`
+        #[arg(long, conflicts_with = "to_instance")]
+        to: Option<String>,
+        /// Walk to where this instance is standing right now
+        #[arg(long)]
+        to_instance: Option<u8>,
+        /// Close enough, in metres
+        #[arg(long, default_value_t = 1.5)]
+        radius: f32,
+        /// Give up after this many seconds
+        #[arg(long, default_value_t = 90)]
+        seconds: u64,
+    },
     /// One screen of what is running
     Status {
         #[arg(long)]
@@ -400,6 +429,10 @@ fn run(command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Reload => reload(&environment),
+        Command::Where { instance } => where_is(&environment, &instance),
+        Command::Goto { instance, to, to_instance, radius, seconds } => {
+            goto(&environment, instance, to, to_instance, radius, seconds)
+        }
         Command::Status { json } => status(&environment, json),
         Command::Server { action } => match action {
             ServerAction::Up => {
@@ -809,6 +842,104 @@ fn steam2(action: Steam2Action) -> Result<(), String> {
 /// followed drove the wrong game, silently, because both look alike. The
 /// lookup by owning process is the same one the unattended walks already use,
 /// and it keeps the positional meaning only for a window that publishes no pid.
+fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, String> {
+    environment
+        .installs
+        .iter()
+        .find(|i| i.account == account)
+        .ok_or_else(|| format!("conta {account} não encontrada"))
+}
+
+/// Prints where each character is standing. Useful on its own, and the only
+/// way to get the number that `goto --to` wants.
+fn where_is(environment: &Environment, instance: &str) -> Result<(), String> {
+    let accounts: Vec<u8> = match instance {
+        "both" => vec![1, 2],
+        other => vec![other
+            .parse()
+            .map_err(|_| format!("instância inválida: {other}"))?],
+    };
+
+    for account in accounts {
+        let install = install_for(environment, account)?;
+        match nav::read(&install.game_dir) {
+            Some(pose) => println!(
+                "  conta {account}: x={:.2} y={:.2} z={:.2}  encarando {:.2},{:.2}",
+                pose.x, pose.y, pose.z, pose.facing_x, pose.facing_z
+            ),
+            None => println!("  conta {account}: sem posição (fora do mundo, ou sem injector)"),
+        }
+    }
+    Ok(())
+}
+
+fn goto(
+    environment: &Environment,
+    account: u8,
+    to: Option<String>,
+    to_instance: Option<u8>,
+    radius: f32,
+    seconds: u64,
+) -> Result<(), String> {
+    let install = install_for(environment, account)?;
+
+    let target = match (to, to_instance) {
+        (Some(pair), _) => {
+            let (x, z) = pair
+                .split_once(',')
+                .ok_or_else(|| format!("--to quer `x,z`, recebi `{pair}`"))?;
+            (
+                x.trim().parse::<f32>().map_err(|_| format!("x inválido: {x}"))?,
+                z.trim().parse::<f32>().map_err(|_| format!("z inválido: {z}"))?,
+            )
+        }
+        (None, Some(other)) => {
+            let their = install_for(environment, other)?;
+            let pose = nav::read(&their.game_dir)
+                .ok_or_else(|| format!("a conta {other} não está publicando posição"))?;
+            println!("  alvo: conta {other} em x={:.2} z={:.2}", pose.x, pose.z);
+            (pose.x, pose.z)
+        }
+        (None, None) => return Err("escolha --to x,z ou --to-instance N".to_owned()),
+    };
+
+    let plan = nav::Plan {
+        radius,
+        timeout: std::time::Duration::from_secs(seconds),
+        ..nav::Plan::default()
+    };
+
+    let outcome = nav::walk_to(
+        environment,
+        &install.game_dir,
+        account,
+        target,
+        plan,
+        |step, pose, distance| {
+            println!("    {step:>3}  x={:.2} z={:.2}  faltam {:.1} m", pose.x, pose.z, distance);
+        },
+    )?;
+
+    match outcome {
+        nav::Outcome::Arrived { steps, distance } => {
+            println!("  chegou em {steps} passos, a {distance:.1} m do alvo");
+            Ok(())
+        }
+        nav::Outcome::Stuck { steps, distance } => {
+            Err(format!("travou depois de {steps} passos, ainda a {distance:.1} m"))
+        }
+        nav::Outcome::Fell { steps, drop } => {
+            Err(format!("caiu {drop:.1} m no passo {steps}"))
+        }
+        nav::Outcome::LostPlayer { steps } => {
+            Err(format!("perdi o jogador no passo {steps}; carregando área?"))
+        }
+        nav::Outcome::TimedOut { steps, distance } => {
+            Err(format!("tempo esgotado em {steps} passos, ainda a {distance:.1} m"))
+        }
+    }
+}
+
 fn focus_target(environment: &Environment, instance: usize) -> Result<screen::GameWindow, String> {
     let account = u8::try_from(instance).map_err(|_| format!("instância {instance} não existe"))?;
     drive::window_for(environment, account)
