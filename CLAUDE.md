@@ -44,6 +44,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
+| `where` | where each character is standing, from the game's own memory |
+| `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
 | `game options` | the line to paste into Steam's launch options |
 | `game watch` | asks the injector to watch the area address for a few seconds |
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |

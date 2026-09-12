@@ -87,6 +87,43 @@ the game when the character moved. A second thread can reach an address between
 the first restoring the byte and the handler running, so the handler owns an
 address whether or not it is still armed - without that it died immediately.
 
+## Onde o jogador está, e como levá-lo a algum lugar
+
+`DS2_NavHook` publica a posição do jogador local em `DS2_Nav.txt`, ao lado da
+DLL, reescrito inteiro a cada 50 ms:
+
+    <x> <y> <z> <facing x> <facing z> <ponteiro>
+
+A cadeia é a mesma que o próprio jogo usa quando um convidado entra no mundo do
+host e precisa dizer onde está (`FUN_1402c2a80`):
+
+    jogador  = *(*(*(0x1416148f0) + 0xa8) + 0xc0)
+    posição  = jogador + 0xa8      três floats, x y z
+    direção  = jogador + 0xbc e + 0xc4, normalizada
+
+**Há mais duas triplas de posição logo antes de `+0xa8`** e elas não seguem o
+personagem — dá para escolher a errada e ficar com um valor que nunca muda.
+A boa foi achada andando e relendo; é o único teste que separa as três.
+
+Com isso o harness anda sozinho:
+
+```
+ds2os-dev where
+ds2os-dev goto --instance 1 --to-instance 2
+```
+
+`--to-instance` é "vá para onde o outro está", que na prática é "pise na placa
+dele": o convidado põe a placa onde está parado, e os dois mundos usam as
+mesmas coordenadas, então não é preciso descobrir a posição da placa em lugar
+nenhum.
+
+O stick é **relativo à câmera**, e a câmera gira junto com o personagem, então
+não existe um mapeamento fixo para aprender uma vez. Cada passo mede o
+deslocamento que produziu: o ângulo entre o que foi pedido e o que aconteceu é
+a guinada da câmera, suavizada no passo seguinte. Cair e travar são relatados,
+não combatidos — um teste que dependia da caminhada falha dizendo o que houve
+em vez de estourar o tempo.
+
 ## O breakpoint que segue um ponteiro
 
 `DS2_Trace.req` aceita, desde 12/09:
