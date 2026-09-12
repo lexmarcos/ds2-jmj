@@ -255,7 +255,10 @@ Depois disso, uma invasão montada e o fantasma jogado do penhasco:
   minutos, sem tela de morte, sem renascer, sem voltar para o próprio mundo. O
   processo seguia rodando a 80% de CPU e a imagem seguia mudando, então não era
   travamento: era um fluxo de morte que nunca completa;
-- restaurar os bytes não desfez o estado em que o personagem já estava.
+- **restaurar os bytes destravou**: segundos depois o fantasma morreu de
+  verdade, voltou ao próprio mundo e reapareceu na fogueira, normal. Isso
+  fecha o argumento: o byte estava segurando o fluxo da morte, não só a
+  sessão.
 
 A leitura: esse byte não é "mantenha a sessão". Ele faz parte do caminho da
 **morte**, e tirá-lo deixa o jogador num limbo. O co-op seamless precisa de
