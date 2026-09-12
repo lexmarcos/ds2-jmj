@@ -251,6 +251,42 @@ out of the zone the player is in, the patch should change where the fog appears
 That is the next test, and it is cheap: relaunch with the patch on, summon
 again, and look.
 
+## What the session changes in a door
+
+Two snapshots of the same five doors, matched by the record each points at —
+the records keep their addresses across a map reload and the objects do not —
+one with the guest alone in his own world and one with him standing in the
+host's world with the barrier up. Ignoring every field that is a pointer:
+
+| field | alone | as a phantom |
+| --- | --- | --- |
+| `+0x80` | `0` | `5`, on all five doors |
+| `+0x85` | `0x14` | `0x0a`, on three of them |
+| `+0x86` | `0` | `4` or `5` |
+
+`+0x80` comes from the init, which copies it out of the frontend:
+
+```c
+*(int *)(this + 0x80) = *(*( *(FeManager + 0x3b8) + 0x10) + 0x68);
+```
+
+That chain reads 0 for the owner of a world and 5 for a red phantom, which is
+what the guest was. **Every white door is stamped with the local player's
+phantom type when it is created.**
+
+### Poking it does nothing, and that is informative
+
+Writing 0 over `+0x80` in all five doors, with the barrier on screen, changed
+nothing: the fog stayed. The field is read at init and the door's state is
+already built by then, so a later write has nothing left to affect — and no
+method of the class reads the field at all, which fits.
+
+So the test that would settle it has to change the value **while the door is
+being created**: a hook on the init (`FUN_1401d1330`) that stamps 0 instead,
+so every door comes up as if the local player owned the world. That is the
+same shape as the patches this project already ships, and it is the next thing
+to build.
+
 ## How to carry on
 
 Take a character to a fog wall, then measure three things while standing in it:
