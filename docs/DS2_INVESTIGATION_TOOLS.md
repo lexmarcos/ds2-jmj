@@ -92,7 +92,7 @@ address whether or not it is still armed - without that it died immediately.
 `DS2_NavHook` publica a posição do jogador local em `DS2_Nav.txt`, ao lado da
 DLL, reescrito inteiro a cada 50 ms:
 
-    <x> <y> <z> <facing x> <facing z> <ponteiro>
+    <x> <y> <z> <facing x> <facing z> <ponteiro> <amostra>
 
 A cadeia é a mesma que o próprio jogo usa quando um convidado entra no mundo do
 host e precisa dizer onde está (`FUN_1402c2a80`):
@@ -104,6 +104,20 @@ host e precisa dizer onde está (`FUN_1402c2a80`):
 **Há mais duas triplas de posição logo antes de `+0xa8`** e elas não seguem o
 personagem — dá para escolher a errada e ficar com um valor que nunca muda.
 A boa foi achada andando e relendo; é o único teste que separa as três.
+
+O **contador de amostra** no fim não é enfeite. Um leitor não distingue um
+personagem parado de um arquivo que parou de ser escrito, e essa diferença é
+exatamente "a caminhada chegou" contra "a caminhada travou". Custou um
+diagnóstico errado: a primeira tentativa relatou `travou depois de 6 passos,
+ainda a 1,8 m` com o personagem **em cima do alvo**, lendo uma posição de três
+passos antes. O publicador escreve por `rename`, o `rename` falha às vezes sob
+Wine enquanto o leitor tem o arquivo aberto, e engolir esse erro deixa a
+amostra velha no lugar parecendo atual.
+
+O **ponteiro não serve para distinguir as instâncias**: sem ASLR, as duas
+cópias do jogo caem no mesmo endereço de heap e publicam o mesmo valor. Duas
+leituras idênticas nos dois arquivos são um resultado plausível, não um bug —
+foi assim que se descobriu que a caminhada tinha chegado.
 
 Com isso o harness anda sozinho:
 
