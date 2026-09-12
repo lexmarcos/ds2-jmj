@@ -34,9 +34,12 @@ fn required_settings() -> Value {
         "Advertise": false,
         "ServerHostname": "127.0.0.1",
         "ServerPrivateHostname": "127.0.0.1",
-        // Lets one Steam account hold both sessions, which is the whole point
-        // of running two instances from one copy of the game.
-        "AllowDuplicateSteamIds": true,
+        // Refuse two sessions from one Steam account. The session between two
+        // players is peer to peer over Steam and keyed on the account's id, so
+        // two instances sharing one account can never reach each other — and
+        // allowing it only means the refusal arrives as a test that proves
+        // nothing, hours later. The second Steam client exists for this.
+        "AllowDuplicateSteamIds": false,
         // Upstream's welcome is an advert for another project, and it is the
         // first thing in the way every time the game starts. This replaces it
         // with the one thing worth reading at that moment: which server you

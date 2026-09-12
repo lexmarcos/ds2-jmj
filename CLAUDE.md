@@ -117,7 +117,28 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
-### Two installations, not one
+### Two installations, two accounts
+
+**Never start the second instance from the first Steam.** The session
+between two players is peer to peer over Steam and keyed on the account's
+steam id, so two instances on one account can never reach each other: the
+server marks the second connection `<id>_1`, phantoms never arrive, and the
+test proves nothing while looking like a genuine negative. The whole reason
+there are two Steam clients is to avoid this. Instance 1 is the main account
+(Samuel, Marcos); instance 2 is the second client's account (Chico).
+
+`ds2os-dev game launch --instance 2` gets it right by asking the **second
+client** to launch the game (`steam.sh -applaunch 335300` with its own
+`HOME`), which is also why that account's launch options must carry the
+wrapper — the harness refuses to launch without it, because a game started
+with no injector reaches FromSoftware's servers instead.
+
+Running Proton directly is not enough, and fails quietly: `HOME` points the
+Linux side at the second client, but Proton overwrites
+`STEAM_COMPAT_CLIENT_INSTALL_PATH` with the installation it was launched
+from, and that is the path the Windows side of steamclient follows. The game
+logs in as the **first** account while every other sign looks right. The
+server now refuses the duplicate outright, and `game enter` explains it.
 
 The two instances have **separate game installations**:
 

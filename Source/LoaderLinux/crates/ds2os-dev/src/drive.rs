@@ -102,6 +102,17 @@ fn character_loaded(text: &str) -> Option<String> {
         .next_back()
 }
 
+/// The id the server gives a second session on an account that already has one:
+/// it suffixes the steam id, and that suffix is the only visible sign that a
+/// two player test is about to prove nothing.
+fn duplicate_account(text: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|line| line.split("Steam id '").nth(1))
+        .filter_map(|rest| rest.split('\'').next())
+        .find(|id| id.contains('_'))
+        .map(str::to_owned)
+}
+
 fn logged_in(text: &str) -> bool {
     text.contains("has logged in as player")
 }
@@ -288,6 +299,15 @@ pub fn enter(
             }
             std::thread::sleep(Duration::from_millis(300));
             continue;
+        }
+
+        if let Some(id) = duplicate_account(&text) {
+            return Err(format!(
+                "essa instância entrou na MESMA conta Steam de outra (o servidor a chamou \
+                 de '{id}'). Duas instâncias numa conta não se enxergam: a sessão é peer to \
+                 peer pela Steam e chaveada no id da conta. A instância 2 tem que vir da \
+                 segunda Steam (`ds2os-dev steam2 run`)"
+            ));
         }
 
         if stale_token(&text) {

@@ -52,10 +52,6 @@ pub fn instance_pid(instance: u8) -> PathBuf {
 
 /// The Proton prefix the second instance runs in. It has to be separate from
 /// the one Steam uses: named kernel objects are per prefix, so the game's
-/// single-instance mutex in Steam's prefix is invisible here.
-pub fn second_prefix() -> PathBuf {
-    state_dir().join("second-instance")
-}
 
 pub fn ensure_dirs() -> std::io::Result<()> {
     std::fs::create_dir_all(log_dir())
