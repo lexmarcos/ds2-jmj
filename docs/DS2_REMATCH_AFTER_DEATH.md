@@ -321,6 +321,42 @@ Esse é o próximo bloqueio de verdade da revanche, e é um bloqueio pequeno:
 `NetSvrSummonSignInterface` tem um `GetSummonSignListJob`, e o gerenciador
 resolve handles pelo slot virtual `+0x98`.
 
+## A revanche funcionando, do lado do host
+
+12/09, 05:32–05:34, servidor local, com `DS2AutoRematch` ligado nos dois lados:
+
+    05:32:06  1:Samuel  Summoning sign 1000            o duelo normal, o jogador tocou a placa
+              hook      "o jogador invocou a placa 80000015"
+    05:33:03  3:Chico   morre por queda no mundo do host
+    05:33:2x  host      DS2_Rematch.req -> "revanche armada"
+    05:33:37  3:Chico   Sign 1001 created              o fantasma recoloca a placa
+    05:33:40  hook      "revanche: invocando a placa 80000025 que acabou de chegar"
+    05:33:40  1:Samuel  Summoning sign 1001            <- sem ninguem encostar em nada
+    05:33:46  3:Chico   Sign 1001 removed by its owner  o fantasma sendo puxado
+              tela      Chico de volta como fantasma vermelho no mundo do Samuel
+
+O host não apertou nada. O detour no "adicionar placa" viu a placa nova
+chegar, leu o handle do parâmetro de saída (`0x80000025` — diferente do
+`0x80000015` do primeiro duelo, como esperado) e chamou o mesmo caminho que o
+botão A chama.
+
+**É a metade que faltava.** O servidor sabe lembrar o par, e agora o cliente do
+host sabe recomeçar.
+
+### O que ainda não é automático
+
+A revanche é armada por um arquivo de pedido (`DS2_Rematch.req`), não pela
+morte. O gatilho de verdade é o cliente perceber que a sessão terminou numa
+morte, e o caminho para isso já está mapeado em
+[DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md): o estado da sessão vai
+para 8 e o motivo `2` chega ao pedido de encerramento. Falta ligar uma coisa na
+outra.
+
+E falta escolher quando **não** revanchear: o par saiu de perto, o jogador
+quer parar, ou a placa que chegou é de outra pessoa. Para dois jogadores no
+servidor a placa que chega é sempre do par; para mais, o hook precisa
+identificar o dono, que é o campo do item que ainda não foi lido.
+
 ## O que isso deixa como projeto
 
 Em ordem de valor:
