@@ -197,8 +197,9 @@ Em aberto, em ordem de quanto bloqueiam:
 - **Qual índice da tabela em `0x1410c0050` é cada papel.** Zerar todos
   trava a morte; para o co-op seamless é preciso saber qual entrada
   mexer, e o tipo vem de `rcx+0xe0` num objeto transitório.
-- **A Red Sign Soapstone pode ser usada hollow?** Continua sem resposta:
-  o teste que parecia provar que sim foi feito com o personagem humano.
+- ~~A Red Sign Soapstone pode ser usada hollow?~~ **Respondido em 12/09:
+  não.** Hollow, o X não coloca placa; com uma Human Effigy, no mesmo
+  ponto e sem andar, a placa sai. Vale para os dois itens online.
 - **O host hollow não vê placa** foi medido uma vez só, com o controle
   no mesmo ponto (efígie, prompt aparece). Vale repetir num outro lugar
   antes de virar regra.

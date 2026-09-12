@@ -38,6 +38,11 @@ O controle que separa as duas explicações possíveis:
 | humano | longe da fogueira | "Attempt to invade another world?" |
 | humano | **no mesmo ponto**, colado na fogueira | "Attempt to invade another world?" |
 
+E a Red Sign Soapstone é igual, medida em 12/09 com o mesmo controle: hollow,
+apertar X não coloca placa nenhuma; uma Human Effigy sem o personagem dar um
+passo e a placa sai na hora (`Sign 1002 created`). **Forma humana vale para os
+dois itens.**
+
 A última linha é a que importa: a efígie foi usada sem o personagem dar um
 passo, e o diálogo passou a aparecer. O bloqueio é a forma humana, não a
 fogueira.
@@ -54,6 +59,14 @@ A confusão: na primeira rodada o invasor morreu como fantasma, voltou, e o
 orbe não funcionou — mas entre as duas coisas ele tinha caído de um penhasco
 **no próprio mundo**, e foi essa segunda morte que o deixou hollow. A efígie
 seguinte pareceu ser o que consertou a morte do duelo. Não era.
+
+**Ressalva, de 12/09:** numa noite de testes o mesmo jogador apareceu hollow
+depois de mortes que só aconteceram como fantasma, e precisou de efígie para
+recolocar a placa. Ou existe um caso em que a morte de fantasma hollowa, ou
+uma das mortes daquela sequência foi no próprio mundo sem eu perceber. As duas
+observações estão registradas de propósito; o que decide é uma rodada isolada,
+com o personagem humano, uma única morte como fantasma e o item testado logo
+depois.
 
 A medição limpa, sem nenhuma efígie envolvida:
 
@@ -286,15 +299,27 @@ void FUN_1402a14c0(undefined8 param_1, undefined4 *param_2)
 **dword** que recebeu pelo slot virtual `+0x98` — ou seja, o argumento é um
 *handle de placa*, não a placa — e, passando as checagens, monta o job.
 
-**Isto é o ponto de entrada que a revanche precisa.** Um hook no injector pode
-guardar o `param_1` e o handle que o jogador usou e chamar `FUN_1402a14c0` de
-novo quando o par recolocar a placa. O que ainda não se sabe:
+**Isto é o ponto de entrada que a revanche precisa.** Os dois argumentos foram
+capturados em execução, com `bp 2a14c0 deref rdx 4`, em dois summons
+diferentes:
 
-- o que é `param_1` (contexto da interação? o jogador?) — sai de graça num
-  breakpoint em `0x2a14c0`, que registra `rcx`;
-- se o handle continua válido depois que o fantasma recoloca a placa. Provável
-  que não: a placa nova é outro objeto. Nesse caso o hook precisa **enumerar**
-  as placas pelo mesmo gerenciador em vez de repetir o handle velho.
+    summon da placa 1000   rcx=0x7ffffe591000  [rdx]=25000080  -> handle 0x80000025
+    summon da placa 1003   rcx=0x7ffffe591000  [rdx]=45000080  -> handle 0x80000045
+
+Duas coisas ficam decididas:
+
+- **`param_1` é o `NetSvrSummonSignManager`**, e o ponteiro foi o mesmo nos
+  dois summons — inclusive depois de fechar e reabrir o jogo. Um hook pode
+  guardá-lo com segurança dentro de uma sessão.
+- **O handle muda a cada placa.** 0x80000025 e 0x80000045 para placas
+  diferentes do mesmo jogador, no mesmo lugar. O bit alto é uma tag; o resto
+  parece índice mais geração. Então **repetir o handle guardado não serve**: o
+  hook tem que descobrir o handle da placa nova, enumerando pelo gerenciador
+  ou interceptando o ponto em que uma placa é registrada.
+
+Esse é o próximo bloqueio de verdade da revanche, e é um bloqueio pequeno:
+`NetSvrSummonSignInterface` tem um `GetSummonSignListJob`, e o gerenciador
+resolve handles pelo slot virtual `+0x98`.
 
 ## O que isso deixa como projeto
 
