@@ -346,7 +346,7 @@ pub struct InstancesStatus {
 pub fn instances_status(environment: &Environment) -> InstancesStatus {
     let game_dir = environment.game_dir.clone();
     InstancesStatus {
-        game_processes: proc::pids_matching("DarkSoulsII.exe"),
+        game_processes: proc::game_pids(),
         second_instance_pid: proc::running(&paths::instance_pid(2), "Injector.exe"),
         wrapper_installed: game_dir
             .as_ref()

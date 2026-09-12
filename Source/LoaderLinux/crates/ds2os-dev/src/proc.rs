@@ -138,6 +138,23 @@ pub fn env_of(pid: u32, key: &str) -> Option<String> {
         .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_owned))
 }
 
+/// The game processes themselves, without Proton's wrappers.
+///
+/// `pids_matching` is deliberately generous: stopping an instance has to take
+/// down the launcher and the helpers too, or the prefix stays locked. For
+/// *reporting* what is running, only the processes that are the game belong on
+/// screen, and the kernel's own name for a process says which those are.
+pub fn game_pids() -> Vec<u32> {
+    pids_matching("DarkSoulsII.exe")
+        .into_iter()
+        .filter(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                .map(|name| name.trim() == "DarkSoulsII.exe")
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// Waits for every one of `pids` to disappear.
 ///
 /// Relaunching into a Proton prefix while anything still holds it means the new
