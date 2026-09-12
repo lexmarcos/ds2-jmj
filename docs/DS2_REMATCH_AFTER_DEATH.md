@@ -94,6 +94,29 @@ atenção do jogador do laço. Quem quiser cortar o resto teria que atacar a
 espera de 12s ou o próprio fim da sessão — fazer o fantasma renascer no mundo
 do host em vez de voltar para casa, que é como a arena funciona.
 
+## O sinal positivo, para o caminho do orbe
+
+As medições acima terminam num fantasma visível na tela, que é a evidência
+fraca contra a qual este projeto vive avisando. O handshake completo ficou
+registrado em 12/09, num servidor recém reiniciado — o que importa, porque o
+censo só registra a **primeira** mensagem de cada tipo por cliente, e por isso
+essas linhas somem numa sessão longa:
+
+    02:21:02  3:Chico   Break-in target request: target 1
+    02:21:02  servidor  Invading '1:Samuel' across areas.
+    02:21:12  1:Samuel  First RequestNotifyJoinGuestPlayer
+    02:21:14  3:Chico   First RequestNotifyJoinSession
+
+São as duas linhas que o CLAUDE.md chama de sinal de sucesso: dez segundos
+entre o pedido e o convidado dentro do mundo.
+
+Vale anotar o que quase estragou essa rodada. Por um tempo **nenhuma** sessão
+se formava, nem por orbe nem por placa, porque havia dois jogos abertos na
+mesma conta. Tudo antes do fim parecia certo — o servidor roteava o push, o
+alvo respondia `RequestSendMessageToPlayers` — e então um lado dizia
+"Summoning failed. Timed out." e o outro "Disconnected from multiplayer
+session." Fechar o cliente sobrando resolveu na hora.
+
 ## Sair para o título é recusado durante uma sessão
 
 O item **Quit Game** aparece no menu de sistema e fica selecionável, mas apertar
