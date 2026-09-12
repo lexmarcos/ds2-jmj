@@ -28,12 +28,11 @@
 //                                      SignHandle in its out parameter — the
 //                                      one moment when the handle is known and
 //                                      the sign is fully built
-//   <session teardown>                 arms a rematch when a duel ends, which
-//                                      on the host is the guest dying or
-//                                      leaving
 //
-// A rematch can also be armed by hand, by writing to DS2_Rematch.req beside
-// the DLL. Either way it is spent on the next sign that arrives.
+// Summoning once turns the rematch on, and it stays on. That works because of
+// an interlock the game already has: a phantom cannot place a sign while it is
+// in someone else's world, so a sign arriving is proof the last duel ended.
+// Writing "0" to DS2_Rematch.req turns it off; anything else turns it on.
 class DS2_RematchHook : public Hook
 {
 public:

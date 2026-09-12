@@ -38,11 +38,6 @@ namespace
     constexpr size_t kAddSignOffset = 0x213160;
     constexpr uint8_t kAddSignBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c };
 
-    // The session's own teardown: the state machine reaches state 8, this runs
-    // once, sends the leave and moves to state 9. On the host it is the moment
-    // the guest is gone — which is the moment a rematch becomes wanted.
-    constexpr size_t kSessionEndOffset = 0x2c3900;
-    constexpr uint8_t kSessionEndBytes[] = { 0x40, 0x55, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xb1 };
 
     using Summon_p = void(*)(void* Manager, uint32_t* Handle);
     Summon_p s_original_summon = nullptr;
@@ -54,8 +49,6 @@ namespace
         uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11);
     AddSign_p s_original_add_sign = nullptr;
 
-    using SessionEnd_p = void(*)(void* Session);
-    SessionEnd_p s_original_session_end = nullptr;
 
     std::atomic<void*> s_manager{ nullptr };
     std::atomic<bool> s_pending{ false };
@@ -82,23 +75,19 @@ namespace
         s_manager.store(Manager);
         if (Handle != nullptr)
         {
-            Append(StringFormat("  o jogador invocou a placa %08x\n", *Handle));
+            Append(StringFormat("  o jogador invocou a placa %08x; revanche ligada\n", *Handle));
         }
+
+        // Arming here is safe because of an interlock the game already has: a
+        // phantom cannot place a sign while it is in somebody else's world, so
+        // a sign arriving is proof the previous duel is over. Which makes "the
+        // player summoned once" the honest trigger, and saves guessing at a
+        // session-end path that the host does not even run — the guest's
+        // teardown was tried first and never fired here.
+        s_pending.store(true);
         s_original_summon(Manager, Handle);
     }
 
-    void SessionEndHook(void* Session)
-    {
-        s_original_session_end(Session);
-
-        // Any end arms a rematch, not only a death. The reason lives in the
-        // session object and could be read here, but a duel that ends because
-        // the guest walked out is just as much a rematch as one that ends in a
-        // kill — and reading the wrong field to be clever would be worse than
-        // taking both.
-        s_pending.store(true);
-        Append("  a sessao acabou; revanche armada\n");
-    }
 
     uint32_t* AddSignHook(void* Self, uint32_t* OutHandle, uint8_t Type, void* P4,
         uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11)
@@ -117,10 +106,8 @@ namespace
             return Result;
         }
 
-        // Spend the rematch whether or not the summon takes, so a sign that
-        // cannot be summoned does not leave the hook firing on every sign that
-        // arrives afterwards.
-        s_pending.store(false);
+        // Stays armed: the next sign from the same pair is the next rematch,
+        // and that is the point. Writing "0" to the request file turns it off.
         Append(StringFormat("  revanche: invocando a placa %08x que acabou de chegar\n", *OutHandle));
         s_original_summon(Manager, OutHandle);
         return Result;
@@ -138,9 +125,18 @@ namespace
             std::error_code Error;
             if (std::filesystem::exists(s_request_path, Error))
             {
+                std::string Contents;
+                {
+                    std::ifstream Stream(s_request_path);
+                    std::getline(Stream, Contents);
+                }
                 std::filesystem::remove(s_request_path, Error);
-                s_pending.store(true);
-                Append("=== revanche armada; sai na proxima placa que chegar ===\n");
+
+                const bool Wanted = Contents.find('0') != 0;
+                s_pending.store(Wanted);
+                Append(Wanted
+                    ? "=== revanche armada a mao ===\n"
+                    : "=== revanche desligada a mao ===\n");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
@@ -167,25 +163,17 @@ bool DS2_RematchHook::Install(Injector& injector)
         return false;
     }
 
-    const uintptr_t SessionEnd = Base + kSessionEndOffset;
-    if (!BytesMatch(SessionEnd, kSessionEndBytes, sizeof(kSessionEndBytes)))
-    {
-        Error("[DS2_RematchHook] o codigo em +0x%zx nao e o esperado; recusando", kSessionEndOffset);
-        return false;
-    }
 
     s_log_path = injector.GetDllPath() / "DS2_Rematch.log";
     s_request_path = injector.GetDllPath() / "DS2_Rematch.req";
 
     s_original_summon = (Summon_p)Summon;
     s_original_add_sign = (AddSign_p)AddSign;
-    s_original_session_end = (SessionEnd_p)SessionEnd;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_summon, SummonHook);
     DetourAttach(&(PVOID&)s_original_add_sign, AddSignHook);
-    DetourAttach(&(PVOID&)s_original_session_end, SessionEndHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_RematchHook] nao consegui instalar os detours");
@@ -216,11 +204,9 @@ void DS2_RematchHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_summon, SummonHook);
         DetourDetach(&(PVOID&)s_original_add_sign, AddSignHook);
-        DetourDetach(&(PVOID&)s_original_session_end, SessionEndHook);
         DetourTransactionCommit();
         s_original_summon = nullptr;
         s_original_add_sign = nullptr;
-        s_original_session_end = nullptr;
     }
 #endif
 }
