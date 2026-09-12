@@ -220,15 +220,24 @@ acabando. Em aberto:
   simplesmente não existir. É a pergunta que decide se o co-op seamless
   de verdade é possível ou se o caminho é morrer e se reencontrar pela
   revanche.
-- **Que outros motivos de warp existem** além de 1 (fogueira) e 4 (para
-  casa), e o que o portão em `0x140248940` cobra de quem não é nenhum
-  dos dois. O `DS2_Seamless.log` responde sozinho com uso.
-- **O registro de renascimento de um convidado**, `*(contexto+0x70)`,
-  ainda aponta para a fogueira dele enquanto ele é fantasma no mundo
-  alheio? Se apontar para o mapa do host, o redirecionamento manda o
-  convidado para um lugar que não é dele.
+- **Que outros motivos de warp existem** além de 1 (fogueira) e 4 (fim
+  ou começo de sessão), e o que o portão em `0x140248940` cobra de quem
+  não é nenhum dos dois. O `DS2_Seamless.log` responde sozinho com uso.
+- ~~O registro de renascimento de um convidado ainda aponta para a
+  fogueira dele enquanto ele é fantasma?~~ **Sim**: o redirecionamento
+  de um fantasma de co-op devolveu `mapa=0a1f0000 ponto=00007ba7`, que é
+  o mesmo ponto de uma morte comum dele no próprio mundo.
 - **A morte do host com fantasma dentro** ainda não foi medida: não se
-  sabe qual motivo o cliente do convidado vê, nem por qual caminho.
+  sabe qual motivo o cliente do convidado vê, nem por qual caminho. É o
+  caso que mais importa para o co-op, porque o mundo da run é o do host.
+- **Os três bytes de param** (`+0x2c/+0x2d/+0x2e` da linha do papel) só
+  foram lidos por dedução do comportamento. Falta ler a linha na memória
+  e conferir papel por papel, e falta saber o que é o motivo de fim 4,
+  que devolve `2` sem consultar a linha.
+- **Quando a placa do convidado não está em cima da fogueira dele**, o
+  redirecionamento deveria mudar o lugar de pouso visivelmente. As duas
+  medições foram feitas com a placa no mesmo ponto da fogueira, então a
+  troca está provada no pedido, não na tela.
 
 ## Not started
 

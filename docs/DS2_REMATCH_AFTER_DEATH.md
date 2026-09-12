@@ -446,6 +446,25 @@ chamadas não levar ao botão X, o caminho é um breakpoint em execução
 do YES; o da lista de alvos pode sair antes, para o jogo decidir se mostra o
 diálogo.
 
+## A revanche também serve para co-op, e isso não era esperado
+
+Medido em 12/09, sem tocar em nada: o convidado colocou uma **placa branca**
+(`Sign 1002 created: type 1`, contra `type 4` da vermelha) e o
+`DS2_RematchHook` do host a invocou sozinho —
+`revanche: invocando a placa 80000031 que acabou de chegar` — seguido de
+`Summoning sign 1002` no servidor e de `RequestNotifyJoinGuestPlayer` com
+`RequestNotifyJoinSession`.
+
+O hook não olha o tipo da placa: ele reage a qualquer placa que entre no
+registro do cliente. Para o co-op isso fecha metade do laço de graça — o
+convidado põe a placa e o host o puxa sem apertar nada, inclusive depois de uma
+morte. A metade que falta é a placa se repor sozinha do lado do convidado.
+
+Vale também notar o que isso implica sobre hollow: a placa **branca** sai com o
+personagem hollow (foi assim que a medição foi feita), enquanto a vermelha, no
+mesmo personagem e no mesmo ponto, não sai. Os dois itens não têm a mesma
+regra.
+
 ## Ainda não medido
 
 - Se a Red Sign Soapstone pode ser usada hollow. O teste que parecia provar
