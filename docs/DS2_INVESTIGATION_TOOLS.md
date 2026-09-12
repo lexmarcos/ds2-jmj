@@ -87,6 +87,36 @@ the game when the character moved. A second thread can reach an address between
 the first restoring the byte and the handler running, so the handler owns an
 address whether or not it is still armed - without that it died immediately.
 
+## O breakpoint que segue um ponteiro
+
+`DS2_Trace.req` aceita, desde 12/09:
+
+```
+bp <deslocamento hex>
+bp <deslocamento hex> deref <registrador>[+<hex>] <bytes>
+```
+
+Registradores: `rcx rdx r8 r9 rax rbx rsi rdi`; no máximo 64 bytes.
+
+Isto existe porque **metade do que interessa neste binário está atrás de um
+ponteiro**, e o ponteiro morre antes de qualquer sonda conseguir responder. O
+ponto de entrada do summon recebe um `SignHandle` por endereço; o objeto que
+decide se uma morte desfaz a sessão guarda o tipo em `+0xe0` e é reciclado em
+segundos. Tentar ler esses endereços depois, com `DS2_MemProbe.req`, devolve
+memória já reaproveitada — foi medido, e a leitura tardia deu um ponteiro de
+heap onde deveria haver um byte de tipo.
+
+Exemplos reais:
+
+```
+bp 2a14c0 deref rdx 4        # o SignHandle que o host invocou
+bp 190950 deref rcx+e0 1     # o tipo que decide se a morte encerra as sessões
+```
+
+A leitura é protegida: um registrador pode apontar para qualquer coisa, e uma
+falha dentro de um handler vetorizado leva o jogo junto. Endereço ilegível sai
+como `[rcx=... ilegivel]` em vez de virar crash.
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
