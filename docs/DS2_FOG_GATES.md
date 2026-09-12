@@ -141,13 +141,49 @@ somewhere else: the map's own collision, the generic gimmick act through
 - **The server half.** Nothing has been checked about what a session does when
   the host crosses an area boundary.
 
+## Read from a running game
+
+The handle chain resolves live. `[DAT_1416148f0 + 0x38]` is the map object
+manager, so the white door param handle is
+
+```
+chain wd 16148f0 38,c0 40      # → an object { vtable 0x1410d9aa8,
+                               #   L"param:/MapObjectWhiteDoorParam.param", … }
+```
+
+and the pointer inside it leads to a container of 0x20 byte entries. Reading
+rows that way means walking someone else's container, which is why the
+existing `DS2_UnblockMultiPlayHook` does not: it scans memory for the param's
+name and parses the header at a fixed layout instead.
+
+**The table is not resident in Majula.** Scanning for `MAP_OBJE` finds six
+loaded params — `MAP_OBJECT_BREAK_ACTION_PARAM`, `MAP_OBJECT_CHRSPEED_SCALE_PARAM`,
+`MAP_OBJECT_INSTANCE_PARAM`, `MAP_OBJECT_GD_PARAM`,
+`MAP_OBJECT_PLAY_GO_DOOR_PARAM`, `MAP_OBJECT_WEIGHT_PARAM` — and no white door
+among them. Neither `WHITE_DO`, `WHITEDOO`, `ITE_DOOR` nor the UTF-16 form
+appears anywhere in a gigabyte of committed memory. Majula has no fog walls,
+and the rows evidently arrive with the map that does.
+
+So the measurements below have to be taken **standing somewhere that has a fog
+wall**, not at the bonfire where every other test has started.
+
+One trap worth writing down: a `scan` always reports one hit at a low address
+(`0x0954fb08` here), because the probe's own needle is in memory too. Ignore
+the hit that is not in the game's heap.
+
 ## How to carry on
 
-The cheapest next measurement is live, not static: with `ds2os-dev up` putting
-a character in the world in a minute, a `DS2_MemProbe` chain on
-`[[0x1416148f0 + 0x22f0] + 0x3c0] + 0x1e` reads that byte while someone walks
-into a fog wall, and `chain` on `this + 0x58` reads the door kind. That turns
-both guesses above into measurements.
+Take a character to a fog wall, then measure three things while standing in it:
+
+1. `abs` on `[[0x1416148f0 + 0x22f0] + 0x3c0] + 0x1e` — the byte, to see it go
+   to 1 and to see what changes on screen when it does.
+2. `scan` for `MAP_OBJE` again — the white door rows should be resident there,
+   and the header's row count and layout can be read the way
+   `DS2_UnblockMultiPlayHook` reads `NETWORK_AREA_PARAM`.
+3. The door kind at `this + 0x58`, which decides whether the box test runs at
+   all.
+
+Only then is there enough to say what a patch would change.
 
 Run the control: a fog wall that already behaves the way we want, if one
 exists, before believing anything about one that does not.
