@@ -70,6 +70,7 @@ namespace
     constexpr size_t kSessionState = 0xf8;
     constexpr size_t kSessionHostMap = 0x19c;
     constexpr size_t kSessionPosition = 0x1a4;
+    constexpr size_t kSessionEnd = 0x1cc;
     constexpr size_t kStatePlaying = 7;
 
     // Why the session layer is being asked to act. Measured: 2 is "the guest
@@ -86,6 +87,52 @@ namespace
     // a peer handshake, not a warp - which is why re-issuing the warp put the
     // guest in the right place of the wrong world.
     constexpr uint32_t kStateJoining = 1;
+    // Where the join waits for its destination. Measured: writing state 1 on a
+    // guest's death makes the machine advance to 2 by itself - the peer link
+    // is still up, so state 1's handler does its work and moves on - and then
+    // it sits there, because state 2 only runs when a message arrives with
+    // somewhere to put the player. Its guard is `if (state == 2)`, so once the
+    // machine is parked there the handler can be called directly.
+    constexpr uint32_t kStateArriving = 2;
+
+    // State 2's handler, `FUN_1402c2a80`. Decompiled, and it settles what the
+    // last four attempts were guessing at:
+    //
+    //   * it builds the very warp this hook was building by hand - kind 0,
+    //     motive 4, the map, the flavour byte from FUN_1402d4830, a position,
+    //     1.0f, a quaternion - and calls it through ctx slot +0x40 with the
+    //     flag set to one. So the warp was never the missing half.
+    //   * around that warp it runs FUN_1402bbf20, then FUN_140500fd0, then
+    //     sends the peer a message and moves to state 3. *That* is the half
+    //     that decides whose world the player lands in.
+    //   * `session+0x1a4`, which attempt four fed to the warp as a
+    //     destination, is written *by this handler* from the player object -
+    //     it is a record of where the guest stood before he was summoned.
+    //     Warping there put him back in his own world, exactly as measured.
+    //
+    // Everything it needs that the session does not already hold arrives in
+    // param_2, from the host, over the network. So it is cached on the way
+    // past and replayed.
+    constexpr size_t kArriveOffset = 0x2c2a80;
+    constexpr uint8_t kArriveBytes[] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x56, 0x48, 0x8d, 0x6c, 0x24, 0xe0 };
+
+    // The per-frame dispatcher. State 2 is not in its switch - it only runs
+    // when the message arrives - so the replay is issued from here, on the
+    // game's own thread, the frame after the machine parks.
+    constexpr size_t kDispatchOffset = 0x2c3630;
+    constexpr uint8_t kDispatchBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30 };
+
+    // The payload, as read by the handler. Nine dwords are touched; the whole
+    // window is kept because a field nobody reads today is still a field.
+    //
+    //   [0] map          -> also copied to session+0x19c
+    //   [1] [2] [3]      -> the destination handed to the warp
+    //   [4]              -> never read
+    //   [5] yaw          -> cos/sin, becomes the facing quaternion
+    //   [6] (short)      -> FUN_14051c6a0
+    //   [7]              -> also copied to session+0x198
+    //   [8] (byte)       -> also copied to session+0x1c9
+    constexpr size_t kPayloadWords = 16;
 
     struct WarpRequest
     {
@@ -112,6 +159,28 @@ namespace
 
     using Prepare_p = void(*)(void* Argument);
     Prepare_p s_prepare = nullptr;
+
+    using Dispatch_p = void(*)(void* Session, float Delta);
+    Dispatch_p s_original_dispatch = nullptr;
+
+    using Arrive_p = void(*)(void* Session, uint32_t* Payload);
+    Arrive_p s_original_arrive = nullptr;
+
+    // The last payload the host actually sent, kept from the join. Replaying
+    // it lands the guest back on the spot he was summoned to - somewhere the
+    // host walked to on purpose, which is a far better guarantee than any
+    // position this hook could synthesise. Where he died is not: he may well
+    // have died in the water.
+    uint32_t s_payload[kPayloadWords] = {};
+    std::atomic<bool> s_payload_valid{ false };
+    std::atomic<bool> s_pending_arrive{ false };
+    // After the replay the machine goes to state 3, and 3 is not in the
+    // dispatcher's switch either - the arrival sends the host a message and
+    // waits for the answer. Whether a host answers a guest it already counts
+    // as joined is the one thing left to measure, so the state is followed for
+    // a few seconds afterwards instead of guessing.
+    std::atomic<int> s_trace{ 0 };
+    uint32_t s_trace_last = 0xffffffff;
 
     using Warp_p = uint8_t(*)(void* Context, WarpRequest* Request, uint8_t Flag);
 
@@ -147,6 +216,22 @@ namespace
         {
             Stream << Text;
         }
+    }
+
+    void ArriveHook(void* Session, uint32_t* Payload)
+    {
+        if (Payload != nullptr)
+        {
+            memcpy(s_payload, Payload, sizeof(s_payload));
+            s_payload_valid.store(true);
+            Append(StringFormat(
+                "  chegada: mapa=%08x destino=%.2f,%.2f,%.2f giro=%.3f [4]=%08x [6]=%04x [7]=%08x [8]=%02x\n",
+                Payload[0], *(float*)&Payload[1], *(float*)&Payload[2], *(float*)&Payload[3],
+                *(float*)&Payload[5], Payload[4], (unsigned)(uint16_t)Payload[6],
+                Payload[7], (unsigned)(uint8_t)Payload[8]));
+        }
+
+        s_original_arrive(Session, Payload);
     }
 
     void PlayingHook(void* Session, float Delta)
@@ -187,11 +272,19 @@ namespace
 
         if (s_rejoin.load())
         {
+            if (!s_payload_valid.load())
+            {
+                Append("  reentrada pedida mas nenhum convite foi visto; deixando a morte normal seguir\n");
+                s_original_death(Record, Reason);
+                return;
+            }
+
             // Nothing is emitted: the state machine is put back to where a
             // join begins and asked to do it again. The record is marked done
             // either way, or the death screen never clears.
             *(uint32_t*)((uint8_t*)Session + kSessionState) = kStateJoining;
             *((uint8_t*)Record + 0xce) = 1;
+            s_pending_arrive.store(true);
             Append(StringFormat(
                 "  morte de fantasma: motivo=%u papel=%u -> reentrando pelo estado %u\n",
                 Reason, Role, kStateJoining));
@@ -284,6 +377,62 @@ namespace
         *((uint8_t*)Record + 0xce) = 1;
     }
 
+    void DispatchHook(void* Session, float Delta)
+    {
+        // The rejoin parks itself in state 2 and waits for a message that will
+        // never come: nobody is going to invite a player who is already here.
+        // So the host's own invitation is played again.
+        if (s_pending_arrive.load() && Session != nullptr)
+        {
+            uint8_t* Bytes = (uint8_t*)Session;
+            const uint32_t State = *(uint32_t*)(Bytes + kSessionState);
+
+            if (State == kStateArriving && s_payload_valid.load())
+            {
+                uint32_t Payload[kPayloadWords];
+                memcpy(Payload, s_payload, sizeof(Payload));
+
+                s_pending_arrive.store(false);
+                Append(StringFormat(
+                    "  estado 2; repetindo o convite do host: mapa=%08x destino=%.2f,%.2f,%.2f\n",
+                    Payload[0], *(float*)&Payload[1], *(float*)&Payload[2], *(float*)&Payload[3]));
+
+                s_original_arrive(Session, Payload);
+
+                Append(StringFormat("  depois da chegada: estado=%u\n",
+                    *(uint32_t*)(Bytes + kSessionState)));
+                s_trace.store(900);
+                s_trace_last = 0xffffffff;
+            }
+            else if (State != kStateJoining && State != kStateArriving)
+            {
+                // It went somewhere else - 0xb is the handshake giving up.
+                // Say so rather than sit armed forever.
+                s_pending_arrive.store(false);
+                Append(StringFormat("  a reentrada saiu para o estado %u; desarmando\n", State));
+            }
+        }
+
+        if (s_trace.load() > 0 && Session != nullptr)
+        {
+            uint8_t* Bytes = (uint8_t*)Session;
+            const uint32_t State = *(uint32_t*)(Bytes + kSessionState);
+            if (State != s_trace_last)
+            {
+                s_trace_last = State;
+                Append(StringFormat("  estado -> %u (fim=%u)\n", State,
+                    *(uint32_t*)(Bytes + kSessionEnd)));
+            }
+            s_trace.fetch_sub(1);
+            if (s_trace.load() == 0)
+            {
+                Append(StringFormat("  fim do rastro, estado=%u\n", State));
+            }
+        }
+
+        s_original_dispatch(Session, Delta);
+    }
+
     bool BytesMatch(uintptr_t Address, const uint8_t* Expected, size_t Length)
     {
         return memcmp((const void*)Address, Expected, Length) == 0;
@@ -303,10 +452,10 @@ namespace
                 }
                 std::filesystem::remove(s_request_path, Error);
 
-                // "0" off, "1" on with the join's flag, "2" on with the
-                // teardown's flag.
                 // "0" off, "1" the join's flag, "2" the teardown's flag,
-                // "3" the join's flag with the gate held open for the call.
+                // "3" the join's flag with the gate held open for the call,
+                // "4" no warp at all: the session is put back to the state a
+                // join starts from and the host's own invitation is replayed.
                 const char Choice = Contents.empty() ? '0' : Contents[0];
                 s_enabled.store(Choice != '0');
                 s_flag.store(Choice == '2' ? 0 : 1);
@@ -315,7 +464,7 @@ namespace
                 Append(StringFormat("=== renascer na sessao %s, %s ===\n",
                     Choice == '0' ? "desligado" : "ligado",
                     s_rejoin.load()
-                        ? "reentrando pelo estado 1"
+                        ? "reentrando pelo estado 1 e repetindo o convite"
                         : (s_flag.load() ? (s_lift.load() ? "flag 1, portao erguido" : "flag 1")
                                          : "flag 0")));
             }
@@ -336,6 +485,8 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
         { kPlayingOffset, kPlayingBytes, sizeof(kPlayingBytes), "estado 7" },
         { kFlavourOffset, kFlavourBytes, sizeof(kFlavourBytes), "sabor" },
         { kPrepareOffset, kPrepareBytes, sizeof(kPrepareBytes), "preparo" },
+        { kDispatchOffset, kDispatchBytes, sizeof(kDispatchBytes), "despachante" },
+        { kArriveOffset, kArriveBytes, sizeof(kArriveBytes), "chegada" },
     };
     for (const auto& Check : Checks)
     {
@@ -354,11 +505,15 @@ bool DS2_RespawnInSessionHook::Install(Injector& injector)
     s_original_playing = (Playing_p)(s_base + kPlayingOffset);
     s_flavour = (Flavour_p)(s_base + kFlavourOffset);
     s_prepare = (Prepare_p)(s_base + kPrepareOffset);
+    s_original_dispatch = (Dispatch_p)(s_base + kDispatchOffset);
+    s_original_arrive = (Arrive_p)(s_base + kArriveOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_death, PhantomDeathHook);
     DetourAttach(&(PVOID&)s_original_playing, PlayingHook);
+    DetourAttach(&(PVOID&)s_original_dispatch, DispatchHook);
+    DetourAttach(&(PVOID&)s_original_arrive, ArriveHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_RespawnInSessionHook] nao consegui instalar os detours");
@@ -389,6 +544,8 @@ void DS2_RespawnInSessionHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_death, PhantomDeathHook);
         DetourDetach(&(PVOID&)s_original_playing, PlayingHook);
+        DetourDetach(&(PVOID&)s_original_dispatch, DispatchHook);
+        DetourDetach(&(PVOID&)s_original_arrive, ArriveHook);
         DetourTransactionCommit();
         s_original_death = nullptr;
     }
