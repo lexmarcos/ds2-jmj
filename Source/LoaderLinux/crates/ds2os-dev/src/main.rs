@@ -18,6 +18,7 @@ mod pad;
 mod paths;
 mod probe;
 mod proc;
+mod save;
 mod screen;
 mod server;
 mod settings;
@@ -145,6 +146,17 @@ enum Command {
         #[command(subcommand)]
         action: Steam2Action,
     },
+    /// The characters' save files: snapshot one, and put one back
+    ///
+    /// Every run of the seamless co-op experiment costs the guest an "illegal
+    /// disconnect", and enough of them cut that character off from other
+    /// worlds until a Bone of Order is burnt - of which a playthrough has very
+    /// few. Snapshotting before a test and restoring after makes that a
+    /// non-issue.
+    Save {
+        #[command(subcommand)]
+        action: SaveAction,
+    },
     /// Reads any of the logs, sanitised and greppable
     Logs {
         #[arg(value_enum, default_value_t = LogName::Server)]
@@ -159,6 +171,32 @@ enum Command {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum SaveAction {
+    /// Copies each account's live save into the store
+    Backup {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+        /// Name it something you will recognise, instead of a timestamp
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Puts a snapshot back over the live save
+    Restore {
+        /// Which snapshot, as `save list` prints it
+        label: String,
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+        /// Close the game first, instead of refusing while it is open
+        #[arg(long)]
+        stop: bool,
+    },
+    /// What is in the store, and where each live save is
+    List,
 }
 
 #[derive(Subcommand)]
@@ -580,6 +618,15 @@ fn run(command: Command) -> Result<(), String> {
         },
         Command::Pad { action } => pad_command(&environment, action),
         Command::Steam2 { action } => steam2(action),
+        Command::Save { action } => match action {
+            SaveAction::Backup { instance, label } => {
+                save::backup(&environment, &instance, label.as_deref())
+            }
+            SaveAction::Restore { label, instance, stop } => {
+                save::restore(&environment, &instance, &label, stop)
+            }
+            SaveAction::List => save::list(&environment),
+        },
         Command::Logs { which, lines, grep, follow } => {
             let path = log_path(&environment, which)
                 .ok_or("esse log não existe neste ambiente")?;
