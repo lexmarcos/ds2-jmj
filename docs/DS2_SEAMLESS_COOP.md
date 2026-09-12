@@ -616,7 +616,7 @@ repetição do convite, que já está construída e testada até a porta, roda.
 ### Destravar uma sessão sem matar o cliente
 
 O pedido de fim é **um só**: recusado uma vez, nunca mais é feito. Liberar o
-bloqueio depois não adianta, e o convidado fica presoentre estados. Matar o
+bloqueio depois não adianta, e o convidado fica preso entre estados. Matar o
 cliente resolve e **custa caro** (ver o CLAUDE.md sobre desconexões ilegais).
 
 O jeito barato usa o próprio modelo já mapeado — o estado 7 sai quando
