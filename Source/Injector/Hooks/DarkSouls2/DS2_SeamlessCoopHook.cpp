@@ -167,7 +167,13 @@ namespace
             Append("  co-op: sem registro de renascimento; deixando o warp original passar\n");
         }
 
-        return s_original_warp(Context, Request, Flag);
+        // The answer matters as much as the request: the warp returns a byte,
+        // and a refusal is how a warp that was asked for politely turns into
+        // nothing happening at all. Without this line a refused warp and a
+        // warp that was never called read the same in the log.
+        const uint8_t Accepted = s_original_warp(Context, Request, Flag);
+        Append(StringFormat("  %s aceito=%u\n", Reentrant ? "(reentrada)" : "warp", (unsigned)Accepted));
+        return Accepted;
     }
 
     bool BytesMatch(uintptr_t Address, const uint8_t* Expected, size_t Length)
