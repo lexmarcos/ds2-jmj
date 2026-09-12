@@ -71,6 +71,25 @@ namespace
     constexpr size_t kSessionHostMap = 0x19c;
     constexpr size_t kSessionPosition = 0x1a4;
     constexpr size_t kSessionEnd = 0x1cc;
+
+    // The arrival handler's very first test: `*(char*)(*(session+0x108)+8)`.
+    // Nonzero and it does not arrive at all - it goes straight to
+    // EndSession(0x13), which costs a staging and says nothing. So it is read
+    // on the way past a real join, to learn what it holds there, and read
+    // again before any replay, which is refused if it disagrees.
+    constexpr size_t kArriveGuardOwner = 0x108;
+    constexpr size_t kArriveGuardByte = 8;
+
+    // The arrival handler re-snapshots the "where he came from" block out of
+    // the live player and the live counters: +0x1a0 through +0x1c8, and one of
+    // those is `ctx+0xd0 +0x168`, the gate, which is 0 at a guest's death and
+    // was certainly positive when he was first summoned. A replay would
+    // overwrite the real join's record with what is true now, and whatever
+    // eventually sends him home reads that record. It is saved and put back;
+    // the replay's own warp is built from the payload, not from this block, so
+    // restoring it immediately changes nothing the arrival needed.
+    constexpr size_t kReturnBlock = 0x1a0;
+    constexpr size_t kReturnBlockSize = 0x28;
     constexpr size_t kStatePlaying = 7;
 
     // Why the session layer is being asked to act. Measured: 2 is "the guest
@@ -218,6 +237,12 @@ namespace
         }
     }
 
+    uint8_t ReadArriveGuard(void* Session)
+    {
+        const uintptr_t Owner = *(const uintptr_t*)((const uint8_t*)Session + kArriveGuardOwner);
+        return Owner == 0 ? 0xff : *(const uint8_t*)(Owner + kArriveGuardByte);
+    }
+
     void ArriveHook(void* Session, uint32_t* Payload)
     {
         if (Payload != nullptr)
@@ -231,7 +256,11 @@ namespace
                 Payload[7], (unsigned)(uint8_t)Payload[8]));
         }
 
+        const uint8_t Before = Session == nullptr ? 0xff : ReadArriveGuard(Session);
         s_original_arrive(Session, Payload);
+        const uint8_t After = Session == nullptr ? 0xff : ReadArriveGuard(Session);
+        Append(StringFormat("  guarda da chegada: antes=%02x depois=%02x\n",
+            (unsigned)Before, (unsigned)After));
     }
 
     void PlayingHook(void* Session, float Delta)
@@ -389,20 +418,40 @@ namespace
 
             if (State == kStateArriving && s_payload_valid.load())
             {
-                uint32_t Payload[kPayloadWords];
-                memcpy(Payload, s_payload, sizeof(Payload));
-
                 s_pending_arrive.store(false);
-                Append(StringFormat(
-                    "  estado 2; repetindo o convite do host: mapa=%08x destino=%.2f,%.2f,%.2f\n",
-                    Payload[0], *(float*)&Payload[1], *(float*)&Payload[2], *(float*)&Payload[3]));
 
-                s_original_arrive(Session, Payload);
+                const uint8_t Guard = ReadArriveGuard(Session);
+                if (Guard != 0)
+                {
+                    // It would not arrive; it would end the session with 0x13
+                    // and take the staging with it. Better to say so - and
+                    // still let the frame run, which a bare return would not.
+                    Append(StringFormat(
+                        "  guarda da chegada = %02x; a chegada seria recusada. Nao repetindo.\n",
+                        (unsigned)Guard));
+                }
+                else
+                {
+                    uint32_t Payload[kPayloadWords];
+                    memcpy(Payload, s_payload, sizeof(Payload));
 
-                Append(StringFormat("  depois da chegada: estado=%u\n",
-                    *(uint32_t*)(Bytes + kSessionState)));
-                s_trace.store(900);
-                s_trace_last = 0xffffffff;
+                    uint8_t Saved[kReturnBlockSize];
+                    memcpy(Saved, Bytes + kReturnBlock, sizeof(Saved));
+
+                    Append(StringFormat(
+                        "  estado 2; repetindo o convite do host: mapa=%08x destino=%.2f,%.2f,%.2f\n",
+                        Payload[0], *(float*)&Payload[1], *(float*)&Payload[2], *(float*)&Payload[3]));
+
+                    s_original_arrive(Session, Payload);
+
+                    // Put the original join's record of "where he came from" back.
+                    memcpy(Bytes + kReturnBlock, Saved, sizeof(Saved));
+
+                    Append(StringFormat("  depois da chegada: estado=%u\n",
+                        *(uint32_t*)(Bytes + kSessionState)));
+                    s_trace.store(900);
+                    s_trace_last = 0xffffffff;
+                }
             }
             else if (State != kStateJoining && State != kStateArriving)
             {
