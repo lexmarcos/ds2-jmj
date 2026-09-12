@@ -28,8 +28,10 @@ pub fn injector_config() -> InjectorConfig {
         EnableSeperateSaveFiles: true,
 
         DS2ForceMultiPlayZone: true,
-        // Not proven yet: it is an experiment, and players get proven things.
-        DS2RemovePhantomFog: false,
+        // The barrier that pens a phantom into the host's area. Measured in
+        // Heide: it does not appear, both players move freely, and boss gates
+        // still work. One area and one pair of players is what that rests on.
+        DS2RemovePhantomFog: true,
         DS2ForcedZoneId: 103110,
         DS2PatchPhantomTimers: true,
         DS2PhantomTimerSeconds: 4000.0,

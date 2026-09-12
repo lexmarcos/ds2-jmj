@@ -60,9 +60,9 @@ enum Command {
         /// Start the games but leave them at the title screen
         #[arg(long)]
         no_enter: bool,
-        /// Build the fog walls as if the player owned the world
+        /// Leave the barrier that pens a phantom into the host's area
         #[arg(long)]
-        remove_fog: bool,
+        keep_fog: bool,
         /// Leave the closed areas closed, the way retail has them
         #[arg(long)]
         no_force_zone: bool,
@@ -377,8 +377,8 @@ fn run(command: Command) -> Result<(), String> {
 
     match command {
         Command::Doctor { json } => doctor(&environment, json),
-        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, remove_fog } => {
-            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, remove_fog)
+        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog } => {
+            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog)
         }
         Command::Down => {
             let stopped_game = game::stop_second();
