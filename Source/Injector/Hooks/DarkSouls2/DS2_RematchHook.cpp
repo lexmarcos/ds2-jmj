@@ -94,6 +94,14 @@ namespace
     {
         uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
 
+        // Every sign that reaches the cache, whether or not a rematch is
+        // armed. This hook was written for red signs and never fired for a
+        // white one, and a hook that only speaks when it acts cannot say
+        // whether it was never called or called and declined.
+        Append(StringFormat("  placa recebida: tipo=%u alca=%08x armado=%u\n",
+            (unsigned)Type, OutHandle == nullptr ? 0u : *OutHandle,
+            (unsigned)s_pending.load()));
+
         if (!s_pending.load() || OutHandle == nullptr || *OutHandle == 0)
         {
             return Result;
