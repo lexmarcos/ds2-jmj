@@ -59,6 +59,35 @@ namespace
     std::filesystem::path s_log_path;
     std::filesystem::path s_request_path;
 
+    // The other half of the multiplayer machine, and the one this hook was
+    // blind to for a week.
+    //
+    // The binary carries RTTI, and the classes name themselves:
+    //
+    //   NetJoinMultiplayCtrl   -> NetSummonJoinMultiplayCtrl    the guest
+    //   NetAcceptMultiplayCtrl -> NetSummonAcceptMultiplayCtrl  the host
+    //
+    // Everything above watches the guest's: `FUN_1402c2f20` is its "end the
+    // session" and `FUN_1402c3630` its per-frame dispatcher. The host runs a
+    // different object with a different layout - state at +0x150 rather than
+    // +0xf8 - and a different dispatcher, so it was never going to show up in
+    // this log. "The host asks for nothing when the guest dies" was a fact
+    // about the instrumentation, not about the game.
+    //
+    // This detour fixes that: it is the host's per-frame switch, so it says
+    // what the host's state is, when it changes, and - by falling silent -
+    // when the controller stops being ticked at all.
+    constexpr size_t kHostTickOffset = 0x2bddb0;
+    constexpr uint8_t kHostTickBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29, 0x74, 0x24, 0x20 };
+    constexpr size_t kHostState = 0x150;
+
+    using HostTick_p = void(*)(void* Ctrl, float Delta);
+    HostTick_p s_original_host_tick = nullptr;
+
+    void* s_host_ctrl = nullptr;
+    uint32_t s_host_state = 0xffffffff;
+    uint64_t s_host_ticks = 0;
+
     void Append(const std::string& Text)
     {
         std::ofstream Stream(s_log_path, std::ios::app);
@@ -98,6 +127,34 @@ namespace
         }
 
         s_original_end(Session, Reason);
+    }
+
+    void HostTickHook(void* Ctrl, float Delta)
+    {
+        // One line per change, never one per frame: this runs sixty times a
+        // second and the interesting thing is the shape of the timeline, not
+        // its length.
+        if (Ctrl != s_host_ctrl)
+        {
+            s_host_ctrl = Ctrl;
+            s_host_state = 0xffffffff;
+            Append(StringFormat("  host: controlador %p apos %llu quadros\n",
+                Ctrl, (unsigned long long)s_host_ticks));
+        }
+
+        const uint32_t State = Ctrl == nullptr
+            ? 0xffffffff
+            : *(const uint32_t*)((const uint8_t*)Ctrl + kHostState);
+
+        if (State != s_host_state)
+        {
+            s_host_state = State;
+            Append(StringFormat("  host: estado -> %u (0x%x) no quadro %llu\n",
+                State, State, (unsigned long long)s_host_ticks));
+        }
+
+        ++s_host_ticks;
+        s_original_host_tick(Ctrl, Delta);
     }
 
     bool BytesMatch(uintptr_t Address, const uint8_t* Expected, size_t Length)
@@ -206,11 +263,20 @@ bool DS2_SeamlessSessionHook::Install(Injector& injector)
     s_log_path = injector.GetDllPath() / "DS2_Session.log";
     s_request_path = injector.GetDllPath() / "DS2_Session.req";
 
+    const uintptr_t HostTick = s_base + kHostTickOffset;
+    if (!BytesMatch(HostTick, kHostTickBytes, sizeof(kHostTickBytes)))
+    {
+        Error("[DS2_SeamlessSessionHook] o codigo em +0x%zx nao e o esperado; recusando", kHostTickOffset);
+        return false;
+    }
+
     s_original_end = (EndSession_p)EndSession;
+    s_original_host_tick = (HostTick_p)HostTick;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_end, EndSessionHook);
+    DetourAttach(&(PVOID&)s_original_host_tick, HostTickHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_SeamlessSessionHook] nao consegui instalar o detour");
@@ -240,6 +306,7 @@ void DS2_SeamlessSessionHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_end, EndSessionHook);
+        DetourDetach(&(PVOID&)s_original_host_tick, HostTickHook);
         DetourTransactionCommit();
         s_original_end = nullptr;
     }
