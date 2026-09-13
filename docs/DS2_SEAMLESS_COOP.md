@@ -933,3 +933,40 @@ como um hook vivo. Confira o **mtime** do log antes de acreditar nele.
 que erre o menu e chegue ao mundo empurra o personagem para o mar, e o teste
 morre junto. Toda navegação de menu tem que confirmar por captura que o menu
 abriu antes do próximo direcional.
+
+### Reinvocação automática, ponta a ponta
+
+Medido em 12/09, 22:46, sem nenhuma intervenção humana entre a marca e a
+sessão:
+
+```
+22:45:05  3:Chico   Sign 1016 created: type 1
+22:46:03  1:Samuel  Sign poll: 1 signs cached
+          (host)    placa recebida: tipo=1 alca=80000031 armado=1
+          (host)    revanche: invocando a placa 80000031 que acabou de chegar
+22:46:03  1:Samuel  Summoning sign 1016
+22:46:14  1:Samuel  RequestNotifyJoinGuestPlayer
+22:46:16  3:Chico   RequestNotifyJoinSession
+          (host)    estado -> 0xb -> 0xd -> 0xe -> 0xf -> 0x10
+```
+
+E nas telas: o nome e a barra do Samuel no HUD do Chico, o Samuel visível ao
+lado dele, o Chico desenhado como fantasma branco. Sessão de verdade, elo
+novo, os dois se vendo.
+
+**É este o formato da entrega do M2.** Não costurar o convidado de volta a uma
+sessão cujo fluxo peer já morreu — o host cronometra esse silêncio e derruba,
+medido — e sim deixar a morte correr, o convidado voltar para casa, pôr uma
+marca, e o host reinvocá-lo sozinho. Custa um carregamento e entrega o que o
+desenho pede: morreu, renasce, e continua com o amigo.
+
+Falta uma peça, e é pequena perto do resto: **o convidado pôr a marca
+sozinho**. Hoje é um X manual. O resto da cadeia já é automático.
+
+Duas arestas conhecidas:
+
+- o manager só existe depois de uma invocação manual por sessão de jogo, que
+  é de onde `DS2_RematchHook` tira o ponteiro. Vale procurar outra origem;
+- o hook tenta **toda** placa que chega, inclusive marcas velhas ainda no
+  cache do cliente, e cada uma dessas rende um "Summoning failed. The sign has
+  disappeared." na tela do host. Filtrar por dono resolveria.
