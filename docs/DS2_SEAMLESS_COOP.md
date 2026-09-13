@@ -833,3 +833,32 @@ jogo e eram fato sobre a instrumentação:
 
 A medição que interessa agora é direta: `bp 2bddb0 deref rcx+150 8` no host,
 com a sessão viva, e ver o que o estado dele faz quando o convidado morre.
+
+### O host sobrevive à morte do convidado
+
+Com a classe certa em mãos, a medição é direta. O controlador do host não
+precisa de breakpoint: basta varrer a memória viva pela vtable dele.
+
+```
+scan host 1410d7998 8 6      # NetSummonAcceptMultiplayCtrl::vftable
+```
+
+Com a sessão de pé isso devolve um objeto no heap — `0x7ffffe5bf120` numa
+rodada — e `+0x150` nele vale **0x10**. Quarenta segundos depois da morte do
+convidado, ainda **0x10**: o host não larga na hora. Minutos depois o objeto
+já não aparece na varredura, então ele larga em algum momento, mas não no que
+se supunha.
+
+Isso derruba a conclusão da seção anterior. O host não some quando o
+convidado morre; ele fica exatamente onde estava.
+
+E do lado do convidado, com a nona variante, a máquina **completa o join**:
+lida ao vivo depois da reentrada, `[sessao+0xf8] = 7` num objeto de sessão
+novo, e o personagem é desenhado como fantasma branco. Ou seja os dois lados
+acham que estão numa sessão — e mesmo assim nenhum vê o outro, porque o
+convidado está no próprio mundo.
+
+O que falta, então, não é manter o host vivo nem completar a máquina do
+convidado: as duas coisas já acontecem. É **fazer o host voltar a colocar o
+fantasma no mundo dele**. No join original isso vem de uma mensagem que o
+host recebe; a reentrada nunca a manda.
