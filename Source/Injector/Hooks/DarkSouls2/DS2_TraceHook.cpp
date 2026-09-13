@@ -133,6 +133,11 @@ namespace
     uintptr_t s_watch_address = 0;
     size_t s_watch_length = 0;
     uintptr_t s_watch_page = 0;
+    // The page of the last watch, kept after it is lifted. A thread that
+    // faulted while the page was still read-only can reach the handler only
+    // after the request thread has disarmed; that fault is ours to retry, and
+    // passing it on crashed the game (0xC0000005, 13/09, 24k faults a second).
+    std::atomic<uintptr_t> s_lifted_page{ 0 };
     DWORD s_watch_protection = 0;
     std::atomic<bool> s_watch_armed{ false };
     std::chrono::steady_clock::time_point s_watch_deadline;
@@ -205,15 +210,47 @@ namespace
         // __try, and a read that faults comes back through this handler first;
         // taking the lock for it would deadlock the thread on itself. Only
         // writes can belong to the watch.
-        if (Kind != 1 || !s_watch_armed.load())
+        if (Kind != 1)
         {
             return false;
         }
 
+        // A write that faulted before the watch was lifted: the protection is
+        // back, so running the instruction again is all it needs. Only when the
+        // page really is writable now, or this would spin forever.
+        auto RetryLifted = [&]() -> bool
+        {
+            if ((Target & kPageMask) != s_lifted_page.load())
+            {
+                return false;
+            }
+            MEMORY_BASIC_INFORMATION Info = {};
+            if (VirtualQuery((LPCVOID)Target, &Info, sizeof(Info)) == 0)
+            {
+                return false;
+            }
+            const DWORD Protection = Info.Protect & 0xFF;
+            if (Protection != PAGE_READWRITE && Protection != PAGE_WRITECOPY &&
+                Protection != PAGE_EXECUTE_READWRITE && Protection != PAGE_EXECUTE_WRITECOPY)
+            {
+                return false;
+            }
+            *Result = EXCEPTION_CONTINUE_EXECUTION;
+            return true;
+        };
+
+        if (!s_watch_armed.load() && (Target & kPageMask) != s_lifted_page.load())
+        {
+            return false;
+        }
+
+        // Under the lock a disarm is either not started or finished, protection
+        // included, so the query inside RetryLifted sees the restored page.
         std::scoped_lock Lock(s_watch_mutex);
         if (!s_watch_armed.load() || (Target & kPageMask) != s_watch_page)
         {
-            return false;
+            // Not armed, or armed again on another page after this fault.
+            return RetryLifted();
         }
 
         s_watch_faults++;
@@ -275,6 +312,7 @@ namespace
                 return;
             }
             // Protection first, so nothing below can fault on the page.
+            s_lifted_page.store(s_watch_page);
             s_watch_armed.store(false);
             DWORD Ignored = 0;
             VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_protection, &Ignored);
