@@ -148,6 +148,12 @@ namespace
     constexpr uint8_t kHollowBytes[] = { 0x48, 0x85, 0xc9, 0x74, 0x5f, 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57 };
     constexpr size_t kNoPenaltyOffset = 0x31c850;
     constexpr uint8_t kNoPenaltyBytes[] = { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0xd9, 0x45, 0x33, 0xd2 };
+    // The hollow level alone changes nothing on screen until the maximum is
+    // worked out again: FUN_140202ca0(chr) sets +0x174 from the base at +0x170
+    // and the multiplier of FUN_140202820, and clamps the HP to it. Found by
+    // the effective maximum staying at 869 with hollow 2 (13/09).
+    constexpr size_t kMaxHpOffset = 0x202ca0;
+    constexpr uint8_t kMaxHpBytes[] = { 0x48, 0x85, 0xc9, 0x0f, 0x84, 0xa5, 0x00, 0x00, 0x00, 0x53, 0x48, 0x83, 0xec, 0x30 };
     constexpr size_t kNotAPlayerOffset = 0x16f740;
     constexpr uint8_t kNotAPlayerBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0xd1 };
     // Estus: the rest at a bonfire refills it through FUN_1401ac370(inventory).
@@ -193,6 +199,7 @@ namespace
     using RecordSouls_p = void(*)(void* Manager, uint64_t* Out);
     using SpawnBloodstain_p = uint8_t(*)(void* Manager);
     using Hollow_p = void(*)(void* PlayerParam, int Kind);
+    using MaxHp_p = void(*)(void* Character);
     using Check_p = uint64_t(*)(void* Object);
     using RefillEstus_p = void(*)(void* Inventory);
     using SetCount_p = uint32_t(*)(void* Set);
@@ -202,6 +209,7 @@ namespace
     RecordSouls_p s_record_souls = nullptr;
     SpawnBloodstain_p s_spawn_bloodstain = nullptr;
     Hollow_p s_hollow = nullptr;
+    MaxHp_p s_max_hp = nullptr;
     Check_p s_no_penalty = nullptr;
     Check_p s_not_a_player = nullptr;
     RefillEstus_p s_refill_estus = nullptr;
@@ -473,6 +481,19 @@ namespace
         }
     }
 
+    bool CallMaxHp(uintptr_t Character)
+    {
+        __try
+        {
+            s_max_hp((void*)Character);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     bool CallCheck(Check_p Check, uintptr_t Object, bool& Result)
     {
         __try
@@ -701,7 +722,12 @@ namespace
                 const bool Called = CallHollow(Param, Kind);
                 uint8_t HollowAfter = HollowBefore;
                 ReadBytes(Param + kParamHollow, &HollowAfter, 1);
-                Hollow = StringFormat("%s: nivel %u -> %u", Called ? "aplicado" : "FALHOU", HollowBefore, HollowAfter);
+                int32_t MaxBefore = 0, MaxAfter = 0;
+                ReadBytes(Player + kHpMax, &MaxBefore, sizeof(MaxBefore));
+                const bool Recomputed = Called && CallMaxHp(Player);
+                ReadBytes(Player + kHpMax, &MaxAfter, sizeof(MaxAfter));
+                Hollow = StringFormat("%s: nivel %u -> %u, hp maximo %d -> %d%s", Called ? "aplicado" : "FALHOU",
+                    HollowBefore, HollowAfter, MaxBefore, MaxAfter, Recomputed ? "" : " (recalculo FALHOU)");
             }
         }
 
@@ -1114,6 +1140,7 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
         { kRecordSoulsOffset, kRecordSoulsBytes, sizeof(kRecordSoulsBytes), "almas para a mancha" },
         { kSpawnBloodstainOffset, kSpawnBloodstainBytes, sizeof(kSpawnBloodstainBytes), "mancha no mundo" },
         { kHollowOffset, kHollowBytes, sizeof(kHollowBytes), "hollow" },
+        { kMaxHpOffset, kMaxHpBytes, sizeof(kMaxHpBytes), "hp maximo" },
         { kNoPenaltyOffset, kNoPenaltyBytes, sizeof(kNoPenaltyBytes), "morte sem penalidade" },
         { kNotAPlayerOffset, kNotAPlayerBytes, sizeof(kNotAPlayerBytes), "personagem especial" },
         { kRefillEstusOffset, kRefillEstusBytes, sizeof(kRefillEstusBytes), "estus" },
@@ -1137,6 +1164,7 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_record_souls = (RecordSouls_p)(s_base + kRecordSoulsOffset);
     s_spawn_bloodstain = (SpawnBloodstain_p)(s_base + kSpawnBloodstainOffset);
     s_hollow = (Hollow_p)(s_base + kHollowOffset);
+    s_max_hp = (MaxHp_p)(s_base + kMaxHpOffset);
     s_no_penalty = (Check_p)(s_base + kNoPenaltyOffset);
     s_not_a_player = (Check_p)(s_base + kNotAPlayerOffset);
     s_refill_estus = (RefillEstus_p)(s_base + kRefillEstusOffset);
