@@ -43,6 +43,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_SeamlessSessionHook.cpp
     Hooks/DarkSouls2/DS2_NavHook.cpp
     Hooks/DarkSouls2/DS2_RespawnInSessionHook.cpp
+    Hooks/DarkSouls2/DS2_DeathInterceptHook.h
+    Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp
     Hooks/DarkSouls2/DS2_TraceHook.h
     Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
