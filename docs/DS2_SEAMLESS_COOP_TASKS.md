@@ -184,15 +184,14 @@ sem sessão, e não custam desconexão ilegal:
    mínimo (-99999), `+0x170` máximo base, **`+0x174` máximo efetivo** (já com o
    desconto do hollow: 915 → 869 → 823 em duas mortes). O cancelamento devolve
    `+0x174`; sem devolver, `FUN_14016a650` religa o byte no quadro seguinte.
-5. **Juntar solo:** morrer → de pé na fogueira, sem carregamento. Então almas e
-   hollow à mão. **A morte por queda já faz isso** (13/09): o volume de morte do
-   mapa liga os bits 51/9 de `*(chr+0xb8)+0x4c0` e a câmera de queda
-   (`CameraManager+0x450`), e a "trava de controle" era só a câmera. No modo
-   `cancel`, o hook leva o personagem ao nascimento da fogueira do registro,
-   espera o pouso e limpa bits e câmera: um quadro, sem carregamento, sem
-   `RequestNotifyDeath`, e ele anda. Falta o mesmo para a morte por HP (hoje
-   ela é cancelada no lugar), e as almas e o hollow. Detalhes em
-   DS2_SEAMLESS_COOP.md, "A morte por queda, desfeita".
+5. **Juntar solo.** — **feito em 13/09.** O modo `respawn` recusa qualquer morte
+   do jogador local e a cobra com as funções do jogo, sem recarga: almas para
+   uma mancha no local da morte (a antiga removida), hollow com aparência e HP
+   máximo, Estus recarregado, e o personagem de pé no nascimento da fogueira do
+   registro com o HP cheio. A queda passa pelo mesmo caminho e deixa a mancha
+   na beira. Medido com HP zerado, queda no vazio, duas mortes seguidas e um
+   personagem humano; nenhum `RequestNotifyDeath` nem warp. Detalhes em
+   DS2_SEAMLESS_COOP.md, "Renascer pagando a morte".
 6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum
    `RequestNotifyDeath` nem `RequestNotifyLeaveGuestPlayer` em 60 s, host em
    `0x10`, e o host **vê** o fantasma na fogueira. Depois o simétrico: o host

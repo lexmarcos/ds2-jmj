@@ -273,6 +273,27 @@ Em aberto:
 - **A orientação não é escrita** no teleporte: o personagem chega à fogueira
   virado para onde estava.
 
+### O renascer do passo 5
+
+Medido só solo, em Heide, com o Samuel. Ficou de fora ou sem medir:
+
+- **Contadores de morte**: a morte comum soma em `PlayerParam+0x104+tipo*8` e
+  `+0x1a4` (`FUN_140203ad0`, só quando online). O renascer não soma.
+- **Usos de magia e estados** (veneno, maldição, etc.) não são restaurados; só
+  o Estus e o HP. A morte comum recarrega tudo pela recarga.
+- **A checagem ofuscada** `thunk_FUN_140014b03`, uma das cinco antes do hollow,
+  não é chamada.
+- **A mancha online** (`NetSvrBloodstainManager::_StartCreateBloodstainJob`,
+  `RequestCreateBloodstain`) não é enviada; outros jogadores não veem a morte.
+- **O pecado** (`FUN_140202ae0`, que a sequência "YOU DIED" chama em sessão) não
+  é tocado.
+- **Nenhum aviso de morte** aparece: nem "YOU DIED", nem fade.
+- **Fogueira fora do mapa carregado**: a volta para "a última posição no chão"
+  num renascer por HP deixaria o personagem onde morreu, pagando a morte.
+- **Como fantasma, na sessão**, a morte comum não tira almas nem hollowa. O
+  renascer ainda não distingue, e as checagens do jogo (`FUN_140203b90`, o slot
+  `+0x58` do contexto) podem recusar parte do custo. É o passo 6.
+
 ## O login que resolve o hostname oficial, depois de um reboot
 
 Medido em 13/09, no primeiro lançamento depois de reiniciar a máquina: o jogo

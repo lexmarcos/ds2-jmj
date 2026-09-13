@@ -1376,3 +1376,72 @@ corrigida no mesmo dia (ver DS2_INVESTIGATION_TOOLS.md).
 - A morte por queda está resolvida com teleporte para a fogueira, solo.
 - Das dez fontes de `+0x759`, só duas foram exercitadas: HP e queda (a queda
   pelo volume de morte; a morte por dano ao aterrissar, `FUN_140372c00`, não).
+
+## Renascer pagando a morte (passo 5, 13/09)
+
+Medido solo com o Samuel em Heide. O modo `respawn` do `DS2_DeathInterceptHook`
+recusa a morte e cobra dela o que o jogo cobraria, com as funções do próprio
+jogo, **sem recarga**. Cada peça foi achada contra uma morte que o jogo fez
+sozinho (`observe`), com o vigia de escrita nos campos e o Ghidra.
+
+### O que uma morte custa, e quem cobra
+
+| custo | onde mora | quem o jogo usa |
+| --- | --- | --- |
+| almas | `PlayerParam+0xec` (`PlayerParam = *(chr+0x490)`) | `FUN_14026af40(NetSvrBloodstainManager, saída)`, alcançado pela sequência "YOU DIED" via `NetSvrManager` slot `+0xe0` |
+| a mancha | registro do `NetSvrBloodstainManager` (`*(*(*(0x141616cf8)+0x30)+0x90)`): `+0x2c` tem, `+0x2d` já cobrada, `+0x30` almas, `+0x34` mapa, posição, ângulo e célula | depois da recarga, slot `+0x28` (`FUN_14026b0d0`) cria o sinal tipo 10 do `BloodstainSetCtrl` |
+| hollow | nível em `PlayerParam+0x1ac` | `FUN_140202c30(PlayerParam, *(data+0x76d))`, chamado por `FUN_14037dcc0` no quadro em que o controlador entra no estado 2 |
+| aparência e HP máximo | `*(chr+0xb0)+0x3e` (0 humano, 1 hollow, 2 muito hollow); máximo efetivo `chr+0x174` | `FUN_1402026e0(chr)` na carga seguinte |
+| Estus | `+0x24` da entrada do Estus Flask (item 60155000) no inventário `*(*(ctx+0xa8)+0x10)` | `FUN_1401ac370(inventário)`, o que o SpEffect do descanso na fogueira chama |
+
+Detalhes que custaram medição:
+
+- **A posição da mancha é a última posição segura**, não onde o personagem
+  está: o registro a toma de `IBloodstainSetCtrl` slot `+0x80`, um anel de
+  posições em chão firme. Por isso a cobrança tem de vir antes do teleporte, e
+  por isso numa queda a mancha fica na beira.
+- **A mancha antiga não some sozinha.** Na morte comum quem a tira é a recarga;
+  `FUN_14020e4e0` só expulsa um sinal quando o conjunto está cheio. O hook
+  percorre os dois conjuntos do `BloodstainSetCtrl` (`+0x18`, `+0x20`; contagem
+  no slot `+0x18`, entrada no `+0x10`, ativa quando `+0x14` é negativo, tipo no
+  nibble baixo do handle) e remove os sinais tipo 10 pela interface (slot
+  `+0x20`, que recebe o ponteiro da entrada) antes de criar o novo.
+- **O nível de hollow sozinho não muda nada.** O multiplicador do HP máximo
+  (`FUN_140202820`) vale 1,0 enquanto `*(chr+0xb0)+0x3e` diz humano. Chamar só
+  o recálculo (`FUN_140202ca0`) deixou o máximo em 915 com hollow 1; quem
+  converte o nível em estado, troca o modelo e recalcula é `FUN_1402026e0`, o
+  inverso de `FUN_140203d50` (o que a Human Effigy chama).
+- **As checagens de hollow** são as de `FUN_14037dcc0`: sem hollow se
+  `FUN_14031c850(data)` (dois bits de efeito em `+0x4b8`), se `+0x4c8` bit 55,
+  se `FUN_14016f740(chr)` (tipo NPC ou fantasma), ou se `+0x4b8` bit 58. A
+  quinta, `thunk_FUN_140014b03`, pula para código ofuscado e ficou de fora.
+
+### O que o modo `respawn` faz
+
+Na primeira recusa de uma morte (as seguintes, enquanto a recuperação corre,
+são a mesma morte sendo segurada):
+
+1. almas para a mancha (`FUN_14026af40`), se o registro não estiver marcado;
+2. hollow com as checagens, e `FUN_1402026e0`;
+3. manchas tipo 10 removidas, e a nova criada (`FUN_14026b0d0`, que também
+   desmarca o registro para a próxima morte);
+4. Estus recarregado;
+5. a recuperação da queda: teleporte para o nascimento da fogueira do registro,
+   e, quando o controle de queda diz que pousou, bits e câmera limpos e o HP
+   cheio no máximo novo.
+
+Cada chamada ao jogo fica atrás de um `__try` próprio, e os bytes de cada
+função são conferidos na instalação.
+
+### O resultado
+
+| teste | log do hook | conferido |
+| --- | --- | --- |
+| HP zerado a 6 m da fogueira, 4321 almas, Estus em 0 | `almas 4321 -> 0 (registradas: 4321 ..., 10000 perdidas da anterior); hollow 1 -> 2; 1 antiga removida, nova criada, agora 1 no mundo; estus recarregado` | de pé na fogueira; a mancha verde onde ele morreu, a da fogueira sumida; ao tocar, 4321 almas de volta e o registro vazio |
+| queda no vazio | `almas 4321 -> 0; hollow 0 -> 1; nova criada`, recuperação da queda em 1 quadro | a mancha na última posição segura; câmera normal |
+| segunda morte antes de recuperar | `registradas: 1000 almas para a mancha, 4321 perdidas da anterior; 1 antiga removida` | uma mancha só no mundo |
+| humano (efígie) morrendo | `hollow 0 -> 1, hp maximo 915 -> 869`, `renascer concluido ... hp 915 -> 869` | `*(chr+0xb0)+0x3e = 1`, HP 869/869 |
+| servidor | — | nenhum `RequestNotifyDeath` nem `RequestNotifyKillEnemy` na conexão; nenhum warp |
+
+O Estus apareceu recarregado no próprio inventário do jogo (1 carga depois de
+zerado à mão).
