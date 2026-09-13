@@ -1124,6 +1124,14 @@ e ele andou 1,8 m com o analógico logo depois, com `y` constante. Ficou uns
 85 cm fora do ponto exato — a física empurrando a cápsula para fora da
 geometria da fogueira.
 
+**Resolva a cadeia de novo a cada uso.** Depois de uma recarga (uma morte, um
+warp) o `PlayerCtrl`, a física e o controle de movimento voltaram nos mesmos
+endereços, mas o `hkpRigidBody` não: o endereço antigo passou a ser o corpo de
+outra coisa, a (−100, 0,7, 188), e um teleporte com o ponteiro guardado moveu
+esse corpo e deixou o personagem onde estava (13/09). A vftable do corpo
+(`0x141126578`) não distingue um do outro; o que distingue é ter vindo agora de
+`*(*(ChrPhysicsCtrl+0x320)+0x20)`.
+
 Duas tentativas anteriores contam o que **não** basta: escrever só a física
 (`ChrPhysicsCtrl+0x80`) é desfeito no quadro seguinte; escrever as cópias do
 jogo mais o cache do corpo, sem o Havok, é desfeito também (o personagem andou
@@ -1295,13 +1303,76 @@ para `y = -3000`, e:
 A saída foi voltar para `observe` e zerar o HP: morte comum, warp, recarga, e
 ele de pé na fogueira de novo.
 
+### A morte por queda, desfeita (13/09)
+
+A "trava de controle" da primeira queda não existia. O que prendia o Samuel era
+a câmera, e a morte por queda deixa três marcas que o byte não desfaz.
+
+**De onde vem a queda.** `FUN_14036fdf0` trata o contato do personagem com um
+volume de colisão do mapa, pelo tipo em `*(*(volume+0x30)+0x70)+0x14`. Nos
+tipos 1, 2, 5 e 6 ele liga o **bit 51** de `*(chr+0xb8)+0x4c0`
+(`0x8000000000000`); nos tipos 3, 4, 7 e 8, o **bit 52**. Nos tipos 1, 3, 5, 7
+e 10 ainda manda à câmera um pedido de tipo 7, para personagens cujo tipo passa
+na tabela `0x1410bfff1` (o Samuel passa; quem mais passa não foi lido). A
+água embaixo da plataforma de Heide é um desses volumes. Com o bit 51 ligado, o
+controle de queda (`FUN_140372620`, chamado pela atualização por quadro do
+personagem antes do controlador da morte) chama `FUN_140372e20` em todo quadro
+que o personagem passa no ar: HP a zero, **bit 9** (`0x200`) e o byte com causa
+`0x5a`. Por isso o hook cancelava uma vez por quadro durante a queda inteira.
+
+**A câmera.** O pedido de tipo 7 (`FUN_140492080`, caso 6) só escreve
+**`CameraManager+0x450 = 1`** (`CameraManager` em `ctx+0x20`, vftable
+`0x1410f45a8`). A cada quadro, `FUN_140492880` compara esse byte com o id em
+`+0x454`: ligado sem id, empilha um pedido de tipo 5 no `IngameCameraOperator`
+(`FUN_140495380`, vetor em `+0x100..+0x108`, entradas de `0x40` bytes com o id
+em `+0x30`), que ativa o `FallDeadCameraOperator` (índice `+0x1520 = 6`);
+desligado com id, **remove o próprio pedido** (`FUN_1404955a0`). O operador de
+queda fixa a posição e só gira para olhar o personagem. Nada desliga o byte
+fora de uma recarga, e com a câmera olhando de onde ele caiu, o analógico, que é
+relativo à câmera, move o personagem quase nada. Na primeira queda isso deu zero
+movimento; na reprodução, 0,3 m em 600 ms.
+
+A comparação de memória (personagem, `*(chr+0xb8)`, controles de ação, física,
+câmera) entre o Samuel de pé e o Samuel preso não achou mais nada: fora
+posições e valores do pouso, só os dois bits de `+0x4c0`,
+`CameraManager+0x450`/`+0x454` e o estado do operador de câmera. Uma primeira tentativa de desligar a câmera
+escrevendo o índice `+0x1520` não durou um quadro: `FUN_140495e10` o reescreve
+a partir do vetor de pedidos.
+
+**A receita, medida à mão:** teleporte para o nascimento da fogueira; o controle
+de queda diz que pousou já na primeira leitura (`+0x08 = 0`); então
+`CameraManager+0x450 = 0` (o gerenciador remove o pedido, índice de volta a 10)
+e os bits 9, 51 e 52 de `+0x4c0` limpos. Cancelamentos param, câmera normal, e o
+Samuel andou 1 m em 500 ms na mesma altura. Limpar os bits antes de pousar não
+serve: no ar, com o tempo de queda ainda acima do limiar, o controle de queda
+mata de novo.
+
+**O hook.** No modo `cancel`, uma morte recusada que traz os bits ou o byte da
+câmera inicia uma recuperação: teleporte para o nascimento da fogueira do
+registro (a receita do passo 2, lida dentro do jogo; sem a fogueira no mapa
+carregado, a última posição no chão do controle de queda), e nos quadros
+seguintes, assim que o controle de queda disser que pousou, limpa os bits e o
+byte da câmera. Refaz o teleporte a cada 30 quadros e desiste em 300.
+
+**Medido com o hook (13/09, Heide, solo):**
+
+| teste | resultado |
+| --- | --- |
+| teleporte para o vazio | um cancelamento (causa 90, `+0x4c0 = 0008000000000200`), teleporte para a fogueira `0x7ba7`, "queda desfeita em 1 quadros" 18 ms depois; câmera no modo 10, byte e bits zerados, HP 823, e ele andou 2,8 m em 1 s |
+| andar para fora da beira | duas quedas (o analógico ainda empurrava depois da primeira volta), duas recuperações de 1 quadro, de pé na fogueira |
+| HP zerado, sem queda | cancelamento comum, sem "queda", posição idêntica bit a bit |
+| servidor | nenhum `RequestNotifyDeath` nem `RequestNotifyKillEnemy` na conexão, nenhum warp no `DS2_Seamless.log` |
+
+Um custo de percurso: um vigia de escrita (`wp`) na página do
+`IngameCameraOperator`, com 24 mil faltas por segundo, derrubou o jogo com
+`0xC0000005` no instante em que foi levantado. Era uma corrida no próprio vigia,
+corrigida no mesmo dia (ver DS2_INVESTIGATION_TOOLS.md).
+
 ### O que fica para o passo 5
 
-- A morte por HP está resolvida no mesmo desvio: cancelar e devolver o HP deixa
-  o personagem controlável sem carregamento.
-- **A morte por queda precisa de mais que o byte.** O controle de queda deixa
-  estado de ação e de câmera para trás, e esse estado não está só no bit
-  `0x200`. O próximo passo é reproduzir (andar para trás 1,2 s na fogueira de
-  Heide com `cancel` ligado), teleportar e comparar a memória do `PlayerCtrl` e
-  dos subobjetos contra o estado normal.
-- Das dez fontes de `+0x759`, só duas foram exercitadas: HP e queda.
+- A morte por HP está resolvida no lugar: cancelar e devolver o HP deixa o
+  personagem controlável sem carregamento. Falta levá-lo à fogueira como a
+  queda já faz.
+- A morte por queda está resolvida com teleporte para a fogueira, solo.
+- Das dez fontes de `+0x759`, só duas foram exercitadas: HP e queda (a queda
+  pelo volume de morte; a morte por dano ao aterrissar, `FUN_140372c00`, não).

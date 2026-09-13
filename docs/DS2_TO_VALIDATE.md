@@ -260,6 +260,18 @@ Em aberto:
 - **Com sessão, nada.** Se o outro lado vê a morte pela replicação e não pelo
   aviso, cancelar só no cliente que morre não basta. A cópia do bloco de morte
   em `+0x8d615` é a candidata a ler.
+- **A queda desfeita foi medida num volume só**: a água de Heide, bit 51. Os
+  volumes que ligam o bit 52 (tipos 3, 4, 7, 8), a morte por dano ao aterrissar
+  (`FUN_140372c00`, causas `0xa0`/`0x3c`) e o tipo 10, que só pede a câmera,
+  não foram exercitados.
+- **A volta para "a última posição no chão"**, usada quando a fogueira do
+  registro não está no mapa carregado, nunca rodou. Cair perto da beira pode
+  pôr o personagem de volta na beira.
+- **Ficar dentro de um volume de morte sem estar no ar** (se algum mapa tiver
+  isso) liga a câmera de queda sem nenhuma morte para o hook recusar, e a câmera
+  ficaria presa.
+- **A orientação não é escrita** no teleporte: o personagem chega à fogueira
+  virado para onde estava.
 
 ## O login que resolve o hostname oficial, depois de um reboot
 

@@ -185,13 +185,14 @@ sem sessão, e não custam desconexão ilegal:
    desconto do hollow: 915 → 869 → 823 em duas mortes). O cancelamento devolve
    `+0x174`; sem devolver, `FUN_14016a650` religa o byte no quadro seguinte.
 5. **Juntar solo:** morrer → de pé na fogueira, sem carregamento. Então almas e
-   hollow à mão. **A morte por queda precisa de mais que o byte** (medido em
-   13/09): o controle de queda (`FUN_140372620` → `FUN_140372e20`, causa `0x5a`)
-   zera o HP todo quadro enquanto o personagem cai — o hook cancelou 2956 vezes
-   em 100 s —, e o teleporte para a fogueira para o loop mas deixa o
-   personagem sem controle e com a câmera parada. O bit `0x200` de
-   `*(chr+0xb8)+0x4c0`, que a queda liga, não é a trava toda. Reproduzir com
-   `cancel` ligado e comparar a memória do personagem contra o estado normal.
+   hollow à mão. **A morte por queda já faz isso** (13/09): o volume de morte do
+   mapa liga os bits 51/9 de `*(chr+0xb8)+0x4c0` e a câmera de queda
+   (`CameraManager+0x450`), e a "trava de controle" era só a câmera. No modo
+   `cancel`, o hook leva o personagem ao nascimento da fogueira do registro,
+   espera o pouso e limpa bits e câmera: um quadro, sem carregamento, sem
+   `RequestNotifyDeath`, e ele anda. Falta o mesmo para a morte por HP (hoje
+   ela é cancelada no lugar), e as almas e o hollow. Detalhes em
+   DS2_SEAMLESS_COOP.md, "A morte por queda, desfeita".
 6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum
    `RequestNotifyDeath` nem `RequestNotifyLeaveGuestPlayer` em 60 s, host em
    `0x10`, e o host **vê** o fantasma na fogueira. Depois o simétrico: o host

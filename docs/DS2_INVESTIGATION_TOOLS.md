@@ -244,6 +244,15 @@ O jogo aguenta isso, mas por isso toda vigia tem prazo. Ela recusa páginas que
 não sejam de dados graváveis e convive com o single-step do
 `DS2_ForceMultiPlayZoneHook`.
 
+**Até 13/09 ela podia derrubar o jogo ao ser levantada.** Uma escrita que falta
+com a página ainda só-leitura pode chegar ao handler depois que a thread de
+pedidos desarmou; o handler via a vigia desligada, passava a falta adiante, e o
+processo morria com `0xC0000005`. Aconteceu numa página do
+`IngameCameraOperator` com 24 mil faltas por segundo, no instante exato em que
+a vigia encerrou. Agora a página da última vigia fica guardada, e uma escrita que
+falta nela com a página já gravável é só repetida. A DLL anterior ao commit
+`trace: a vigia de escrita nao derruba mais o jogo` ainda tem a corrida.
+
 ## A telemetria de posição não acompanha teleporte
 
 `DS2_Nav.txt` (e portanto `where` e o `goto`) lê a posição de
