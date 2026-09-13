@@ -1140,7 +1140,7 @@ do teleporte acima — e `(-162.0097, -1.7606, 190.6973)`.
 
 ### De qualquer fogueira do registro às coordenadas
 
-O id de cada nó é o que `FUN_17f170` compara ao procurar a fogueira do pedido
+O id de cada nó é o que `FUN_14017f170` compara ao procurar a fogueira do pedido
 tipo 3, e agora ele é lido de fora. `FUN_1403ba6a0(obj)` chama
 `FUN_1401ca770(obj+0xb8, obj)`: se o byte `obj+0xa2` for 1 ou 5, o componente é
 `*(*(obj+0xb8)+0x20)`; senão ele percorre a lista de componentes em `obj+0x18`
