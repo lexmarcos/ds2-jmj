@@ -160,18 +160,25 @@ nenhuma, e é o mesmo hook no host e no convidado.
 Em ordem, cada passo com o seu sinal positivo. Os quatro primeiros são solo,
 sem sessão, e não custam desconexão ilegal:
 
-1. **Teleporte sem warp.** Escrever a posição viva do personagem e ver se ele
-   obedece; se não, achar o setter na vtable do chr. *Positivo:* `where` muda e
-   o personagem fica de pé no lugar novo.
-2. **Coordenadas da fogueira ao vivo.** Percorrer a lista de objetos do mapa
-   (`*(ctx+0x70)+0x58`), achar o id da última fogueira e calcular
-   `translação − 1,1 × eixo Z`. *Positivo:* menos de 0,5 m do lugar onde o jogo
-   põe o jogador numa morte comum.
+1. **Teleporte sem warp.** — **feito em 13/09.** A posição autoritativa é a do
+   `hkpRigidBody` (`*(*(ChrPhysicsCtrl+0x320)+0x20)+0x1a0`), e o teleporte que
+   funcionou escreve translação, swept transform e as cópias do jogo num pedido
+   só: o Samuel foi da fogueira de Heide à Catedral de Blue (69 m) sem
+   carregamento, de pé e controlável. Detalhes em DS2_SEAMLESS_COOP.md. Nota: o
+   `where` **não** acompanha teleporte; a posição viva é `PlayerCtrl+0x90`.
+2. **Coordenadas da fogueira ao vivo.** — **feito em 13/09**, com uma pendência.
+   A lista `*(*(ctx+0x70)+0x58)` tem as fogueiras do mapa carregado (3 em
+   Heide), e a conta `translação − 1,1 × eixo Z` deu **0,000 m** de diferença do
+   lugar onde o jogo pôs o Samuel. Falta ler o id de cada nó de fora (passa por
+   `FUN_1401ca770`) para escolher a fogueira do registro sem depender de
+   proximidade.
 3. **Interceptar a morte.** Detour em `FUN_14013c3b0`: primeiro só registrar
    `+0x759`, `+0x75c..+0x76d`, `+0x5fc`; depois cancelar. *Positivo:*
    personagem controlável e nenhum `RequestNotifyDeath` no servidor.
-4. **HP.** Achar o campo (trace na aplicação de dano, ou varredura pelo valor)
-   e restaurar no passo 3.
+4. **HP.** Achado em 13/09: `PlayerCtrl+0x168` atual, `+0x16c` mínimo
+   (-99999), `+0x170` máximo — 869/914 no Samuel. É também o "portão" que
+   barrava o warp de chegada nas tentativas de 12/09 (`HP > 0`). Falta
+   restaurá-lo no passo 3 e ver se o personagem sai do estado de morto.
 5. **Juntar solo:** morrer → de pé na fogueira, sem carregamento. Então almas e
    hollow à mão.
 6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum

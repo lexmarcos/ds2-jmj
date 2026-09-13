@@ -240,6 +240,25 @@ acabando. Em aberto:
   medições foram feitas com a placa no mesmo ponto da fogueira, então a
   troca está provada no pedido, não na tela.
 
+## O login que resolve o hostname oficial, depois de um reboot
+
+Medido em 13/09, no primeiro lançamento depois de reiniciar a máquina: o jogo
+mostrou "The DARK SOULS II service is not available" e **nunca conectou ao
+servidor local**. Com `ss` amostrado a cada 10 ms, as tentativas eram para
+`44.235.83.177:50050` e `44.235.102.125:50050` — que é exatamente o que
+`frpg2-steam64-ope-login.fromsoftware-game.net` resolve —, ou seja, a porta já
+trocada pelo injector e o **hostname oficial**. Ao mesmo tempo, a string UTF-16
+do módulo (`0x1410d4ab0`) já dizia `127.0.0.1`, e havia cópias ASCII do
+hostname oficial no heap (uma com o ponto final de FQDN).
+
+No título, antes de apertar START, essas cópias ASCII não existem: elas são
+feitas no login. Relançar o jogo resolveu na hora, e o login seguinte foi para
+`127.0.0.1`. O que fez aquele processo usar o nome antigo não foi descoberto.
+Duas condições estavam presentes e podem importar: a Steam da conta tinha
+acabado de ser aberta pelo próprio jogo (código de saída 53, `steam://run`), e
+o servidor tinha subido antes de a Steam logar. Para o loader isto importa: um
+jogador veria o mesmo erro e não saberia que é só relançar.
+
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena

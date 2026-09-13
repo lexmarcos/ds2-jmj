@@ -207,6 +207,53 @@ clear
 bp 2a14c0 deref rdx 4
 ```
 
+## A vigia de escrita: quem grava este endereço
+
+`DS2_Trace.req` aceita, desde 13/09:
+
+```
+wp <endereço absoluto em hex> <bytes> [segundos, padrão 3, máximo 20]
+wpclear
+```
+
+e responde, quando o prazo acaba, com **cada instrução distinta** que escreveu
+no intervalo, quantas vezes, os registradores do primeiro acerto e a pilha:
+
+```
+=== vigia de escrita em 00007fffe3649ad0 encerrada (prazo): 5040 faltas na pagina, 2 instrucoes ===
+  escreveu em +0x314df1 (180x) rax=... rbx=... rcx=... rdi=00007fffe3651600 ... pilha: +0x322827 ...
+  escreveu em +0x36df42 (180x) rax=00007fffe3649a40 ... rsi=00007fffe3650fc0 ... pilha: +0x370c0e ...
+```
+
+Uma escrita por quadro aparece com ~60 acertos por segundo, e o registrador
+que aponta para a origem do valor costuma estar entre os de cima — foi assim
+que a posição do personagem foi seguida, em quatro passos, até o corpo do
+Havok.
+
+**Não é um watchpoint de hardware, e isso é de propósito.** Sob o Wine, os
+registradores de depuração de outra thread são gravados pelo wineserver via
+`ptrace`, e com `/proc/sys/kernel/yama/ptrace_scope = 1` (o valor desta
+máquina) esse attach é recusado e a gravação se perde sem erro. A vigia usa
+proteção de página: a página do alvo fica só-leitura, toda escrita nela falta
+com o endereço exato da instrução, e a página é liberada por uma instrução com
+o trap flag antes de ser protegida de novo.
+
+O custo é que **toda** escrita na página de 4 KB falta, não só as do alvo —
+numa página de heap ao lado do `PlayerCtrl`, 5 a 15 mil faltas em 3 segundos.
+O jogo aguenta isso, mas por isso toda vigia tem prazo. Ela recusa páginas que
+não sejam de dados graváveis e convive com o single-step do
+`DS2_ForceMultiPlayZoneHook`.
+
+## A telemetria de posição não acompanha teleporte
+
+`DS2_Nav.txt` (e portanto `where` e o `goto`) lê a posição de
+`*(*(*(ctx)+0xa8)+0xc0)+0xa8`, um bloco de dados sem vtable. Ele acompanha a
+caminhada, mas **não** acompanha uma posição escrita no corpo físico: depois de
+um teleporte de 69 m ele continuou mostrando a fogueira de onde o personagem
+saiu, enquanto o servidor e a tela já mostravam o destino. A posição viva é a
+translação do `PlayerCtrl` (`ctx+0xd0`, campo `+0x90`), que é o que o getter
+virtual `+0x148` do jogo devolve.
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em

@@ -1068,3 +1068,76 @@ host não está em `0x10`**. Quem encerra, na morte do host, é o convidado: o
 terminal de morte de fantasma roda com motivo ≠ 2 e pede o fim. Com a morte
 interceptada nos dois clientes, o host nunca morre nem warpa, e não há o que
 suprimir.
+
+## Teleporte sem warp, e as coordenadas da fogueira (13/09)
+
+Os passos 1 e 2 do plano do M2, medidos solo com o Samuel em Heide, sem sessão.
+
+### Onde a posição realmente mora
+
+Escrever a posição que parece a do personagem não move nada: toda cópia
+visível é reescrita no quadro seguinte. A vigia de escrita (`wp` no
+`DS2_Trace`, ver [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md))
+seguiu a cadeia de cima para baixo, uma camada por medição:
+
+| cópia | quem a reescreve por quadro | o que ela é |
+| --- | --- | --- |
+| `ChrPhysicsCtrl+0x80` | `+0x36ec7f`, em `FUN_14036ec00` | medidor de velocidade: amostra a posição pelo getter virtual `+0x148` do `PlayerCtrl` e deriva a velocidade |
+| `PlayerCtrl+0x90` | `+0x314df1` (setter `+0x140`, vindo do `ChrMotionCtrl`) e `+0x36df42` (física) | translação da matriz de mundo `+0x60..+0x9f`; animação escreve, física corrige |
+| `ChrPhysicsCtrl+0x1c0` | `+0xbd2c18`, em `FUN_140bd2bd0` | cache do corpo, `y` 0,05 m acima dos pés (`ChrPhysicsCtrl+0x104`) |
+| **`hkpRigidBody+0x1a0`** | o integrador do Havok | **a posição autoritativa** |
+
+Os objetos, todos com nome pelo RTTI:
+
+```
+ctx+0xd0                          PlayerCtrl                (HP em +0x168, máximo em +0x170)
+PlayerCtrl+0xf8                   ChrMotionCtrl
+PlayerCtrl+0x100                  ChrPhysicsCtrl
+ChrPhysicsCtrl+0x320              hkpCharacterRigidBody
+hkpCharacterRigidBody+0x20        hkpRigidBody
+hkpRigidBody+0x170..+0x190        rotação
+hkpRigidBody+0x1a0                translação
+hkpRigidBody+0x1b0 / +0x1c0       centros de massa do swept transform (os w são tempos)
+hkpRigidBody+0x250 / +0x260       posições de quadros anteriores
+```
+
+### O teleporte que funcionou
+
+Um único pedido, escrevendo só XYZ e preservando cada `w`:
+
+1. as cópias de referência do jogo — `PlayerCtrl+0x90` e `+0xa0`,
+   `ChrPhysicsCtrl+0x80`, `ChrMotionCtrl+0x50` — e zerando as velocidades do
+   medidor (`ChrPhysicsCtrl+0x60` e `+0x70`);
+2. no `hkpRigidBody`: `+0x250`, `+0x260`, `+0x1b0`, `+0x1c0`, `+0x1a0`, com
+   `y` somado de `0,05`;
+3. por último o cache `ChrPhysicsCtrl+0x1c0`.
+
+Resultado: o Samuel saiu da fogueira de Heide e apareceu **de pé na Catedral de
+Blue, a 69 m e 12 m acima, sem tela de carregamento**. O servidor confirmou pelo
+próprio log (`Location: ... position 13.6 -6.2 276.0`), a posição ficou estável,
+e ele andou 1,8 m com o analógico logo depois, com `y` constante. Ficou uns
+85 cm fora do ponto exato — a física empurrando a cápsula para fora da
+geometria da fogueira.
+
+Duas tentativas anteriores contam o que **não** basta: escrever só a física
+(`ChrPhysicsCtrl+0x80`) é desfeito no quadro seguinte; escrever as cópias do
+jogo mais o cache do corpo, sem o Havok, é desfeito também (o personagem andou
+16 cm e voltou). E um caso lateral: escrever só o cache do corpo moveu o
+personagem 0,8 m para o lado errado — a varredura da cápsula entre a posição
+antiga e a nova batendo na geometria —, o que se lê como teleporte e não é.
+
+### As coordenadas da fogueira
+
+O registro da última fogueira (`*(ctx+0x70)`, campos `+0x164` mapa, `+0x168`
+tipo, `+0x16c` id) dizia `0x0a1f0000 / 0 / 0x7ba7`. A lista em
+`*(*(ctx+0x70)+0x58)` (primeiro nó em `+8`, próximo em `+0x60`, objeto em
+`nó+8`) tinha **3 nós** no mapa carregado — as fogueiras. A posição de
+nascimento de cada uma, pela conta do jogo (`translação(+0x70) − 1,1 ×
+eixoZ(+0x60)` da matriz do objeto), deu para a de Heide
+`(6.1855, -18.5166, 209.0531)`, **a 0,000 m** de onde o jogo tinha posto o
+Samuel ao carregar. As outras duas: `(13.0562, -6.1674, 276.6603)` — o destino
+do teleporte acima — e `(-162.0097, -1.7606, 190.6973)`.
+
+O id de cada nó passa por uma busca de componente (`FUN_1403ba6a0` →
+`FUN_1401ca770`, id em `**(componente+0xe0)`) que ainda não foi reproduzida de
+fora; para escolher a fogueira do registro, falta ela.
