@@ -166,12 +166,11 @@ sem sessão, e não custam desconexão ilegal:
    só: o Samuel foi da fogueira de Heide à Catedral de Blue (69 m) sem
    carregamento, de pé e controlável. Detalhes em DS2_SEAMLESS_COOP.md. Nota: o
    `where` **não** acompanha teleporte; a posição viva é `PlayerCtrl+0x90`.
-2. **Coordenadas da fogueira ao vivo.** — **feito em 13/09**, com uma pendência.
-   A lista `*(*(ctx+0x70)+0x58)` tem as fogueiras do mapa carregado (3 em
-   Heide), e a conta `translação − 1,1 × eixo Z` deu **0,000 m** de diferença do
-   lugar onde o jogo pôs o Samuel. Falta ler o id de cada nó de fora (passa por
-   `FUN_1401ca770`) para escolher a fogueira do registro sem depender de
-   proximidade.
+2. **Coordenadas da fogueira ao vivo.** — **feito em 13/09.** A lista
+   `*(*(ctx+0x70)+0x58)` tem as fogueiras do mapa carregado (3 em Heide); o id
+   de cada uma é `**(*(*(obj+0xb8)+0x20)+0xe0)`, e o nó com o id do registro
+   (`0x7ba7`) é o que tem o ponto de nascimento a 0,000 m de onde o jogo pôs o
+   Samuel. A receita completa está em DS2_SEAMLESS_COOP.md.
 3. **Interceptar a morte.** Detour em `FUN_14013c3b0`: primeiro só registrar
    `+0x759`, `+0x75c..+0x76d`, `+0x5fc`; depois cancelar. *Positivo:*
    personagem controlável e nenhum `RequestNotifyDeath` no servidor.

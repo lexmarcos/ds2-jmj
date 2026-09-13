@@ -1138,6 +1138,39 @@ eixoZ(+0x60)` da matriz do objeto), deu para a de Heide
 Samuel ao carregar. As outras duas: `(13.0562, -6.1674, 276.6603)` — o destino
 do teleporte acima — e `(-162.0097, -1.7606, 190.6973)`.
 
-O id de cada nó passa por uma busca de componente (`FUN_1403ba6a0` →
-`FUN_1401ca770`, id em `**(componente+0xe0)`) que ainda não foi reproduzida de
-fora; para escolher a fogueira do registro, falta ela.
+### De qualquer fogueira do registro às coordenadas
+
+O id de cada nó é o que `FUN_17f170` compara ao procurar a fogueira do pedido
+tipo 3, e agora ele é lido de fora. `FUN_1403ba6a0(obj)` chama
+`FUN_1401ca770(obj+0xb8, obj)`: se o byte `obj+0xa2` for 1 ou 5, o componente é
+`*(*(obj+0xb8)+0x20)`; senão ele percorre a lista de componentes em `obj+0x18`
+comparando tipos (`FUN_1401ca700`). O id é `**(componente+0xe0)`. As três
+fogueiras de Heide têm `+0xa2 = 1`, então o caminho curto basta:
+
+```
+chain id 16148f0 70,58,8[,60...],8,b8,20,e0 4
+```
+
+Medido em 13/09, com o registro dizendo `mapa 0x0a1f0000 / tipo 0 / id 0x7ba7`:
+
+| nó | id | ponto de nascimento |
+| --- | --- | --- |
+| 1 | `0x7bac` | `(-162.0097, -1.7606, 190.6973)` |
+| **2** | **`0x7ba7`** | **`(6.1855, -18.5166, 209.0531)`** — onde o jogo pôs o Samuel ao carregar |
+| 3 | `0x7ba2` | `(13.0562, -6.1674, 276.6603)` — a Catedral de Blue |
+
+O id do registro casa com o nó cujo ponto de nascimento bate a 0,000 m com o
+jogo, então a receita está conferida contra o próprio jogo:
+
+1. `registro = *(ctx+0x70)`: mapa `+0x164`, tipo `+0x168`, id `+0x16c`;
+2. `nó = *(*(registro+0x58)+8)`, próximo em `nó+0x60`;
+3. `obj = *(nó+8)` (um `MapEntity`); componente pelo caminho acima (um
+   `MapObjReactionComponent`);
+4. o nó cujo `**(componente+0xe0)` é o id do registro;
+5. nascimento em `translação(obj+0x70) − 1,1 × eixoZ(obj+0x60)`, virado como a
+   matriz do objeto.
+
+Duas notas. O registro só muda quando se interage com uma fogueira: depois do
+teleporte para a Catedral ele continuou em `0x7ba7`. E a lista é **do mapa
+carregado** — uma fogueira de outro mapa não está nela, que é o limite já
+conhecido da abordagem.
