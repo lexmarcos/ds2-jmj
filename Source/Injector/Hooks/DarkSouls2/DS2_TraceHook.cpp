@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -105,8 +106,255 @@ namespace
         }
     }
 
+    // A write watchpoint, by page protection rather than debug registers.
+    //
+    // Under Wine the debug registers of another thread are set by the
+    // wineserver through ptrace, and with yama's ptrace_scope at 1 - the
+    // default here - that attach is refused and the register write is lost
+    // without an error. Page protection is something Wine always delivers: the
+    // page holding the target is made read-only, every write to it faults with
+    // the address of the instruction doing it, and the page is released for
+    // exactly one instruction with the trap flag before being protected again.
+    //
+    // Every write to that 4 KB page faults, not just writes to the target, and
+    // a heap page next to a player object is written many times a frame. So a
+    // watch always carries a deadline, and the request thread lifts it.
+    struct WatchHit
+    {
+        uintptr_t Rip = 0;
+        uint64_t Count = 0;
+        // Fixed storage on purpose. The handler must not allocate: the page it
+        // protects sits in a heap, and an allocation that touched it would fault
+        // again on the same thread while this handler holds the lock.
+        char First[768] = {};
+    };
+
+    std::mutex s_watch_mutex;
+    uintptr_t s_watch_address = 0;
+    size_t s_watch_length = 0;
+    uintptr_t s_watch_page = 0;
+    DWORD s_watch_protection = 0;
+    std::atomic<bool> s_watch_armed{ false };
+    std::chrono::steady_clock::time_point s_watch_deadline;
+    uint64_t s_watch_faults = 0;
+    constexpr size_t kMaxWatchHits = 16;
+    WatchHit s_watch_hits[kMaxWatchHits];
+    size_t s_watch_hit_count = 0;
+    constexpr uintptr_t kPageMask = ~(uintptr_t)0xFFF;
+    constexpr DWORD kTrapFlagBit = 0x100;
+
+    thread_local bool t_watch_step = false;
+
+    void DescribeFrames(const CONTEXT* Registers, char* Out, size_t Size)
+    {
+        size_t Used = 0;
+        Out[0] = 0;
+        const uintptr_t* Stack = (const uintptr_t*)Registers->Rsp;
+        int Shown = 0;
+        for (int i = 0; i < 64 && Shown < 8 && Used + 24 < Size; i++)
+        {
+            uintptr_t Value = 0;
+            if (!ReadGuarded((uintptr_t)&Stack[i], (uint8_t*)&Value, sizeof(Value)))
+            {
+                break;
+            }
+            if (Value > s_base && Value < s_base + kModuleSpan)
+            {
+                Used += (size_t)snprintf(Out + Used, Size - Used, " +0x%llx", (unsigned long long)(Value - s_base));
+                Shown++;
+            }
+        }
+        if (Shown == 0)
+        {
+            snprintf(Out, Size, " (nenhum)");
+        }
+    }
+
+    // Returns true when the exception belonged to the watch.
+    bool OnWatchException(PEXCEPTION_POINTERS Exception, LONG* Result)
+    {
+        const DWORD Code = Exception->ExceptionRecord->ExceptionCode;
+        CONTEXT* Context = Exception->ContextRecord;
+
+        if (Code == EXCEPTION_SINGLE_STEP)
+        {
+            if (!t_watch_step)
+            {
+                return false;
+            }
+            t_watch_step = false;
+            Context->EFlags &= ~kTrapFlagBit;
+            std::scoped_lock Lock(s_watch_mutex);
+            if (s_watch_armed.load())
+            {
+                DWORD Ignored = 0;
+                VirtualProtect((LPVOID)s_watch_page, 0x1000, PAGE_READONLY, &Ignored);
+            }
+            *Result = EXCEPTION_CONTINUE_EXECUTION;
+            return true;
+        }
+
+        if (Code != EXCEPTION_ACCESS_VIOLATION || Exception->ExceptionRecord->NumberParameters < 2)
+        {
+            return false;
+        }
+        const ULONG_PTR Kind = Exception->ExceptionRecord->ExceptionInformation[0];
+        const uintptr_t Target = (uintptr_t)Exception->ExceptionRecord->ExceptionInformation[1];
+
+        // Decided before the lock. The frame walk below reads the stack under
+        // __try, and a read that faults comes back through this handler first;
+        // taking the lock for it would deadlock the thread on itself. Only
+        // writes can belong to the watch.
+        if (Kind != 1 || !s_watch_armed.load())
+        {
+            return false;
+        }
+
+        std::scoped_lock Lock(s_watch_mutex);
+        if (!s_watch_armed.load() || (Target & kPageMask) != s_watch_page)
+        {
+            return false;
+        }
+
+        s_watch_faults++;
+        if (Target >= s_watch_address && Target < s_watch_address + s_watch_length)
+        {
+            const uintptr_t Rip = (uintptr_t)Context->Rip;
+            WatchHit* Hit = nullptr;
+            for (size_t i = 0; i < s_watch_hit_count; i++)
+            {
+                if (s_watch_hits[i].Rip == Rip)
+                {
+                    Hit = &s_watch_hits[i];
+                    break;
+                }
+            }
+            if (Hit == nullptr && s_watch_hit_count < kMaxWatchHits)
+            {
+                Hit = &s_watch_hits[s_watch_hit_count++];
+                Hit->Rip = Rip;
+                Hit->Count = 0;
+                char Frames[256];
+                DescribeFrames(Context, Frames, sizeof(Frames));
+                snprintf(Hit->First, sizeof(Hit->First),
+                    "rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx rsi=%016llx rdi=%016llx "
+                    "r8=%016llx r9=%016llx rsp=%016llx alvo=%016llx pilha:%s",
+                    (unsigned long long)Context->Rax, (unsigned long long)Context->Rbx,
+                    (unsigned long long)Context->Rcx, (unsigned long long)Context->Rdx,
+                    (unsigned long long)Context->Rsi, (unsigned long long)Context->Rdi,
+                    (unsigned long long)Context->R8, (unsigned long long)Context->R9,
+                    (unsigned long long)Context->Rsp, (unsigned long long)Target, Frames);
+            }
+            if (Hit != nullptr)
+            {
+                Hit->Count++;
+            }
+        }
+
+        // Let this one instruction through, then protect the page again.
+        DWORD Ignored = 0;
+        VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_protection, &Ignored);
+        Context->EFlags |= kTrapFlagBit;
+        t_watch_step = true;
+        *Result = EXCEPTION_CONTINUE_EXECUTION;
+        return true;
+    }
+
+    // Called by the request thread: lifts the protection and writes what was
+    // seen. File I/O stays out of the handler.
+    void DisarmWatch(const char* Why)
+    {
+        WatchHit Copied[kMaxWatchHits];
+        size_t Count = 0;
+        uint64_t Faults = 0;
+        uintptr_t Address = 0;
+        {
+            std::scoped_lock Lock(s_watch_mutex);
+            if (!s_watch_armed.load())
+            {
+                return;
+            }
+            // Protection first, so nothing below can fault on the page.
+            s_watch_armed.store(false);
+            DWORD Ignored = 0;
+            VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_protection, &Ignored);
+            Count = s_watch_hit_count;
+            for (size_t i = 0; i < Count; i++)
+            {
+                Copied[i] = s_watch_hits[i];
+            }
+            s_watch_hit_count = 0;
+            Faults = s_watch_faults;
+            Address = s_watch_address;
+        }
+        std::vector<WatchHit> Hits(Copied, Copied + Count);
+
+        std::string Text = StringFormat("\n=== vigia de escrita em %016llx encerrada (%s): %llu faltas na pagina, %zu instrucoes ===\n",
+            (unsigned long long)Address, Why, (unsigned long long)Faults, Hits.size());
+        for (const WatchHit& Hit : Hits)
+        {
+            const bool InModule = Hit.Rip > s_base && Hit.Rip < s_base + kModuleSpan;
+            Text += InModule
+                ? StringFormat("  escreveu em +0x%llx (%llux) %s\n", (unsigned long long)(Hit.Rip - s_base),
+                    (unsigned long long)Hit.Count, Hit.First)
+                : StringFormat("  escreveu em %016llx (%llux) %s\n", (unsigned long long)Hit.Rip,
+                    (unsigned long long)Hit.Count, Hit.First);
+        }
+        Append(Text);
+    }
+
+    void ArmWatch(uintptr_t Address, size_t Length, int Seconds)
+    {
+        DisarmWatch("substituida");
+
+        std::string Outcome;
+        {
+            std::scoped_lock Lock(s_watch_mutex);
+            MEMORY_BASIC_INFORMATION Info = {};
+            const DWORD Protection = VirtualQuery((LPCVOID)Address, &Info, sizeof(Info)) == 0
+                ? 0 : (Info.State == MEM_COMMIT ? (Info.Protect & 0xFF) : 0);
+
+            // Executable, guard or unmapped pages are someone else's business.
+            if (Protection != PAGE_READWRITE && Protection != PAGE_WRITECOPY)
+            {
+                Outcome = StringFormat("\n=== vigia recusada: %016llx nao e uma pagina de dados gravavel (protecao %08lx) ===\n",
+                    (unsigned long long)Address, (unsigned long)Info.Protect);
+            }
+            else
+            {
+                s_watch_address = Address;
+                s_watch_length = Length == 0 ? 1 : Length;
+                s_watch_page = Address & kPageMask;
+                s_watch_protection = Info.Protect;
+                s_watch_faults = 0;
+                s_watch_hit_count = 0;
+                s_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(Seconds);
+
+                // Format before protecting: nothing after VirtualProtect may allocate.
+                Outcome = StringFormat("\n=== vigiando escritas em %016llx (%zu bytes) por %d s ===\n",
+                    (unsigned long long)Address, s_watch_length, Seconds);
+                DWORD Previous = 0;
+                if (VirtualProtect((LPVOID)s_watch_page, 0x1000, PAGE_READONLY, &Previous))
+                {
+                    s_watch_armed.store(true);
+                }
+                else
+                {
+                    Outcome = "\n=== vigia recusada: VirtualProtect falhou ===\n";
+                }
+            }
+        }
+        Append(Outcome);
+    }
+
     LONG CALLBACK OnException(PEXCEPTION_POINTERS Exception)
     {
+        LONG WatchResult = EXCEPTION_CONTINUE_SEARCH;
+        if (OnWatchException(Exception, &WatchResult))
+        {
+            return WatchResult;
+        }
+
         if (Exception->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
         {
             return EXCEPTION_CONTINUE_SEARCH;
@@ -301,6 +549,8 @@ namespace
     //   bp <hex offset from the module base> [deref <registrador>[+<hex>] <bytes>]
     //   clear
     //   report
+    //   wp <hex absolute address> <decimal length> [seconds, default 3, max 20]
+    //   wpclear
     //
     // The deref is what makes an argument readable. Half the interesting
     // values in this binary are behind a pointer in rcx or rdx — a handle, a
@@ -366,6 +616,24 @@ namespace
                     Added++;
                 }
             }
+            else if (Kind == "wp")
+            {
+                // wp <hex absolute address> <decimal length> [seconds]
+                std::string Where;
+                size_t Length = 4;
+                int Seconds = 3;
+                Parts >> Where >> Length >> Seconds;
+                if (Seconds < 1) { Seconds = 1; }
+                if (Seconds > 20) { Seconds = 20; }
+                if (!Where.empty())
+                {
+                    ArmWatch((uintptr_t)strtoull(Where.c_str(), nullptr, 16), Length, Seconds);
+                }
+            }
+            else if (Kind == "wpclear")
+            {
+                DisarmWatch("pedido");
+            }
             else if (Kind == "report")
             {
                 std::scoped_lock Lock(s_mutex);
@@ -393,6 +661,10 @@ namespace
         while (s_running.load())
         {
             ServeRequests();
+            if (s_watch_armed.load() && std::chrono::steady_clock::now() >= s_watch_deadline)
+            {
+                DisarmWatch("prazo");
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     }
@@ -440,6 +712,7 @@ void DS2_TraceHook::Uninstall()
         s_thread.join();
     }
     DisarmAll();
+    DisarmWatch("desinstalando");
     if (s_handler != nullptr)
     {
         RemoveVectoredExceptionHandler(s_handler);
