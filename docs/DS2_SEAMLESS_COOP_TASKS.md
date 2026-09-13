@@ -124,6 +124,39 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ## M2 — respawn dentro da sessão
 
+**Resolvido em 12/09, por outro caminho que o previsto aqui.** O que segue
+abaixo é o histórico da abordagem que não fechou, e vale ler porque cada
+parágrafo dela é uma coisa medida; mas a entrega é esta:
+
+> O convidado morre, a morte corre normalmente, ele volta ao próprio mundo, põe
+> uma marca branca, e **o host o reinvoca sozinho**. Sessão nova de verdade,
+> elo novo, os dois se vendo. Custa um carregamento.
+>
+> Medido às 22:46 sem nenhuma intervenção humana entre a marca e a sessão —
+> `Sign 1016 created` → `revanche: invocando a placa 80000031` →
+> `RequestNotifyJoinGuestPlayer` + `RequestNotifyJoinSession` → host em `0x10`.
+> Ver "Reinvocação automática, ponta a ponta" em
+> [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md).
+
+**Falta uma peça para ficar sem mão humana:** o convidado pôr a marca sozinho
+ao voltar. Hoje é um X manual; o resto da cadeia já é automático. Duas arestas
+conhecidas: o `DS2_RematchHook` só tem o ponteiro do manager depois de uma
+invocação manual por sessão de jogo, e ele tenta toda placa que chega —
+inclusive marcas velhas no cache, cada uma rendendo um "Summoning failed" na
+tela do host. Filtrar por dono resolve a segunda.
+
+**Por que a abordagem original não fechou**, e isto é o achado que fecha o
+assunto: costurar o convidado de volta à sessão *existente* funciona dos dois
+lados e mesmo assim morre. A máquina do convidado completa o join até o estado
+7; a do host fica de pé em `0x10` o tempo todo, sem sequer notar a morte. O que
+derruba é o host mandando `RequestNotifyLeaveGuestPlayer` **vinte e três
+segundos** depois da morte — temporizador, não reação. O fluxo peer não volta
+junto com a máquina de estados, e é o silêncio dele que o host mede.
+
+---
+
+### O histórico da abordagem que não fechou
+
 Começado em 12/09. O problema está definido com precisão agora, e a peça que
 falta tem nome.
 
