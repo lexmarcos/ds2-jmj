@@ -54,6 +54,13 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `steam2 init\|run\|show` | the second Steam client, which gives instance 2 its own account |
 | `logs <server\|instance2\|injector\|timer\|cli>` | with `-g <pattern>`, `-n <lines>`, `-f` |
 
+**`up` rewrites `Injector.config` from its own flags**, so a flag set on a
+previous `game prepare` is gone the moment `up` runs. Repeat every flag you
+want on the `up` itself — `up --seamless --auto-rematch`, not
+`prepare --auto-rematch` followed by `up --seamless`. The symptom is a hook
+that installs on one boot and silently is not there on the next, and its log
+keeps the old boot's lines, which read as if it were alive.
+
 `game prepare` takes the flags that end up in `Injector.config`:
 `--force-zone` (multiplayer in the closed areas), `--no-timer`,
 `--timer-seconds`, `--probe-area`, `--watch-reads`, `--area-address`,
