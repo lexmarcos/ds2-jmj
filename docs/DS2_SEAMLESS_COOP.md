@@ -862,3 +862,33 @@ O que falta, então, não é manter o host vivo nem completar a máquina do
 convidado: as duas coisas já acontecem. É **fazer o host voltar a colocar o
 fantasma no mundo dele**. No join original isso vem de uma mensagem que o
 host recebe; a reentrada nunca a manda.
+
+### A linha do tempo do host, finalmente
+
+Com `FUN_1402bddb0` detourado, o host conta a própria história. Um join
+normal, por quadro:
+
+```
+host: estado -> 4 -> 5 -> 7 -> 8 -> 10(0xa) -> 11(0xb) -> 13(0xd) -> 14(0xe) -> 15(0xf) -> 16(0x10)
+```
+
+`0x10` é jogar. E na morte do convidado, com a nona variante rodando: **nada**.
+Nem uma transição. O host fica em `0x10` do princípio ao fim, sem jamais
+saber que o convidado saiu, muito menos que voltou.
+
+Mas o servidor sabe:
+
+```
+22:06:41  3:Chico   RequestNotifyDeath
+22:07:04  1:Samuel  RequestNotifyLeaveGuestPlayer
+```
+
+Vinte e três segundos depois da morte — e *depois* de a reentrada do
+convidado ter completado, que leva uns oito. Não é reação à morte: é
+**temporizador**. O host passou vinte segundos sem receber nada do convidado
+e o descartou.
+
+O que diz onde o problema realmente está. Não é a máquina de estados de
+nenhum dos dois: as duas ficam de pé, uma em `0x10` e a outra chegando ao 7.
+É o **fluxo entre eles**. A nona variante preserva o objeto do elo mas não
+faz o convidado voltar a falar por ele, e o silêncio é o que o host cronometra.
