@@ -109,6 +109,21 @@ The game happily enters the world **offline** when its login failed, and looks
 perfectly normal there. `game enter` notices — nothing renames the connection
 — quits to the title and tries once more.
 
+**A long session runs the X server out of clients.** After some hours of
+`game shot` / `game focus` and repeated launches, `game enter` fails with
+`X11 setup failed: 'Maximum number of clients reached'` and nothing else
+explains it. The connections are not the harness's: each Wine prefix leaves
+`xalia.exe` (Steam's accessibility helper, which talks X11) and two
+`winedevice.exe` behind when a game stops, and they pile up across launches —
+22 hours' worth were still connected when this first bit.
+
+With both games stopped, they are orphans and safe to clear:
+
+```
+pkill -f xalia.exe ; pkill -f winedevice.exe
+ss -x | grep -c X11-unix        # was 201, then 171
+```
+
 Two smaller rules, both learned by losing an afternoon:
 
 - **The pad has to exist before the game starts.** `up` orders it that way.
