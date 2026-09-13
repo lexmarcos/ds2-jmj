@@ -68,7 +68,7 @@ pub fn show(path: &Path, options: &Options<'_>) -> std::io::Result<()> {
 
     let mut seen = text.len();
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        crate::control::sleep(std::time::Duration::from_millis(500)).map_err(std::io::Error::other)?;
         let text = read_text(path)?;
         if text.len() <= seen {
             // The file was rotated or truncated; start over from the top.

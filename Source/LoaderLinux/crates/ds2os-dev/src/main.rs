@@ -8,6 +8,14 @@
 //! Instance 1 belongs to Steam. The harness configures it and notices when it
 //! appears, but Steam is what starts it.
 
+macro_rules! println {
+    () => { crate::output::line(format_args!("")) };
+    ($($arg:tt)*) => { crate::output::line(format_args!($($arg)*)) };
+}
+mod control;
+mod output;
+mod observe;
+mod scenario;
 mod api;
 mod drive;
 mod env;
@@ -39,17 +47,27 @@ use probe::Where;
     version
 )]
 struct Cli {
+    /// Emit one versioned JSON result; human progress is stored in events.jsonl.
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Checks the environment and reports everything that is missing
-    Doctor {
-        #[arg(long)]
-        json: bool,
+    /// Fresh state, identity and sources for each requested instance
+    Observe {
+        #[arg(long, default_value = "both")]
+        instance: String,
     },
+    /// Run a declarative scenario file, or the built-in world-ready check
+    Scenario {
+        #[command(subcommand)]
+        action: ScenarioAction,
+    },
+    /// Checks the environment and reports everything that is missing
+    Doctor,
     /// Server, game and second instance, in one go
     Up {
         /// Value written to the phantom session timer
@@ -122,10 +140,7 @@ enum Command {
         seconds: u64,
     },
     /// One screen of what is running
-    Status {
-        #[arg(long)]
-        json: bool,
-    },
+    Status,
     /// The local server on its own
     Server {
         #[command(subcommand)]
@@ -170,6 +185,16 @@ enum Command {
         /// Keep printing as the log grows
         #[arg(short = 'f', long)]
         follow: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScenarioAction {
+    /// Validate the complete scenario without executing any steps
+    Validate { scenario: String },
+    Run {
+        /// JSON scenario path, or world-ready
+        scenario: String,
     },
 }
 
@@ -308,6 +333,12 @@ enum ServerAction {
 
 #[derive(Subcommand)]
 enum GameAction {
+    /// Bind an instance to its expected Steam ID64 (required for server assertions)
+    Identity {
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
+        instance: u8,
+        steam_id: Option<String>,
+    },
     /// Writes Injector.config, the wrapper and copies the injector binaries
     Prepare {
         #[arg(long, default_value_t = 4000.0)]
@@ -427,17 +458,29 @@ struct Status {
 
 fn main() {
     let cli = Cli::parse();
-    let _ = paths::ensure_dirs();
+    if let Err(e) = paths::ensure_dirs().map_err(|e| e.to_string()).and_then(|_| output::begin(cli.json)) {
+        eprintln!("não consegui iniciar registro da execução: {e}");
+        std::process::exit(1);
+    }
+    control::install();
     record_invocation();
-
-    let code = match run(cli.command) {
-        Ok(()) => 0,
-        Err(message) => {
-            eprintln!("erro: {message}");
-            1
-        }
-    };
-    std::process::exit(code);
+    // One owner for the entire action/sequence, including focus, save restore and cleanup.
+    // Read-only observation and the pad daemon do not monopolize the control lock.
+    let exclusive = !matches!(&cli.command,
+        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Players |
+        Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
+        Command::Scenario { action: ScenarioAction::Validate { .. } } |
+        Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
+        Command::Save { action: SaveAction::List });
+    let result = (|| {
+        let _lock = if exclusive { Some(control::Lock::acquire(&paths::state_dir().join("control.lock"))?) } else { None };
+        let result = run(cli.command);
+        // A dead/cancelled caller must not leave a controller held. The daemon
+        // additionally bounds every hold to five seconds.
+        if exclusive { let _ = pad::send_until(1, "neutral", std::time::Duration::from_secs(6)); }
+        result
+    })();
+    std::process::exit(output::finish(result));
 }
 
 /// Appends the command line to cli.log. When someone reports that nothing
@@ -463,18 +506,26 @@ fn timestamp() -> String {
 
 fn run(command: Command) -> Result<(), String> {
     let environment = Environment::resolve();
+    output::environment(&environment)?;
 
-    match command {
-        Command::Doctor { json } => doctor(&environment, json),
+    let cursors = output::log_cursors(&environment);
+    let result = (|| { match command {
+        Command::Doctor => doctor(&environment),
+        Command::Observe { instance } => observe::command(&environment, &accounts(&instance)?),
+        Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
+        Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),
         Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless } => {
             up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog, auto_rematch, seamless)
         }
         Command::Down => {
-            let stopped_game = game::stop_second();
+            let stopped_game = if environment.installs.iter().any(|i| i.account == 2) {
+                game::stop_instance(&environment, 2).map(|_| ())
+            } else { Ok(()) };
             let stopped_server = server::down();
-            println!("  segunda instância: {}", yes_no(stopped_game));
+            println!("  segunda instância: {}", yes_no(stopped_game.is_ok()));
             println!("  servidor:          {}", yes_no(stopped_server));
-            Ok(())
+            stopped_game?;
+            if stopped_server { Ok(()) } else { Err("stop_failed: servidor ainda ativo".into()) }
         }
         Command::Reload => reload(&environment),
         Command::Players => players(&environment),
@@ -483,14 +534,14 @@ fn run(command: Command) -> Result<(), String> {
             watch::run(
                 &environment,
                 std::time::Duration::from_secs(seconds),
-                |event| println!("  {} {}", event.at, event.what),
+                |event| { output::event("watch", serde_json::json!(event)); println!("  {} {}", event.at, event.what); },
             )
         }
         Command::Where { instance } => where_is(&environment, &instance),
         Command::Goto { instance, to, to_instance, radius, seconds } => {
             goto(&environment, instance, to, to_instance, radius, seconds)
         }
-        Command::Status { json } => status(&environment, json),
+        Command::Status => status(&environment),
         Command::Server { action } => match action {
             ServerAction::Up => {
                 let status = server::up(&environment)?;
@@ -498,8 +549,7 @@ fn run(command: Command) -> Result<(), String> {
                 Ok(())
             }
             ServerAction::Down => {
-                println!("  parado: {}", yes_no(server::down()));
-                Ok(())
+                if server::down() { println!("  parado: sim"); Ok(()) } else { Err("stop_failed: servidor ainda ativo".into()) }
             }
             ServerAction::Restart => {
                 // A client that is in the world reconnects afterwards with the
@@ -528,6 +578,20 @@ fn run(command: Command) -> Result<(), String> {
             }
         },
         Command::Game { action } => match action {
+            GameAction::Identity { instance, steam_id } => {
+                let mut config = HarnessConfig::load();
+                if let Some(id) = steam_id {
+                    if id.len() != 17 || id.parse::<u64>().is_err() { return Err("steam-id deve ser o Steam ID64 decimal de 17 dígitos".into()); }
+                    if config.steam_ids.iter().any(|(other, value)| *other != instance && value == &id) {
+                        return Err("as instâncias precisam de contas Steam diferentes".into());
+                    }
+                    config.steam_ids.insert(instance, id);
+                    config.save()?;
+                }
+                output::data(serde_json::json!({"steamIds": config.steam_ids}));
+                println!("identidades: {:?}", config.steam_ids);
+                Ok(())
+            },
             GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch, seamless } => {
                 // The timer patch installs its own exception handler and single
                 // steps through a software breakpoint. Two handlers competing
@@ -565,6 +629,7 @@ fn run(command: Command) -> Result<(), String> {
                     .or_else(|| drive::expected_character(&HarnessConfig::load(), instance));
                 let arrival =
                     drive::enter(&environment, instance, expected.as_deref(), drive::DEFAULT_TIMEOUT)?;
+                output::data(serde_json::json!({"instance": instance, "arrival": arrival}));
                 println!(
                     "  instância {instance}: {} no mundo em {:.0}s",
                     arrival.character, arrival.seconds
@@ -633,6 +698,13 @@ fn run(command: Command) -> Result<(), String> {
             logs::show(&path, &logs::Options { lines, grep: grep.as_deref(), follow })
                 .map_err(|e| e.to_string())
         }
+    } })();
+    let logs = output::capture_logs(&cursors);
+    match (result, logs) {
+        (Err(e), Err(log_error)) => Err(format!("{e}; artifact_error: {log_error}")),
+        (Err(e), _) => Err(e),
+        (_, Err(e)) => Err(format!("artifact_error: {e}")),
+        _ => Ok(()),
     }
 }
 
@@ -646,15 +718,7 @@ fn accounts(choice: &str) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Restarts the server and walks every open instance back into the world.
-///
-/// The order is the whole point. A client that logged in before the restart is
-/// holding a token the new server has never seen, and the game only asks for a
-/// new one on its way **into** the title screen. Quitting to the title first
-/// and restarting after leaves the client authenticated against a server that
-/// no longer exists: it then refuses to enter the world, retries for a minute
-/// and drops back to the title with "connection to the game server was lost".
-/// So: restart, then quit to title, then come back.
+/// Quit to title, restart, then confirm each instance's return.
 fn reload(environment: &Environment) -> Result<(), String> {
     let instances = drive::open_instances(environment);
     if instances.is_empty() {
@@ -669,11 +733,14 @@ fn reload(environment: &Environment) -> Result<(), String> {
     // Ask each game where it is, before anything moves. The server's log cannot
     // answer this: it is recreated on every start, and a client that lost its
     // session plays on offline, which the server never sees at all.
-    let playing: Vec<u8> = instances
-        .iter()
-        .copied()
-        .filter(|account| drive::locate(environment, *account) == Where::World)
-        .collect();
+    let mut playing = Vec::new();
+    for &account in &instances {
+        match drive::locate(environment, account) {
+            Where::World => playing.push(account),
+            Where::Title => {},
+            _ => return Err(format!("state_unknown: conta {account}; reload não pode reiniciar sem confirmar o título")),
+        }
+    }
 
     // Out of the world first, then restart, then back in. The client asks for a
     // session on its way *into* the title screen, so leaving first means it is
@@ -687,7 +754,7 @@ fn reload(environment: &Environment) -> Result<(), String> {
         for instance in &playing {
             match drive::leave_now(environment, *instance, drive::DEFAULT_TIMEOUT, false) {
                 Ok(seconds) => println!("  instância {instance}: título em {seconds:.0}s"),
-                Err(error) => println!("  instância {instance}: {error}"),
+                Err(error) => return Err(format!("leave_failed: conta {instance}: {error}")),
             }
         }
         println!();
@@ -798,26 +865,35 @@ fn pad_command(environment: &Environment, action: PadAction) -> Result<(), Strin
             report(index, format!("stick {side} {x} {y} {ms}"))
         }
         PadAction::Seq { script, focus, shot, gap, index } => {
+            if gap > 5000 { return Err("gap máximo: 5000 ms".into()); }
+            let steps: Vec<_> = script.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+            for step in &steps {
+                if let Some(ms) = step.strip_prefix("wait ") {
+                    if !ms.trim().parse::<u64>().is_ok_and(|n| n <= 30000) { return Err("wait máximo: 30000 ms".into()); }
+                } else { pad::validate(step)?; }
+            }
             if let Some(which) = focus {
                 let target = focus_target(environment, which)?;
                 screen::focus(&target)?;
                 println!("  foco em {}", target.id);
             }
 
-            for step in script.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            for step in steps {
                 let parts: Vec<&str> = step.split_whitespace().collect();
                 // A wait is handled here rather than in the daemon, so the
                 // device is never held open doing nothing.
                 if let ["wait", ms] = parts.as_slice() {
                     let ms: u64 = ms.parse().map_err(|_| format!("espera inválida: {ms}"))?;
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    control::sleep(std::time::Duration::from_millis(ms))?;
                     println!("    esperei {ms}ms");
                     continue;
                 }
 
+                control::check()?;
+                if let Some(which) = focus { screen::focus(&focus_target(environment, which)?)?; }
                 pad::send(index, step).map_err(|e| format!("passo \"{step}\": {e}"))?;
                 println!("    {step}");
-                std::thread::sleep(std::time::Duration::from_millis(gap));
+                control::sleep(std::time::Duration::from_millis(gap))?;
             }
 
             if shot {
@@ -918,6 +994,7 @@ fn players(environment: &Environment) -> Result<(), String> {
         .ok_or("o servidor não está compilado; rode `ds2os-dev doctor`")?;
     let list = api::players(server, api::web_port(&server.config))?;
 
+    output::data(serde_json::json!({"players": list}));
     if list.is_empty() {
         println!("  ninguém conectado");
         return Ok(());
@@ -926,11 +1003,11 @@ fn players(environment: &Environment) -> Result<(), String> {
     for player in list {
         println!("  {} (id {}, steam {})", player.name, player.player_id, player.steam_id);
         println!(
-            "    nível {}  almas {}  soul memory {}",
+            "    nível {}  almas {:?}  soul memory {}",
             player.soul_level, player.souls, player.soul_memory
         );
         println!(
-            "    mortes {}  multiplayer {}  covenant {}",
+            "    mortes {:?}  multiplayer {:?}  covenant {}",
             player.death_count, player.multiplay_count, player.covenant
         );
         println!(
@@ -952,22 +1029,12 @@ fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, 
 /// Prints where each character is standing. Useful on its own, and the only
 /// way to get the number that `goto --to` wants.
 fn where_is(environment: &Environment, instance: &str) -> Result<(), String> {
-    let accounts: Vec<u8> = match instance {
-        "both" => vec![1, 2],
-        other => vec![other
-            .parse()
-            .map_err(|_| format!("instância inválida: {other}"))?],
-    };
-
-    for account in accounts {
-        let install = install_for(environment, account)?;
-        match nav::read(&install.game_dir) {
-            Some(pose) => println!(
-                "  conta {account}: x={:.2} y={:.2} z={:.2}  encarando {:.2},{:.2}  papel {}",
-                pose.x, pose.y, pose.z, pose.facing_x, pose.facing_z, pose.archetype
-            ),
-            None => println!("  conta {account}: sem posição (fora do mundo, ou sem injector)"),
-        }
+    let observation = observe::collect(environment, &accounts(instance)?);
+    output::data(serde_json::json!(observation));
+    for item in &observation.instances { println!("conta {}: {:?}", item.instance, item.pose); }
+    if observation.instances.iter().any(|i| i.pose.is_none()) {
+        output::outcome("inconclusive");
+        return Err("position_unavailable: uma ou mais instâncias não têm posição recente".into());
     }
     Ok(())
 }
@@ -1019,6 +1086,7 @@ fn goto(
         },
     )?;
 
+    output::data(serde_json::json!({"instance": account, "outcome": outcome}));
     match outcome {
         nav::Outcome::Arrived { steps, distance } => {
             println!("  chegou em {steps} passos, a {distance:.1} m do alvo");
@@ -1048,66 +1116,35 @@ fn focus_target(environment: &Environment, instance: usize) -> Result<screen::Ga
 }
 
 /// Writes one PNG per game window. Naming them by index keeps the paths stable
-/// between calls, so a later capture overwrites the earlier one rather than
-/// filling the directory.
+/// within an execution; a unique suffix preserves every capture.
 fn shot(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
     shot_into(environment, out)
 }
 
 fn shot_into(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
-    let dir = out.unwrap_or_else(paths::log_dir);
-    let windows = screen::windows()?;
+    let dir = out.unwrap_or_else(output::dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let instances = drive::open_instances(environment);
+    if instances.is_empty() { return Err("nenhuma instância identificada para capturar".into()); }
+    let mut failures = Vec::new();
+    let mut captures = Vec::new();
+    for account in instances {
+        let capture = drive::window_for(environment, account).and_then(|window| {
+            let path = dir.join(format!("shot-{account}-{}.png", output::id()));
+            screen::capture(&window, &path)
+        });
+        match capture {
+            Ok(path) => { println!("conta {account}: {}", path.display()); captures.push(serde_json::json!({"instance": account, "path": path})); },
+            Err(e) => failures.push(format!("conta {account}: {e}")),
+        }
+    }
+    output::event("screenshots", serde_json::json!({"captures": captures, "errors": failures}));
+    output::data(serde_json::json!({"captures": captures, "errors": failures}));
+    finish_failures(failures)
+}
 
-    if windows.is_empty() {
-        return Err("nenhuma janela do Dark Souls II aberta".into());
-    }
-
-    // `shot-1.png` has to be instance 1's screen. Naming the files by the order
-    // X happens to list the windows in made them swap places between runs, and
-    // a screenshot of the wrong account is worse than no screenshot: it reads
-    // as evidence. Windows whose account cannot be resolved keep the old
-    // positional names, after the ones that could.
-    let mut named: Vec<(String, &screen::GameWindow)> = Vec::new();
-    let mut claimed: Vec<String> = Vec::new();
-    for account in 1..=2u8 {
-        if let Ok(window) = drive::window_for(environment, account) {
-            if let Some(found) = windows.iter().find(|other| other.id == window.id) {
-                named.push((format!("shot-{account}.png"), found));
-                claimed.push(window.id.clone());
-            }
-        }
-    }
-    // A window whose account cannot be resolved keeps a positional name, but
-    // never one an account already took: the games leave their X windows
-    // behind when they are killed, and an old window overwriting `shot-1.png`
-    // is a screenshot of a dead game that reads as the live one.
-    for (index, window) in windows.iter().enumerate() {
-        if claimed.contains(&window.id) {
-            continue;
-        }
-        let mut name = format!("shot-{}.png", index + 1);
-        let mut bump = windows.len();
-        while named.iter().any(|(taken, _)| *taken == name) {
-            bump += 1;
-            name = format!("shot-{bump}.png");
-        }
-        named.push((name, window));
-    }
-
-    for (name, window) in named {
-        let path = dir.join(&name);
-        match screen::capture(window, &path) {
-            Ok(written) => println!(
-                "  janela {} ({}x{})  {}",
-                window.id,
-                window.width,
-                window.height,
-                written.display()
-            ),
-            Err(error) => println!("  janela {}  falhou: {error}", window.id),
-        }
-    }
-    Ok(())
+fn finish_failures(failures: Vec<String>) -> Result<(), String> {
+    if failures.is_empty() { Ok(()) } else { Err(format!("partial_failure: {}", failures.join("; "))) }
 }
 
 fn log_path(environment: &Environment, which: LogName) -> Option<PathBuf> {
@@ -1120,18 +1157,10 @@ fn log_path(environment: &Environment, which: LogName) -> Option<PathBuf> {
     }
 }
 
-fn doctor(environment: &Environment, json: bool) -> Result<(), String> {
+fn doctor(environment: &Environment) -> Result<(), String> {
     let problems = environment.problems();
 
-    if json {
-        let payload = serde_json::json!({
-            "environment": environment,
-            "problems": problems,
-            "ok": problems.is_empty(),
-        });
-        println!("{}", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?);
-        return Ok(());
-    }
+    output::data(serde_json::json!({"environment": environment, "problems": problems, "ok": problems.is_empty()}));
 
     println!("ambiente");
     row("steam", environment.steam_root.as_ref());
@@ -1236,6 +1265,13 @@ fn up(
     auto_rematch: bool,
     seamless: bool,
 ) -> Result<(), String> {
+    for account in [1, 2] {
+        install_for(environment, account)?;
+        if !no_enter { observe::steam_id(account)?; }
+    }
+    if !no_enter && observe::steam_id(1)? == observe::steam_id(2)? {
+        return Err("duplicate_account: as duas instâncias exigem Steam IDs diferentes".into());
+    }
     let problems = environment.problems();
     if !problems.is_empty() {
         for problem in &problems {
@@ -1276,6 +1312,7 @@ fn up(
 
     let home = resolve_second_steam(None)?;
     let mut started = Vec::new();
+    let mut failures = Vec::new();
     for install in &environment.installs {
         let account = install.account;
         match game::launch(environment, account, home.as_deref()) {
@@ -1283,14 +1320,19 @@ fn up(
                 println!("  conta {account}: pid {pid}");
                 started.push(account);
             }
-            Err(error) => println!("  conta {account}: {error}"),
+            Err(error) => failures.push(format!("conta {account}: {error}")),
         }
     }
 
     if no_enter || started.is_empty() {
+        for account in &started {
+            if let Err(e) = drive::wait_title(environment, *account, drive::DEFAULT_TIMEOUT) {
+                failures.push(format!("conta {account}: {e}"));
+            }
+        }
         println!("\n  os jogos ficam no título; `ds2os-dev game enter --instance N` entra");
         println!("  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
-        return Ok(());
+        return finish_failures(failures);
     }
 
     // Both were started before anything is driven, so the two boots overlap:
@@ -1305,14 +1347,14 @@ fn up(
                 "  conta {account}: {} em {:.0}s",
                 arrival.character, arrival.seconds
             ),
-            Err(error) => println!("  conta {account}: {error}"),
+            Err(error) => failures.push(format!("conta {account}: {error}")),
         }
     }
     println!("\n  acompanhe: ds2os-dev logs server -f -g \"logged in\"");
-    Ok(())
+    finish_failures(failures)
 }
 
-fn status(environment: &Environment, json: bool) -> Result<(), String> {
+fn status(environment: &Environment) -> Result<(), String> {
     let payload = Status {
         problems: environment.problems(),
         server: server::status(environment),
@@ -1332,10 +1374,7 @@ fn status(environment: &Environment, json: bool) -> Result<(), String> {
         environment: environment.clone(),
     };
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?);
-        return Ok(());
-    }
+    output::data(serde_json::to_value(&payload).map_err(|e| e.to_string())?);
 
     println!("servidor");
     print_server(&payload.server);
@@ -1392,5 +1431,16 @@ fn yes_no(value: bool) -> &'static str {
         "sim"
     } else {
         "não"
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    #[test]
+    fn json_is_global_and_partial_failure_is_failure() {
+        assert!(Cli::try_parse_from(["ds2os-dev", "doctor", "--json"]).unwrap().json);
+        assert!(Cli::try_parse_from(["ds2os-dev", "--json", "observe"]).unwrap().json);
+        assert!(finish_failures(vec!["instance 2 failed".into()]).is_err());
     }
 }

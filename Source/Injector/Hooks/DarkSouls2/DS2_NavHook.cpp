@@ -42,6 +42,7 @@ namespace
     constexpr size_t kArchetypeOffset = 0x64;
 
     uintptr_t s_base = 0;
+    std::string s_boot_id;
 
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
@@ -137,15 +138,15 @@ namespace
                 ReadGuarded(Player + kFacingZOffset, &FacingZ, sizeof(FacingZ)) &&
                 ReadGuarded(Player + kArchetypeOffset, &Archetype, sizeof(Archetype)))
             {
-                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu %u\n",
+                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu %u %s\n",
                     Position[0], Position[1], Position[2], FacingX, FacingZ,
-                    (void*)Player, (unsigned long long)Tick, Archetype));
+                    (void*)Player, (unsigned long long)Tick, Archetype, s_boot_id.c_str()));
             }
             else
             {
                 // No world loaded, or the player was torn down mid-read. Saying
                 // so beats leaving a stale position that reads as current.
-                Publish(StringFormat("sem jogador %llu\n", (unsigned long long)Tick));
+                Publish(StringFormat("sem jogador %llu %s\n", (unsigned long long)Tick, s_boot_id.c_str()));
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -159,6 +160,7 @@ bool DS2_NavHook::Install(Injector& injector)
 {
 #ifdef _WIN32
     s_base = (uintptr_t)injector.GetBaseAddress();
+    s_boot_id = injector.GetBootId();
     s_state_path = injector.GetDllPath() / "DS2_Nav.txt";
     s_temp_path = injector.GetDllPath() / "DS2_Nav.tmp";
 

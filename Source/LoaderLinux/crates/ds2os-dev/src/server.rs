@@ -166,7 +166,7 @@ fn wait_until_listening(timeout: Duration) -> Result<(), String> {
                 paths::server_log().display()
             ));
         }
-        std::thread::sleep(Duration::from_millis(400));
+        crate::control::sleep(Duration::from_millis(400))?;
     }
     Err(format!(
         "o servidor não abriu as portas em {}s; veja {}",

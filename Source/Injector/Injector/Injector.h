@@ -42,6 +42,7 @@ public:
     const RuntimeConfig& GetConfig()    { return Config; }
     GameType GetGameType()              { return CurrentGameType; }
     const std::filesystem::path& GetDllPath() const { return DllPath; }
+    const std::string& GetBootId() const { return BootId; }
 
     intptr_t GetBaseAddress();
     
@@ -58,6 +59,7 @@ private:
     static inline Injector* s_instance = nullptr;
 
     std::filesystem::path DllPath;
+    std::string BootId;
     std::filesystem::path ConfigPath;
 
     GameType CurrentGameType;

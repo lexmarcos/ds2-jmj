@@ -27,7 +27,7 @@ use crate::api::{self, Player};
 use crate::env::Environment;
 
 /// One thing worth interrupting for.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Event {
     pub at: String,
     pub what: String,
@@ -46,9 +46,9 @@ fn stamp() -> String {
 }
 
 struct Seen {
-    deaths: i64,
+    deaths: Option<i64>,
     location: String,
-    souls: i64,
+    souls: Option<i64>,
 }
 
 /// Watches until `duration` runs out, calling `on_event` for each change.
@@ -68,23 +68,23 @@ pub fn run(
     let deadline = Instant::now() + duration;
     let mut first = true;
 
+    let mut server_available = None;
     loop {
+        crate::control::check()?;
         match api::players(server, port) {
             Ok(list) => {
+                if server_available == Some(false) { on_event(Event { at: stamp(), what: "servidor recuperado".into() }); }
+                server_available = Some(true);
+                let gone: Vec<_> = seen.keys().filter(|id| !list.iter().any(|p| &p.steam_id == *id)).cloned().collect();
+                for id in gone { seen.remove(&id); on_event(Event { at: stamp(), what: format!("steam {id} desconectou") }); }
                 for player in &list {
                     note_player(&mut seen, player, first, &mut on_event);
                 }
             }
-            Err(error) if first => {
-                // Said once. A watch that cannot reach the server is still
-                // useful for the warp logs, and repeating the complaint every
-                // two seconds would bury them.
-                on_event(Event {
-                    at: stamp(),
-                    what: format!("sem o servidor: {error}"),
-                });
+            Err(error) => {
+                if server_available != Some(false) { on_event(Event { at: stamp(), what: format!("servidor indisponível: {error}") }); }
+                server_available = Some(false);
             }
-            Err(_) => {}
         }
 
         for install in &environment.installs {
@@ -94,9 +94,13 @@ pub fn run(
 
         first = false;
         if Instant::now() >= deadline {
+            if server_available == Some(false) {
+                crate::output::outcome("inconclusive");
+                return Err("watch_incomplete: servidor indisponível ao terminar".into());
+            }
             return Ok(());
         }
-        std::thread::sleep(Duration::from_millis(1500));
+        crate::control::sleep(Duration::from_millis(1500))?;
     }
 }
 
@@ -106,7 +110,7 @@ fn note_player(
     first: bool,
     on_event: &mut impl FnMut(Event),
 ) {
-    let key = player.name.clone();
+    let key = player.steam_id.clone();
     let previous = seen.insert(
         key.clone(),
         Seen {
@@ -126,11 +130,11 @@ fn note_player(
         return;
     };
 
-    if player.death_count > previous.deaths {
+    if matches!((player.death_count, previous.deaths), (Some(now), Some(before)) if now > before) {
         on_event(Event {
             at: stamp(),
             what: format!(
-                "MORREU: {key}, agora {} mortes, em {} (tinha {} almas)",
+                "MORREU: {key}, agora {:?} mortes, em {} (tinha {:?} almas)",
                 player.death_count, player.location, previous.souls
             ),
         });
@@ -157,11 +161,9 @@ fn note_warps(
     let already = warp_at.get(path).copied().unwrap_or(0) as usize;
     warp_at.insert(path.clone(), lines.len() as u64);
 
-    if first || lines.len() <= already {
-        return;
-    }
-
-    for line in &lines[already..] {
+    if first { return; }
+    let start = if lines.len() < already { 0 } else { already };
+    for line in &lines[start..] {
         let trimmed = line.trim();
         if let Some(reason) = motive(trimmed) {
             on_event(Event {

@@ -17,3 +17,5 @@ clap.workspace = true
 png.workspace = true
 evdev.workspace = true
 x11rb.workspace = true
+libc = "0.2"
+sha2 = "0.10"

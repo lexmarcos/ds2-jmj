@@ -472,13 +472,6 @@ pub fn instances_status(environment: &Environment) -> InstancesStatus {
     }
 }
 
-pub fn stop_second() -> bool {
-    match proc::running(&paths::instance_pid(2), "Injector.exe") {
-        Some(pid) => proc::stop(pid),
-        None => true,
-    }
-}
-
 /// Log the injector writes inside the game directory.
 pub fn injector_log(environment: &Environment) -> Option<PathBuf> {
     Some(environment.game_dir.as_ref()?.join("DS2OS_Injector.log"))

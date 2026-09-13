@@ -5,6 +5,7 @@ server.
 
 | Document | What it covers |
 | --- | --- |
+| [DS2_HARNESS.md](DS2_HARNESS.md) | Harness for LLM-driven tests: JSON results, instance identity, observations, scenarios, save fixtures and evidence |
 | [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md) | The patch that removes the ~12 minute PvP session limit, and how to turn it on |
 | [DS2_PVP_LEAVE_SESSIONS.md](DS2_PVP_LEAVE_SESSIONS.md) | How PvP sessions end, and how the timer leave differs from a normal one |
 | [DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md) | The kill-based leave sequence, and why the leave message cannot simply be blocked |

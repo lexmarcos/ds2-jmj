@@ -22,9 +22,11 @@ const ANSWER: &str = "DS2_MemProbe.log";
 const TITLE_FLAG: &str = "1614804";
 
 /// Where the game is, as far as the injector can say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Where {
     Title,
+    Loading,
     World,
     /// No answer: the game may still be booting, or the injector is not in it.
     Unknown,
@@ -37,20 +39,36 @@ pub enum Where {
 /// than as an error: this is asked in a loop, and a driver that stops because
 /// one read was slow is worse than one that tries again.
 pub fn locate(install_dir: &Path, timeout: Duration) -> Where {
+    let deadline = Instant::now() + timeout;
+    if !crate::observe::supported_game(install_dir) { return Where::Unknown; }
+    let Ok(_lock) = crate::control::Lock::acquire(&install_dir.join("DS2_MemProbe.lock")) else { return Where::Unknown; };
     let answer = install_dir.join(ANSWER);
-    // Start from an empty answer, so an old reply is never read as this one.
-    let _ = std::fs::write(&answer, b"");
-
-    if write_request(install_dir, &format!("mod titleflag {TITLE_FLAG} 1\n")).is_err() {
+    // The existing injector echoes labels. A unique label correlates requests
+    // without truncating another reader's reply or requiring a DLL upgrade.
+    let label = format!("titleflag-{}", crate::output::id());
+    if write_request(install_dir, &format!("mod {label} {TITLE_FLAG} 1\n")).is_err() {
         return Where::Unknown;
     }
 
-    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Some(byte) = read_byte(&answer, "titleflag") {
-            return if byte == 0 { Where::World } else { Where::Title };
+        if crate::control::check().is_err() { return Where::Unknown; }
+        if let Some(byte) = read_byte(&answer, &label) {
+            return match byte {
+                1 => Where::Title,
+                0 => {
+                    let before = crate::nav::read(install_dir);
+                    while Instant::now() < deadline {
+                        if crate::control::sleep(Duration::from_millis(60)).is_err() { return Where::Unknown; }
+                        if let (Some(old), Some(new)) = (before, crate::nav::read(install_dir)) {
+                            if new.tick > old.tick { return Where::World; }
+                        } else { return Where::Loading; }
+                    }
+                    Where::Unknown
+                }
+                _ => Where::Unknown,
+            };
         }
-        std::thread::sleep(Duration::from_millis(250));
+        if crate::control::sleep(Duration::from_millis(100)).is_err() { return Where::Unknown; }
     }
     Where::Unknown
 }
@@ -115,5 +133,13 @@ mod tests {
         .unwrap();
         assert_eq!(read_byte(&answer, "titleflag"), None);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn old_reply_cannot_satisfy_a_new_request_id() {
+        let path = std::env::temp_dir().join(format!("ds2-reply-{}", crate::output::id()));
+        std::fs::write(&path, "titleflag-old: address\n address +0x000 00\n").unwrap();
+        assert_eq!(read_byte(&path, "titleflag-new"), None);
+        std::fs::remove_file(path).unwrap();
     }
 }

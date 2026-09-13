@@ -28,7 +28,8 @@ use crate::screen;
 const STATE: &str = "DS2_Nav.txt";
 
 /// Where a character is and which way it is looking.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Pose {
     pub x: f32,
     pub y: f32,
@@ -49,7 +50,13 @@ fn state_path(install_dir: &Path) -> PathBuf {
 /// Reads the published pose. `None` while no world is loaded, which is also
 /// what the injector writes when the chain does not resolve.
 pub fn read(install_dir: &Path) -> Option<Pose> {
-    let text = std::fs::read_to_string(state_path(install_dir)).ok()?;
+    let path = state_path(install_dir);
+    if std::fs::metadata(&path).ok()?.modified().ok()?.elapsed().ok()? > Duration::from_secs(2) { return None; }
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_pose(&text)
+}
+
+fn parse_pose(text: &str) -> Option<Pose> {
     let fields: Vec<&str> = text.split_whitespace().collect();
     let mut parts = fields.iter();
     let mut next = || parts.next().and_then(|v| v.parse::<f32>().ok());
@@ -64,25 +71,27 @@ pub fn read(install_dir: &Path) -> Option<Pose> {
         tick: fields
             .get(6)
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(0),
+            ?,
         archetype: fields
             .get(7)
             .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0),
+            ?,
     };
 
     // While an area loads, the chain resolves but everything in it is still
     // zero. The facing is a normalised direction and is never (0, 0) on a
     // character that exists, so it is the honest liveness test - and a walk
     // that started from a zeroed pose would drive off in a straight line.
-    if pose.facing_x == 0.0 && pose.facing_z == 0.0 {
+    if ![pose.x, pose.y, pose.z, pose.facing_x, pose.facing_z].iter().all(|v| v.is_finite())
+        || (pose.facing_x == 0.0 && pose.facing_z == 0.0) {
         return None;
     }
     Some(pose)
 }
 
 /// How a walk ended.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Outcome {
     Arrived { steps: u32, distance: f32 },
     Stuck { steps: u32, distance: f32 },
@@ -129,10 +138,16 @@ pub fn walk_to(
     plan: Plan,
     mut on_step: impl FnMut(u32, &Pose, f32),
 ) -> Result<Outcome, String> {
+    if !target.0.is_finite() || !target.1.is_finite() || !plan.radius.is_finite() || plan.radius <= 0.0 {
+        return Err("invalid_target: coordenadas finitas e raio positivo são obrigatórios".into());
+    }
+    let deadline = crate::control::Deadline::after(plan.timeout);
     // There is one virtual pad for both games, and the game ignores it while
     // another window is active, so focus is part of every burst rather than a
     // thing done once at the start.
     let window = drive::window_for(environment, account)?;
+    let identity = crate::observe::processes(environment, account);
+    let boot = crate::observe::sample(install_dir).and_then(|(_, b)| b);
     let start = Instant::now();
     let mut steps = 0u32;
     let mut stalled = 0u32;
@@ -142,7 +157,7 @@ pub fn walk_to(
     let mut yaw: f32 = 0.0;
     let mut have_yaw = false;
 
-    let first = fresh(install_dir, 0, Duration::from_secs(5))
+    let first = fresh(install_dir, 0, deadline.remaining()?.min(Duration::from_secs(5)))
         .ok_or("o jogo não está publicando posição")?;
     let mut previous = first;
     let mut sent: Option<f32> = None;
@@ -151,11 +166,15 @@ pub fn walk_to(
     let mut probe: u32 = 0;
 
     loop {
+        crate::control::check()?;
+        if crate::observe::processes(environment, account) != identity || crate::observe::sample(install_dir).and_then(|(_, b)| b) != boot {
+            return Err("process_changed: processo/boot mudou durante navegação".into());
+        }
         // Never measure against a reading that has not been taken since the
         // last burst: a repeated sample looks exactly like a character that
         // did not move, and that mistake reported a walk as stuck while it was
         // standing on its target.
-        let pose = match fresh(install_dir, previous.tick, Duration::from_secs(3)) {
+        let pose = match fresh(install_dir, previous.tick, deadline.remaining()?.min(Duration::from_secs(3))) {
             Some(pose) => pose,
             None => return Ok(Outcome::LostPlayer { steps }),
         };
@@ -166,9 +185,6 @@ pub fn walk_to(
 
         on_step(steps, &pose, distance);
 
-        if distance <= plan.radius {
-            return Ok(Outcome::Arrived { steps, distance });
-        }
         if first.y - pose.y > plan.max_drop {
             return Ok(Outcome::Fell { steps, drop: first.y - pose.y });
         }
@@ -197,7 +213,7 @@ pub fn walk_to(
                 // achieved little buys a longer one rather than a verdict; it
                 // is also the only way the estimate below gets any signal.
                 stalled += 1;
-                grown = (grown * 2).min(2400);
+                grown = grow_burst(grown);
                 probe += 1;
                 if stalled >= 9 {
                     return Ok(Outcome::Stuck { steps, distance });
@@ -216,6 +232,10 @@ pub fn walk_to(
             }
         }
 
+        // Check discontinuities before arrival: a respawn near the target is not a successful walk.
+        if distance <= plan.radius {
+            return Ok(Outcome::Arrived { steps, distance });
+        }
         // Desired world direction, rotated back into stick space.
         let mut stick = wrap(dz.atan2(dx) - yaw);
 
@@ -234,7 +254,7 @@ pub fn walk_to(
         // moves, and a burst that ends during the turn covers no ground at all
         // - a 700 ms one, measured, moved nothing after a 90 degree turn.
         let base = if distance < 3.0 { 500 } else { plan.burst.as_millis() as u64 };
-        let burst = Duration::from_millis(base.max(grown));
+        let burst = Duration::from_millis(base.max(grown)).min(deadline.remaining()?);
 
         // The pad's y is up-negative, so the stick vector reaches the world as
         // (x, -y). That is a reflection, and a reflection cannot be absorbed by
@@ -246,7 +266,7 @@ pub fn walk_to(
         // -164.8 degrees and stick forward -82.2, and forward is +90 from
         // right only under this reading.
         screen::focus(&window)?;
-        pad::send(
+        pad::send_until(
             1,
             &format!(
                 "stick l {:.3} {:.3} {}",
@@ -254,6 +274,7 @@ pub fn walk_to(
                 (-stick.sin()).clamp(-1.0, 1.0),
                 burst.as_millis()
             ),
+            deadline.remaining()?,
         )
         .map_err(|e| format!("conta {account}: {e}"))?;
 
@@ -262,7 +283,7 @@ pub fn walk_to(
         // every one after it does nothing, which reads as a wall on all eight
         // sides. It was in the first version of this loop and got lost in a
         // rewrite, and cost an afternoon of blaming the terrain.
-        std::thread::sleep(Duration::from_millis(200));
+        deadline.sleep(Duration::from_millis(200))?;
 
         sent = Some(stick);
         previous = pose;
@@ -275,6 +296,7 @@ pub fn walk_to(
 fn fresh(install_dir: &Path, after: u64, timeout: Duration) -> Option<Pose> {
     let deadline = Instant::now() + timeout;
     loop {
+        crate::control::check().ok()?;
         if let Some(pose) = read(install_dir) {
             if pose.tick > after {
                 return Some(pose);
@@ -284,6 +306,26 @@ fn fresh(install_dir: &Path, after: u64, timeout: Duration) -> Option<Pose> {
             return None;
         }
         std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+fn grow_burst(previous: u64) -> u64 { previous.max(600).saturating_mul(2).min(2400) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn torn_and_nonfinite_samples_are_rejected() {
+        assert!(parse_pose("1 2 3 1 0 0x123").is_none());
+        assert!(parse_pose("NaN 2 3 1 0 0x123 4 1").is_none());
+        assert!(parse_pose("1 2 3 0 0 0x123 4 1").is_none());
+        assert_eq!(parse_pose("1 2 3 1 0 0x123 4 1").unwrap().tick, 4);
+    }
+    #[test]
+    fn stalled_burst_grows_from_zero_and_is_bounded() {
+        assert_eq!(grow_burst(0), 1200);
+        assert_eq!(grow_burst(1200), 2400);
+        assert_eq!(grow_burst(2400), 2400);
     }
 }
 

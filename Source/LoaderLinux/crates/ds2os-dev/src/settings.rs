@@ -23,6 +23,8 @@ pub struct HarnessConfig {
     /// right one" are different questions. With a name written down, the
     /// harness can answer the second from the server's own log.
     pub characters: std::collections::BTreeMap<u8, String>,
+    /// Explicit account binding. Never infer the active account from login history.
+    pub steam_ids: std::collections::BTreeMap<u8, String>,
 }
 
 impl HarnessConfig {

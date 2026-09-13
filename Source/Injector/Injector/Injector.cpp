@@ -74,6 +74,8 @@ Injector::~Injector()
 
 bool Injector::Init()
 {
+    BootId = std::to_string(GetCurrentProcessId()) + "-" +
+        std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
     Log("Initializing injector ...");
 
     // Grab the dll path based on the location of static function.
@@ -232,9 +234,12 @@ bool Injector::Init()
 
     Log("Installing hooks ...");
     bool AllInstalled = true;
+    nlohmann::json HookStates = nlohmann::json::object();
     for (auto& hook : Hooks)
     {
-        if (hook->Install(*this))
+        bool Installed = hook->Install(*this);
+        HookStates[hook->GetName()] = Installed;
+        if (Installed)
         {
             Success("\t%s: Success", hook->GetName());
             InstalledHooks.push_back(hook.get());
@@ -244,6 +249,26 @@ bool Injector::Init()
             Error("\t%s: Failed", hook->GetName());
             AllInstalled = false;
         }
+    }
+
+    // Current-boot installation receipts, not old log lines or configuration intent.
+    nlohmann::json Receipt = {
+        {"schemaVersion", 1}, {"bootId", BootId}, {"hooks", HookStates},
+        {"configured", {{"seamless", Config.DS2SeamlessCoop},
+                        {"autoRematch", Config.DS2AutoRematch},
+                        {"forceZone", Config.DS2ForceMultiPlayZone},
+                        {"removeFog", Config.DS2RemovePhantomFog},
+                        {"timer", Config.DS2PatchPhantomTimers}}}
+    };
+    {
+        std::ofstream Stream(DllPath / "DS2_Harness.json.tmp", std::ios::trunc);
+        Stream << Receipt.dump(2);
+    }
+    std::error_code ReceiptError;
+    std::filesystem::rename(DllPath / "DS2_Harness.json.tmp", DllPath / "DS2_Harness.json", ReceiptError);
+    if (ReceiptError) {
+        std::ofstream Stream(DllPath / "DS2_Harness.json", std::ios::trunc);
+        Stream << Receipt.dump(2);
     }
 
     if (!AllInstalled)

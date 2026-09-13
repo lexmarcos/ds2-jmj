@@ -31,7 +31,6 @@ use std::path::{Path, PathBuf};
 
 use crate::env::{Environment, Install};
 use crate::paths;
-use crate::proc;
 
 /// Name the private server's save carries. The retail save sits beside it as
 /// `DS2SOFS0000.sl2` and is never touched: keeping them apart is the whole
@@ -61,13 +60,13 @@ pub fn live_save(install: &Install) -> Option<PathBuf> {
         .filter(|candidate| candidate.is_file())
         .collect();
 
-    // More than one would mean more than one Steam id has played in this
-    // prefix. Newest wins, and `list` shows the path so it is visible.
-    found.sort_by_key(|path| {
-        std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-    });
+    // An explicit Steam ID binds the hexadecimal save directory as well.
+    if let Some(id) = crate::settings::HarnessConfig::load().steam_ids.get(&install.account) {
+        let expected = id.parse::<u64>().ok()?;
+        found.retain(|p| p.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str())
+            .and_then(|s| u64::from_str_radix(s, 16).ok()) == Some(expected));
+    }
+    if found.len() != 1 { return None; }
     found.pop()
 }
 
@@ -86,7 +85,7 @@ fn installs(environment: &Environment, instance: &str) -> Result<Vec<Install>, S
         .cloned()
         .collect();
 
-    if chosen.is_empty() {
+    if chosen.len() != wanted.len() {
         return Err("nenhuma instalação encontrada para essa instância".into());
     }
     Ok(chosen)
@@ -137,46 +136,85 @@ mod tests {
         // A leap day, because that is where this arithmetic goes wrong.
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
     }
+
+    #[test]
+    fn failed_copy_preserves_the_live_save() {
+        let dir = std::env::temp_dir().join(format!("ds2-save-{}", crate::output::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live");
+        let source = dir.join("source");
+        std::fs::write(&live, b"original").unwrap();
+        std::fs::write(&source, b"").unwrap();
+        assert!(super::copy(&source, &live).is_err());
+        assert_eq!(std::fs::read(&live).unwrap(), b"original");
+        std::fs::write(&source, b"baseline").unwrap();
+        super::copy(&source, &live).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"baseline");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn labels_cannot_escape_the_snapshot_store() {
+        for label in ["", "../outside", "x/../../outside", "a.ds3os"] { assert!(super::validate_label(label).is_err()); }
+        assert!(super::validate_label("majula-ready-01").is_ok());
+    }
 }
 
-fn snapshot_path(account: u8, label: &str) -> PathBuf {
+pub fn snapshot_path(account: u8, label: &str) -> PathBuf {
     store().join(format!("conta{account}-{label}.ds3os"))
 }
 
+pub fn validate_label(label: &str) -> Result<(), String> {
+    if label.is_empty() || label.len() > 180 || !label.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)) {
+        Err("invalid_label: use até 180 letras ASCII, números, _ ou - (sem caminho/extensão)".into())
+    } else { Ok(()) }
+}
+
 fn copy(from: &Path, to: &Path) -> Result<u64, String> {
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    std::fs::copy(from, to).map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))
+    if let Some(parent) = to.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    let temporary = to.with_extension(format!("{}.tmp", crate::output::id()));
+    let result = (|| -> std::io::Result<u64> {
+        let mut input = std::fs::File::open(from)?;
+        let mut out = std::fs::File::options().write(true).create_new(true).open(&temporary)?;
+        let n = std::io::copy(&mut input, &mut out)?;
+        if n == 0 { return Err(std::io::Error::other("save vazio")); }
+        out.sync_all()?;
+        std::fs::rename(&temporary, to)?;
+        Ok(n)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result.map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))
 }
 
 /// Copies each account's live save into the store.
 pub fn backup(environment: &Environment, instance: &str, label: Option<&str>) -> Result<(), String> {
     let label = label.map(str::to_owned).unwrap_or_else(stamp);
-
-    for install in installs(environment, instance)? {
-        match live_save(&install) {
-            Some(live) => {
-                let target = snapshot_path(install.account, &label);
-                let bytes = copy(&live, &target)?;
-                println!(
-                    "  conta {}: {} guardado ({} bytes)",
-                    install.account,
-                    target.display(),
-                    bytes
-                );
-            }
-            None => println!(
-                "  conta {}: nenhum save do servidor privado ainda; nada a guardar",
-                install.account
-            ),
+    validate_label(&label)?;
+    let chosen = installs(environment, instance)?;
+    // Validate the entire set before writing the first snapshot.
+    let mut plan = Vec::new();
+    for install in chosen {
+        if !crate::observe::processes(environment, install.account).is_empty() {
+            return Err(format!("save_busy: conta {}; feche o jogo para obter um snapshot consistente", install.account));
         }
+        let live = live_save(&install).ok_or_else(|| format!("save_missing_or_ambiguous: conta {}", install.account))?;
+        let target = snapshot_path(install.account, &label);
+        if target.exists() { return Err(format!("snapshot_exists: {}", target.display())); }
+        plan.push((install.account, live, target));
     }
+    let mut saved = Vec::new();
+    for (account, live, target) in plan {
+        let bytes = copy(&live, &target)?;
+        println!("conta {account}: {} ({bytes} bytes)", target.display());
+        saved.push(serde_json::json!({"instance": account, "label": label, "file": crate::output::fingerprint(&target)}));
+    }
+    crate::output::data(serde_json::json!({"snapshots": saved}));
     Ok(())
 }
 
 /// Lists what is in the store, and where each account's live save is.
 pub fn list(environment: &Environment) -> Result<(), String> {
+    let live: Vec<_> = environment.installs.iter().map(|i| serde_json::json!({"instance": i.account,
+        "path": live_save(i)})).collect();
     println!("ao vivo");
     for install in &environment.installs {
         match live_save(install) {
@@ -197,6 +235,12 @@ pub fn list(environment: &Environment) -> Result<(), String> {
         .filter(|name| name.ends_with(".ds3os"))
         .collect();
     names.sort();
+    let snapshots: Vec<_> = names.iter().filter_map(|name| {
+        let stem = name.strip_suffix(".ds3os")?;
+        let (account, label) = stem.strip_prefix("conta")?.split_once('-')?;
+        Some(serde_json::json!({"instance": account.parse::<u8>().ok()?, "label": label, "path": store().join(name)}))
+    }).collect();
+    crate::output::data(serde_json::json!({"live": live, "snapshots": snapshots}));
 
     if names.is_empty() {
         println!("  nenhum ainda; `ds2os-dev save backup` faz o primeiro");
@@ -218,11 +262,13 @@ pub fn restore(
     label: &str,
     stop_first: bool,
 ) -> Result<(), String> {
+    validate_label(label)?;
     let chosen = installs(environment, instance)?;
 
+    let mut restored = Vec::new();
     for install in &chosen {
         let source = snapshot_path(install.account, label);
-        if !source.is_file() {
+        if !source.is_file() || std::fs::metadata(&source).map(|m| m.len() == 0).unwrap_or(true) {
             return Err(format!(
                 "conta {}: não achei {} — `ds2os-dev save list` mostra o que existe",
                 install.account,
@@ -232,8 +278,7 @@ pub fn restore(
     }
 
     for install in &chosen {
-        let running = proc::running(&paths::instance_pid(install.account), "Injector.exe").is_some()
-            || !proc::game_pids().is_empty();
+        let running = !crate::observe::processes(environment, install.account).is_empty();
 
         if running {
             if !stop_first {
@@ -248,6 +293,10 @@ Feche com `ds2os-dev game stop --instance {}` ou repita com --stop",
         }
     }
 
+    // Confirm every destination before changing any live save.
+    for install in &chosen {
+        live_save(install).ok_or_else(|| format!("save_missing_or_ambiguous: conta {}", install.account))?;
+    }
     for install in &chosen {
         let source = snapshot_path(install.account, label);
         let live = live_save(install).ok_or_else(|| {
@@ -263,6 +312,8 @@ Feche com `ds2os-dev game stop --instance {}` ou repita com --stop",
         copy(&live, &rescue)?;
 
         let bytes = copy(&source, &live)?;
+        restored.push(serde_json::json!({"instance": install.account, "label": label, "source": source,
+            "live": live, "rescue": rescue, "bytes": bytes}));
         println!(
             "  conta {}: {} restaurado ({} bytes); o anterior ficou em {}",
             install.account,
@@ -272,5 +323,6 @@ Feche com `ds2os-dev game stop --instance {}` ou repita com --stop",
         );
     }
 
+    crate::output::data(serde_json::json!({"restored": restored}));
     Ok(())
 }

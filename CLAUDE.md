@@ -22,6 +22,11 @@ tearing the session down.
 
 ## The harness: `ds2os-dev`
 
+The current CLI and scenario contract is documented in
+[docs/DS2_HARNESS.md](docs/DS2_HARNESS.md). Read it before changing the harness
+or writing a new automated test. A runnable menu regression lives in
+[docs/scenarios/menu-roundtrip.json](docs/scenarios/menu-roundtrip.json).
+
 `Source/LoaderLinux/target/debug/ds2os-dev` drives everything. Reach for it
 before writing any ad-hoc script for screenshots, input, window focus or
 server control — it already solves the fiddly parts, and there is no `xdotool`
@@ -36,16 +41,20 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | command | what it does |
 | --- | --- |
 | `doctor` | reports everything missing from the environment |
-| `status` | one screen: server, ports, player count, game processes, log paths |
-| `up` / `down` | server, both instances, and both characters standing in the world |
+| `status` | inventory of server, ports, processes and logs; not a gameplay assertion |
+| `observe --instance both --json` | fresh per-instance state, pose, Steam identity, API record, hook receipts and unknowns |
+| `scenario validate <file\|world-ready> --json` | validates the entire scenario without executing steps |
+| `scenario run <file\|world-ready> --json` | assertions, step evidence and optional save baseline/cleanup |
+| `game identity --instance N <SteamID64>` | binds an instance to its expected account; required for `enter` and scenarios |
+| `up` / `down` | `up` requires both installations and confirms arrival; `down` stops the server and second instance |
 | `reload` | restarts the server and puts everyone back in the world, without closing the game |
 | `server up\|down\|restart\|status` | the local server on its own |
 | `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations |
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
-| `players` | what the server knows: name, soul level, souls, soul memory, deaths, covenant, area |
-| `watch` | prints only when something changes; a death above all |
+| `players --json` | API records; unsupported souls/death/session counters are `null` |
+| `watch` | warp events, area changes, disconnects and API availability; not a general death oracle |
 | `where` | where each character is standing, from the game's own memory |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
 | `game options` | the line to paste into Steam's launch options |
@@ -53,6 +62,50 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |
 | `steam2 init\|run\|show` | the second Steam client, which gives instance 2 its own account |
 | `logs <server\|instance2\|injector\|timer\|cli>` | with `-g <pattern>`, `-n <lines>`, `-f` |
+
+### Contract for LLM-driven tests
+
+Use `--json` for automation. It is global and emits **one result object**;
+progress is in `events.jsonl`. Read `status`, `errorCode`, `error`, `data` and
+`artifacts`. Exit codes: **0 passed, 1 failed, 2 inconclusive**. `doctor --json`
+now fails when the environment has problems. The old doctor/status fields
+are nested under `data`; update scripts that parsed the previous shape.
+A successful inventory command does not prove the game or P2P session works.
+
+Configure each account once with `game identity --instance N <SteamID64>`
+(the decimal 17-digit ID), and set its expected character with
+`game character --instance N <name>`. Do not infer the logged-in account from
+Steam login history. The configured ID selects the API connection and save
+folder; it must actually be the account launched in that prefix.
+
+Use this loop:
+
+1. `observe --json` to inspect the current state and available evidence.
+2. `scenario validate <file> --json` before running a new scenario.
+3. `scenario run <file> --json` to execute assertions and preserve evidence.
+4. Read `result.json`, `events.jsonl` and screenshots from the returned
+   `artifacts` directory. Report the run ID and exactly which assertions passed.
+
+`scenario run world-ready` checks world state and server presence for both
+accounts. It does **not** prove summoning, peer interaction or guest respawn.
+`p2pSessionVerified` is currently `null`; an assertion requiring it is
+inconclusive. Never convert missing observations, no error logs, an installed
+hook, a live PID or a phantom HUD into proof of a working co-op session.
+
+Each invocation records command, environment, events, result and bounded log
+excerpts in `~/.local/share/ds2os-dev/runs/<id>/` (or under `XDG_DATA_HOME`).
+Scenarios also record binary hashes, scenario contents and fixture hashes.
+Screenshots have unique names and instance ownership; they are not overwritten
+by the next capture. Two controllers cannot run concurrently: one action owns
+`control.lock` for its complete sequence. Observers can run alongside it.
+
+The updated Windows injector publishes a boot ID in `DS2_Nav.txt` and hook
+installation receipts in `DS2_Harness.json`. **Rebuild/copy the injector and
+relaunch both games** to obtain receipts. Old DLLs can still answer unique
+MemProbe labels and publish positions, but do not prove installed hooks for
+the current boot. A changed `Injector.config` is configuration intent, not
+proof that an open process loaded it. Restart an old pad daemon too, before
+launching games, to obtain bounded holds and strict acknowledgements.
 
 **`up` rewrites `Injector.config` from its own flags**, so a flag set on a
 previous `game prepare` is gone the moment `up` runs. Repeat every flag you
@@ -69,28 +122,26 @@ changing it means closing and reopening the game.
 
 ### Getting into the world
 
-`up` ends with both characters standing in Majula, and `reload` puts them back
-there after a server restart. Both are menu walks, and the walk is short:
+`up` requires both installations and returns failure if any requested launch
+or arrival fails. `up --no-enter` confirms the title screen. `reload` quits to
+title before restarting and refuses to restart if an instance is unknown or
+cannot leave. These commands do not guarantee a particular area: use an
+explicit area/position assertion for a test that requires Majula.
 
-```
-title  --START-->  main menu  --A-->  save list  --A-->  world
-```
+`game enter` uses a confirmed local world state plus the API record filtered
+by the configured Steam ID and checks the expected character when supplied.
+It no longer accepts the last character announced in the global server log
+as evidence for whichever instance is being driven.
 
-What makes it reliable is that nothing waits for a duration. Two oracles say
-what the game is doing:
+The memory probe uses a unique request label under a per-installation lock.
+It verifies the known game executable before using version-specific offsets.
+Title byte 1 means title; zero is only world when a valid position advances.
+Otherwise the state is loading or unknown. Unknown never authorizes blind
+button presses. Menu/navigation loops propagate deadlines and cancellation;
+`game leave` succeeds immediately if already at title.
 
-- **The game itself.** `DS2_MemProbe` reads `mod 1614804 1`: the byte is 1
-  while the title screen's state machine is alive and 0 from the moment
-  loading starts. It is the only answer that works when the client is not
-  talking to the server at all, which is exactly when things go wrong.
-- **The server's log**, for the half the game will not admit to:
-  `has logged in as player` means the title screen is behind us, and
-  `Renaming connection to '<n>:<name>'` means that character is in the world.
-  The name is the only statement tying an instance to a save, so it is also
-  the check for "did the right character load".
-
-The log is written with box-drawing bytes that are not UTF-8, so `grep` calls
-it binary and prints its match to **stderr**. Use `grep -a`, or the harness.
+The server log uses bytes that are not UTF-8. Use the harness to read it.
+Log messages remain diagnostic evidence, not an instance identity oracle.
 
 **A server restart has one correct order**, which `reload` follows: quit to
 the title **first**, then restart, then come back in. The client asks for a
@@ -217,12 +268,21 @@ The cure is not an item, it is the save. The private server keeps its own
 <prefix>/drive_c/users/steamuser/AppData/Roaming/DarkSoulsII/<steamid>/DS2SOFS0000.ds3os
 ```
 
-`ds2os-dev save backup|restore|list` does exactly that, keeping snapshots in
-`~/.local/share/ds2os-dev/saves`. **Snapshot both before a co-op test and
-restore the guest afterwards.** `restore` refuses while the client is open
-unless given `--stop`, because a running game rewrites the save on its way out
-and the restore looks like it silently failed; and it snapshots what it is
-about to overwrite, so a wrong label is recoverable.
+`ds2os-dev save backup|restore|list` keeps snapshots in
+`~/.local/share/ds2os-dev/saves`. **Close the selected clients before backup**:
+a live copy is not a consistent fixture. Missing/ambiguous saves, incomplete
+`both` selections and reused labels fail. Restore takes the label returned in
+`save list --json`, without `contaN-` or `.ds3os`, and uses a temporary file
+plus rename after preserving a rescue copy. `restore --stop` closes the
+selected clients before replacing their saves.
+
+Prefer a scenario with `"baseline": "<label>"` for repeatable experiments.
+Start it with the selected clients stopped. It preserves originals, restores
+the baseline, executes the declared launch/actions/assertions, then stops the
+clients and restores originals even after action failure or cooperative
+cancellation. A cleanup error is a failed run with the rescue label recorded;
+SIGKILL or power loss still needs manual restore. Without `baseline`, a
+scenario leaves its effects in place.
 
 **The `.bak` files sitting next to the live saves are not what they look
 like.** The ones dated 9/9 are from the moment `EnableSeperateSaveFiles`
@@ -246,10 +306,11 @@ entry highlights and A does nothing, so `game leave` sits there pressing
 buttons until it times out. End the session first: a death, the timer, or
 `game stop`.
 
-`game focus <n>`, `pad --focus <n>` and `game shot` all mean the **instance**,
+`game focus <n>`, `pad seq --focus <n>` and `game shot` all mean the **instance**,
 resolved by the owning process. They used to index the window list, which put
 `shot-1.png` on either account depending on boot order, and sent presses to the
-wrong game.
+wrong game. There is now no positional fallback: an unresolved process
+returns `instance_unresolved`. Captures use `shot-<instance>-<unique-id>.png`.
 
 ### Two installations, two accounts
 
@@ -272,7 +333,8 @@ Linux side at the second client, but Proton overwrites
 `STEAM_COMPAT_CLIENT_INSTALL_PATH` with the installation it was launched
 from, and that is the path the Windows side of steamclient follows. The game
 logs in as the **first** account while every other sign looks right. The
-server now refuses the duplicate outright, and `game enter` explains it.
+server refuses the duplicate; `game enter` cannot pass without the expected
+account in the API and a locally confirmed world.
 
 The two instances have **separate game installations**:
 
@@ -416,11 +478,12 @@ crashed the game on save load.
 
 **A test that fails and a character that died look identical.** Both leave a
 log full of nothing, and telling them apart by screenshot afterwards has cost
-several afternoons. `ds2os-dev players` shows the death count, and
-`ds2os-dev watch` prints a line the moment it goes up; `goto` stops on its own
-when the character is moved by something other than the walk, because one burst
-cannot cover eight metres and a jump that large is a respawn. Run a watch beside
-anything scripted.
+several afternoons. DS2 does not implement the API death counter: `players`
+reports `null`, not zero. `watch` reads warp reasons from the injector logs;
+a death without a warp, or with that hook disabled, is not observable there.
+`goto` stops on large discontinuities, falling, stale telemetry or a changed
+process/boot. A jump is a discontinuity, not by itself proof of death. Run a
+watch beside scripted actions and keep unknown evidence inconclusive.
 
 The web UI's login is off until `WebUIServerUsername` and `WebUIServerPassword`
 are set in the server config, and the harness reads the credentials from that

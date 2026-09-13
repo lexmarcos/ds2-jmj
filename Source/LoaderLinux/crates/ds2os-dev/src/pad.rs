@@ -107,6 +107,15 @@ struct Pad {
 }
 
 impl Pad {
+    fn neutral(&mut self) -> Result<(), String> {
+        let mut events: Vec<_> = all_keys().iter().map(|key| InputEvent::new(EventType::KEY.0, key.0, 0)).collect();
+        for axis in [AbsoluteAxisCode::ABS_X, AbsoluteAxisCode::ABS_Y, AbsoluteAxisCode::ABS_RX,
+            AbsoluteAxisCode::ABS_RY, AbsoluteAxisCode::ABS_Z, AbsoluteAxisCode::ABS_RZ,
+            AbsoluteAxisCode::ABS_HAT0X, AbsoluteAxisCode::ABS_HAT0Y] {
+            events.push(InputEvent::new(EventType::ABSOLUTE.0, axis.0, 0));
+        }
+        self.emit(&events)
+    }
     fn emit(&mut self, events: &[InputEvent]) -> Result<(), String> {
         self.device.emit(events).map_err(|e| e.to_string())
     }
@@ -140,6 +149,7 @@ impl Pad {
             _ => return Err(format!("analógico desconhecido: {side}")),
         };
         let scale = |value: f32| (value.clamp(-1.0, 1.0) * STICK_RANGE as f32) as i32;
+        if !x.is_finite() || !y.is_finite() { return Err("analógico requer valores finitos".into()); }
 
         self.emit(&[
             InputEvent::new(EventType::ABSOLUTE.0, ax.0, scale(x)),
@@ -180,26 +190,39 @@ pub fn serve(index: u8) -> Result<(), String> {
         .map_err(|e| format!("não consegui abrir {}: {e}", socket.display()))?;
     println!("pad {index} pronto em {}", socket.display());
 
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    while crate::control::check().is_ok() {
+        let stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        };
         match handle(&mut pad, stream) {
             Ok(true) => break,
             Ok(false) => {}
             Err(error) => eprintln!("comando falhou: {error}"),
         }
+        let _ = pad.neutral();
     }
 
+    let _ = pad.neutral();
     let _ = std::fs::remove_file(&socket);
     Ok(())
 }
 
 /// Handles one connection. Returns true when asked to shut down.
 fn handle(pad: &mut Pad, stream: UnixStream) -> Result<bool, String> {
+    stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
     let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
     let reader = BufReader::new(stream);
 
     for line in reader.lines() {
         let line = line.map_err(|e| e.to_string())?;
+        validate(&line)?;
         let parts: Vec<&str> = line.split_whitespace().collect();
         let ms = |at: usize| -> Duration {
             Duration::from_millis(parts.get(at).and_then(|v| v.parse().ok()).unwrap_or(90))
@@ -211,6 +234,7 @@ fn handle(pad: &mut Pad, stream: UnixStream) -> Result<bool, String> {
                 return Ok(true);
             }
             ["ping", ..] => Ok(()),
+            ["neutral", ..] => pad.neutral(),
             ["press", button, ..] => pad.button(button, ms(2)),
             ["dpad", direction, ..] => pad.dpad(direction, ms(2)),
             ["trigger", side, ..] => pad.trigger(side, ms(2)),
@@ -237,10 +261,41 @@ fn handle(pad: &mut Pad, stream: UnixStream) -> Result<bool, String> {
 
 /// Sends one command to a running daemon.
 pub fn send(index: u8, command: &str) -> Result<String, String> {
+    send_until(index, command, Duration::from_secs(7))
+}
+
+pub fn validate(command: &str) -> Result<(), String> {
+    if command.contains(['\n', '\r']) { return Err("invalid_input: uma linha por comando".into()); }
+    let parts: Vec<_> = command.split_whitespace().collect();
+    let duration = match parts.as_slice() {
+        ["ping" | "quit" | "neutral"] => return Ok(()),
+        ["press", button, rest @ ..] if key_for(button).is_some() => rest,
+        ["dpad", "up" | "down" | "left" | "right", rest @ ..] => rest,
+        ["trigger", "lt" | "rt", rest @ ..] => rest,
+        ["stick", "l" | "r" | "left" | "right", x, y, rest @ ..]
+            if [x, y].iter().all(|v| v.parse::<f32>().is_ok_and(|n| n.is_finite() && (-1.0..=1.0).contains(&n))) => rest,
+        _ => return Err(format!("invalid_input: {command}")),
+    };
+    match duration {
+        [] => Ok(()),
+        [ms] if ms.parse::<u64>().is_ok_and(|n| (1..=5000).contains(&n)) => Ok(()),
+        _ => Err("invalid_duration: duração deve estar entre 1 e 5000 ms".into()),
+    }
+}
+
+pub fn send_until(index: u8, command: &str, timeout: Duration) -> Result<String, String> {
+    validate(command)?;
     let socket = socket_path(index);
     let stream = UnixStream::connect(&socket).map_err(|_| {
         format!("o pad {index} não está rodando; inicie com `ds2os-dev pad start`")
     })?;
+    exchange(stream, command, timeout)
+}
+
+fn exchange(stream: UnixStream, command: &str, timeout: Duration) -> Result<String, String> {
+    if timeout.is_zero() { return Err("timeout: pad".into()); }
+    stream.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
 
     let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
     writeln!(writer, "{command}").map_err(|e| e.to_string())?;
@@ -253,9 +308,34 @@ pub fn send(index: u8, command: &str) -> Result<String, String> {
     if let Some(error) = reply.strip_prefix("erro ") {
         return Err(error.to_owned());
     }
+    if reply != "ok" { return Err(format!("pad_protocol: resposta inválida {reply:?}")); }
     Ok(reply)
 }
 
 pub fn running(index: u8) -> bool {
-    send(index, "ping").is_ok()
+    send_until(index, "ping", Duration::from_millis(500)).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn malformed_and_unbounded_inputs_are_rejected_before_sending() {
+        for command in ["press a 999999", "press nope", "stick l NaN 0", "press a 0", "press a\nquit", "dpad up blah"] {
+            assert!(validate(command).is_err(), "{command}");
+        }
+        assert!(validate("stick l -0.2 1 1200").is_ok());
+    }
+    #[test]
+    fn closed_socket_is_not_an_acknowledgement() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let worker = std::thread::spawn(move || { let mut b = [0; 64]; use std::io::Read; let _ = server.read(&mut b); });
+        assert!(exchange(client, "ping", Duration::from_millis(100)).is_err());
+        worker.join().unwrap();
+    }
+    #[test]
+    fn silent_peer_has_a_deadline() {
+        let (client, _server) = UnixStream::pair().unwrap();
+        assert!(exchange(client, "ping", Duration::from_millis(20)).is_err());
+    }
 }

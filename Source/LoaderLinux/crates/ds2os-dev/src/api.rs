@@ -22,30 +22,36 @@ use std::process::Command;
 use crate::env::ServerPaths;
 
 /// One player, as the server sees them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Player {
     pub name: String,
     pub player_id: u64,
     pub steam_id: String,
     pub soul_level: i64,
-    pub souls: i64,
+    pub souls: Option<i64>,
     pub soul_memory: i64,
-    pub death_count: i64,
-    pub multiplay_count: i64,
+    pub death_count: Option<i64>,
+    pub multiplay_count: Option<i64>,
     pub covenant: String,
     pub status: String,
     pub location: String,
     pub play_time: String,
 }
 
-fn curl(args: &[&str]) -> Result<String, String> {
+fn curl(args: &[&str], timeout: std::time::Duration) -> Result<String, String> {
     let output = Command::new("curl")
-        .arg("-s")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail-with-body")
         .arg("-m")
-        .arg("5")
+        .arg(format!("{:.3}", timeout.min(std::time::Duration::from_secs(5)).as_secs_f64().max(0.001)))
         .args(args)
         .output()
         .map_err(|e| format!("não consegui rodar curl: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("api_unavailable: curl {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -74,14 +80,14 @@ fn credentials(server: &ServerPaths) -> Result<(String, String), String> {
     Ok((user.to_owned(), pass.to_owned()))
 }
 
-fn token(server: &ServerPaths, port: u16) -> Result<String, String> {
+fn token(server: &ServerPaths, port: u16, timeout: std::time::Duration) -> Result<String, String> {
     let (user, pass) = credentials(server)?;
     let body = serde_json::json!({ "username": user, "password": pass }).to_string();
     let url = format!("http://127.0.0.1:{port}/auth");
 
     let reply = curl(&[
         "-X", "POST", &url, "-H", "Content-Type: application/json", "-d", &body,
-    ])?;
+    ], timeout)?;
 
     let json: serde_json::Value = serde_json::from_str(&reply)
         .map_err(|_| format!("o servidor não respondeu json ao login: {}", reply.trim()))?;
@@ -107,9 +113,14 @@ fn number(value: &serde_json::Value, key: &str) -> i64 {
 
 /// Everyone the server currently has connected.
 pub fn players(server: &ServerPaths, port: u16) -> Result<Vec<Player>, String> {
-    let token = token(server, port)?;
+    players_until(server, port, std::time::Duration::from_secs(10))
+}
+
+pub fn players_until(server: &ServerPaths, port: u16, timeout: std::time::Duration) -> Result<Vec<Player>, String> {
+    let deadline = crate::control::Deadline::after(timeout);
+    let token = token(server, port, deadline.remaining()?)?;
     let url = format!("http://127.0.0.1:{port}/players");
-    let reply = curl(&[&url, "-H", &format!("Auth-Token: {token}")])?;
+    let reply = curl(&[&url, "-H", &format!("Auth-Token: {token}")], deadline.remaining()?)?;
 
     let json: serde_json::Value = serde_json::from_str(&reply)
         .map_err(|_| format!("o servidor não respondeu json: {}", reply.trim()))?;
@@ -126,10 +137,10 @@ pub fn players(server: &ServerPaths, port: u16) -> Result<Vec<Player>, String> {
             player_id: p.get("playerId").and_then(|v| v.as_u64()).unwrap_or(0),
             steam_id: text(p, "steamId"),
             soul_level: number(p, "soulLevel"),
-            souls: number(p, "souls"),
+            souls: None,
             soul_memory: number(p, "soulMemory"),
-            death_count: number(p, "deathCount"),
-            multiplay_count: number(p, "multiplayCount"),
+            death_count: None,
+            multiplay_count: None,
             covenant: text(p, "covenant"),
             status: text(p, "status"),
             location: text(p, "location"),
