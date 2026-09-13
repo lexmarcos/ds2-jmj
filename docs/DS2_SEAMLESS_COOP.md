@@ -1048,6 +1048,11 @@ host, o personagem do convidado é criado na sequência `0xd → 0xe
 
 ### A morte tem um ponto só
 
+> **Corrigido pela medição de 13/09** (seção "A morte medida, e segurada", no fim
+> deste documento): o byte é o ponto certo, mas quem o consome para o jogador
+> local é o slot **`+0x20`**, `FUN_14013c720`; o `+0x10` abaixo nunca foi chamado
+> para ele. E `+0x759` tem dez escritores, não um.
+
 **[reconferido]** `FUN_14013c3b0` (slot `+0x10` de `ChrDeadActionCtrl`, vftable
 `0x1410bf308`) sai se `*(chr+0xb8)+0x5fc != 0`, sai se `+0x759 == 0`, copia os
 parâmetros da morte de `+0x75c..+0x76d` e só então chama `FUN_14013d430`. Segundo
@@ -1174,3 +1179,129 @@ Duas notas. O registro só muda quando se interage com uma fogueira: depois do
 teleporte para a Catedral ele continuou em `0x7ba7`. E a lista é **do mapa
 carregado** — uma fogueira de outro mapa não está nela, que é o limite já
 conhecido da abordagem.
+
+## A morte medida, e segurada (13/09)
+
+O passo 3 do plano do M2. Medido solo com o Samuel, sem sessão.
+
+### Uma morte de verdade, de fora
+
+Antes de escrever qualquer hook, com a DLL que já rodava: o HP do Samuel foi
+zerado pelo `DS2_MemProbe` (`PlayerCtrl+0x168 = 0`) com três breakpoints do
+tracer (`FUN_14013d430`, `FUN_140416960`, `FUN_14013d560`) e a vigia de escrita
+em `*(chr+0xb8)+0x759`. Zerar o HP mata de verdade, pelo caminho comum: no mesmo
+segundo o servidor recebeu `RequestNotifyKillEnemy` e `RequestNotifyDeath`, e
+6 s depois veio `warp motivo=1 ... ponto=00007ba7`, saindo de `FUN_14044fde0`.
+
+| o que | onde |
+| --- | --- |
+| liga `+0x759` | `+0x16a695`, em `FUN_14016a650`, chamado pela atualização do jogador (`FUN_140315520`) |
+| apaga `+0x759` | `+0x13cb5b`, em `FUN_14013c720` |
+| `FUN_14013d430` (o aviso da morte) | chamado de `+0x13c938`, em `FUN_14013c720` |
+| `FUN_14013d560` (almas, `RequestNotifyKillEnemy`) | chamado de `+0x13c97a`, em `FUN_14013c720` |
+
+`FUN_14013c720` é o slot **`+0x20`** do `ChrDeadActionCtrl` e roda uma vez por
+quadro para cada personagem, chamado de `FUN_14030eb60`. Com breakpoints nos
+dois slots, só ele disparou; o `+0x10` (`FUN_14013c3b0`) nunca foi chamado para
+o jogador local. Depois de uma recarga ele aparece para dois personagens que não
+são o jogador, chamado de `+0x30ea2f`.
+
+### A fonte do HP, e a máquina do controlador
+
+`FUN_14016a650` liga o byte quando `chr+0x168 < 1`, o bit 15 de `+0x4c8` está
+limpo e o byte ainda está zerado, e preenche `+0x75c` (um handle do matador),
+`+0x760` (flags que suprimem consequências isoladas), `+0x768 = 10` (a causa).
+Ela roda todo quadro: **apagar o byte sem devolver o HP só adia a morte um
+quadro.**
+
+A máquina de `FUN_14013c720`, no byte `ctrl+0x10`:
+
+- **0, vivo.** Se `+0x5fc == 0`, chama `FUN_14013cc30` (as fontes por flag:
+  `*(chr+0xd8)`, `*(chr+0xd0)`, evento de animação `0x19`). Com o byte ligado:
+  copia os parâmetros, chama `FUN_14013d9f0`, **apaga o byte**, busca a linha de
+  tempos (`FUN_14013d880`, guardada em `+0x70`), chama `FUN_14013d250` (avisa o
+  gerenciador em `ctx+0x40` e o registro de fogueira em `ctx+0x70`) e
+  `FUN_14013cec0`, e vai para 2 (ou 1, se `+0x5d0`).
+- **2, morrendo.** Soma o tempo em `+0x58` e dispara cada consequência uma vez
+  quando o tempo passa do limiar da linha; as travas são `+0x14..+0x4c`. Depois
+  da morte medida estavam todas em 1, com `+0x58 ≈ 7,49 s`.
+- O rabo liga os bits `0x4000`/`0x8000` de `+0x4c8` fora do estado 0, e é o
+  `0x8000` que cala `FUN_14016a650` enquanto o personagem morre.
+
+Uma segunda porta, que não passa pelo byte: `FUN_14013c500(ctrl, tipo)`,
+alcançado por um salto de `FUN_14030eb20` (virtual em cinco vftables). Com tipo
+1 ou 2 ele dispara todas as consequências de uma vez e estaciona o controlador
+no estado 3.
+
+`+0x759` recebe `1` em dez lugares (varredura do `.text` inteiro por
+`0x759(`): `+0x13aae5` (dano letal, `FUN_14013a9b0`), os três de
+`FUN_14013cc30`, `+0x145f3f` (causa `0x6e`), `+0x16a695` (HP), `+0x31b753`,
+`+0x37046b` (`FUN_1403703e0`, morte ao aterrissar, causa 10), `+0x372ed7`
+(`FUN_140372e20`, morte por queda, causa `0x5a`) e `+0xd1c7f8`. Há ainda uma
+cópia do bloco inteiro de uma estrutura para outra em `+0x8d615`, que pode ser
+replicação. O hook fica no consumidor, e não em cada fonte. Duas ressalvas: a
+lista vem de uma varredura por padrão, que não vê deslocamento dobrado num
+registrador; e o byte tem um terceiro leitor, `+0x13683a` em `FUN_140136570`,
+que não foi lido.
+
+### O hook: `DS2_DeathInterceptHook`
+
+Desvia `FUN_14013c720` e só age quando `*(ctrl+8)` é o personagem local
+(`ctx+0xd0`). Os 15 controladores vivos incluem inimigos, e cancelar sem esse
+filtro os deixaria imortais. Com o controlador no estado 0, `+0x5fc == 0` e o
+byte já ligado **antes** da chamada, ele:
+
+- em `observe` (o padrão), escreve a morte e deixa passar;
+- em `cancel`, apaga o byte, devolve o HP para `chr+0x174` (o máximo efetivo,
+  já descontado o hollow; `+0x170` é a base), limpa `0x4000|0x8000` de `+0x4c8`
+  e **não chama o original** naquele quadro.
+
+Se o estado sair de 0 sem o byte antes, o log diz `SEM +0x759 ANTES`: é uma
+morte das fontes de `FUN_14013cc30`, que ligam o byte dentro da chamada e
+passariam pela checagem. `FUN_14013c500` e o slot `+0x10` são só registrados.
+`DS2_Death.req` troca o modo sem relançar (`observe`, `cancel`, `status`), e o
+log é `DS2_Death.log`.
+
+### O resultado
+
+**Morte por HP, cancelada.** Com `cancel`, o HP zerado voltou para 869 no mesmo
+quadro (`morte CANCELADA #1 hp=0 -> 869 ... causa=10`), o controlador ficou no
+estado 0, `+0x759` e `+0x4c8` zerados, nenhum warp no `DS2_Seamless.log`, e o
+personagem andou. Num segundo cancelamento ele foi 2,5 m em direção à escada,
+com `y` constante e câmera normal. O controle positivo do servidor veio depois:
+a primeira morte deixada passar nessa mesma conexão (em `observe`, 13:42:49)
+imprimiu `First ... RequestNotifyDeath`, então nenhuma das anteriores tinha
+chegado lá.
+
+**Morte por queda: o byte é segurado, o resto não.** O primeiro teste de
+controle levou o Samuel para trás e para fora da plataforma de Heide. Ele caiu
+para `y = -3000`, e:
+
+1. `FUN_140372e20` (a morte por queda, chamada pelo controle de queda
+   `FUN_140372620` quando o tempo no ar passa do limiar) zerou o HP, ligou o bit
+   **`0x200` de `*(chr+0xb8)+0x4c0`** e o byte com causa `0x5a` e `+0x76d = 2`.
+   O hook cancelou (#2).
+2. Enquanto ele caía, o HP voltava a zero todo quadro, e o hook cancelou **2956
+   vezes em 100 s**, uma por quadro, sem nada chegar ao servidor. (O servidor
+   parou de receber posição: o `Location` ficou em `6.2 -18.7 211.4`, a beira.)
+3. O teleporte do passo 1 para o ponto de nascimento da fogueira `0x7ba7`,
+   escrevendo só XYZ, **parou o loop**: o contador ficou parado e o servidor
+   voltou a dizer `position 6.2 -18.5 209.1`.
+4. Mas o personagem ficou **sem controle e com a câmera parada** no ponto da
+   queda. O thread do jogo estava vivo (breakpoint no chamador por quadro
+   disparou na hora), START abriu o menu, e o analógico não moveu nada.
+   Apagar o bit `0x200` não devolveu o controle.
+
+A saída foi voltar para `observe` e zerar o HP: morte comum, warp, recarga, e
+ele de pé na fogueira de novo.
+
+### O que fica para o passo 5
+
+- A morte por HP está resolvida no mesmo desvio: cancelar e devolver o HP deixa
+  o personagem controlável sem carregamento.
+- **A morte por queda precisa de mais que o byte.** O controle de queda deixa
+  estado de ação e de câmera para trás, e esse estado não está só no bit
+  `0x200`. O próximo passo é reproduzir (andar para trás 1,2 s na fogueira de
+  Heide com `cancel` ligado), teleportar e comparar a memória do `PlayerCtrl` e
+  dos subobjetos contra o estado normal.
+- Das dez fontes de `+0x759`, só duas foram exercitadas: HP e queda.

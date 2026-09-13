@@ -66,6 +66,7 @@ namespace
     constexpr size_t kHpMax = 0x174;           // after hollowing; +0x170 is the base
 
     // *(chr+0xb8)
+    constexpr size_t kFallBits = 0x4c0;        // 0x200: fell to death (FUN_140372e20)
     constexpr size_t kStateBits = 0x4c8;
     constexpr size_t kDeferred = 0x5fc;        // nonzero: the controller does not look
     constexpr size_t kPending = 0x759;
@@ -101,6 +102,8 @@ namespace
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
     uint8_t s_local_state = 0xff;
+    uint64_t s_streak = 0;
+    ULONGLONG s_last_cancel_ms = 0;
 
     struct Watched
     {
@@ -153,13 +156,16 @@ namespace
     // The parameters the controller would have copied: who killed (a handle
     // FUN_14017b4f0 resolves), the flags that suppress single consequences,
     // and the cause that picks the timing row (10 for HP).
+    // Cause 90 comes with bit 0x200 of +0x4c0, and that death leaves more
+    // behind than the byte.
     std::string DescribeParams(const uint8_t* Data)
     {
         const uint8_t* P = Data + kParams;
-        return StringFormat("matador=%08x flags=%08x causa=%u bruto=%s",
+        return StringFormat("matador=%08x flags=%08x causa=%u +0x4c0=%016llx bruto=%s",
             *(const uint32_t*)P,
             *(const uint32_t*)(P + 0x04),
             *(const uint32_t*)(P + 0x0c),
+            (unsigned long long)*(const uint64_t*)(Data + kFallBits),
             Hex(P, kParamsLength).c_str());
     }
 
@@ -209,12 +215,22 @@ namespace
                 *(uint64_t*)(Data + kStateBits) &= ~kDyingBits;
 
                 // A cancel on every frame means something keeps killing and
-                // the HP did not hold; say so without filling the disk.
+                // the HP did not hold; say so without filling the disk. The
+                // limit is per run of consecutive cancels, so the first cancel
+                // after a long one is still written down.
                 const uint64_t Count = ++s_cancelled;
-                if (Count <= 20 || Count % 300 == 0)
+                const ULONGLONG Now = GetTickCount64();
+                if (Now - s_last_cancel_ms > 1000)
                 {
-                    Append(StringFormat("%s  morte CANCELADA #%llu hp=%d -> %d %s\n",
-                        Clock().c_str(), (unsigned long long)Count, Hp, Max, Params.c_str()));
+                    s_streak = 0;
+                }
+                s_last_cancel_ms = Now;
+                const uint64_t InStreak = ++s_streak;
+                if (InStreak <= 20 || InStreak % 300 == 0)
+                {
+                    Append(StringFormat("%s  morte CANCELADA #%llu (seguida %llu) hp=%d -> %d %s\n",
+                        Clock().c_str(), (unsigned long long)Count, (unsigned long long)InStreak,
+                        Hp, Max, Params.c_str()));
                 }
                 return;
             }

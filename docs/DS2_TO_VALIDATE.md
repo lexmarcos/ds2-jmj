@@ -240,6 +240,27 @@ acabando. Em aberto:
   medições foram feitas com a placa no mesmo ponto da fogueira, então a
   troca está provada no pedido, não na tela.
 
+### A morte segurada (`DS2_DeathInterceptHook`)
+
+Medido só solo, só com o Samuel, em Heide, em 13/09
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A morte medida, e segurada").
+Em aberto:
+
+- **Só duas das dez fontes de `+0x759` foram exercitadas**: HP zerado e queda.
+  Dano letal de inimigo (`FUN_14013a9b0`), as três de `FUN_14013cc30` (entre
+  elas o evento de animação `0x19`, que agarrões usam), `+0x145f3f` (causa
+  `0x6e`), `+0x31b753`, `+0x37046b` (aterrissagem) e `+0xd1c7f8` não. As de
+  `FUN_14013cc30` ligam o byte **dentro** do consumidor e passariam pela
+  checagem; o log diz `SEM +0x759 ANTES` quando isso acontecer.
+- **A morte instantânea** (`FUN_14013c500`, tipos 1 e 2) é só registrada. Não
+  apareceu nenhuma vez: nem na queda nem na morte por HP.
+- **Um personagem de pé com HP zerado por um quadro**: o hook devolve o HP no
+  mesmo quadro em que o byte aparece, mas o que roda entre `FUN_14016a650` e o
+  controlador naquele quadro vê HP 0. Ninguém olhou o que isso dispara.
+- **Com sessão, nada.** Se o outro lado vê a morte pela replicação e não pelo
+  aviso, cancelar só no cliente que morre não basta. A cópia do bloco de morte
+  em `+0x8d615` é a candidata a ler.
+
 ## O login que resolve o hostname oficial, depois de um reboot
 
 Medido em 13/09, no primeiro lançamento depois de reiniciar a máquina: o jogo

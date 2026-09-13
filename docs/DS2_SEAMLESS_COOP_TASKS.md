@@ -151,11 +151,12 @@ recarregue.
 
 ### Próximo: não deixar a morte virar morte
 
-Todas as fontes de morte convergem num byte, `*(chr+0xb8)+0x759`, e ele tem um
-consumidor só: `FUN_14013c3b0`, slot `+0x10` de `ChrDeadActionCtrl`. Interceptar
-ali — cancelar a morte, restaurar o HP, pôr o personagem 1,1 m à frente da
-fogueira **sem warp** e aplicar as consequências à mão — não toca em sessão
-nenhuma, e é o mesmo hook no host e no convidado.
+Todas as fontes de morte medidas convergem num byte, `*(chr+0xb8)+0x759`, e o
+jogador local o consome em `FUN_14013c720`, slot `+0x20` de `ChrDeadActionCtrl`
+(medido em 13/09; o `+0x10` que o parecer apontava nunca roda para ele).
+Interceptar ali — cancelar a morte, restaurar o HP, pôr o personagem 1,1 m à
+frente da fogueira **sem warp** e aplicar as consequências à mão — não toca em
+sessão nenhuma, e é o mesmo hook no host e no convidado.
 
 Em ordem, cada passo com o seu sinal positivo. Os quatro primeiros são solo,
 sem sessão, e não custam desconexão ilegal:
@@ -171,15 +172,26 @@ sem sessão, e não custam desconexão ilegal:
    de cada uma é `**(*(*(obj+0xb8)+0x20)+0xe0)`, e o nó com o id do registro
    (`0x7ba7`) é o que tem o ponto de nascimento a 0,000 m de onde o jogo pôs o
    Samuel. A receita completa está em DS2_SEAMLESS_COOP.md.
-3. **Interceptar a morte.** Detour em `FUN_14013c3b0`: primeiro só registrar
-   `+0x759`, `+0x75c..+0x76d`, `+0x5fc`; depois cancelar. *Positivo:*
-   personagem controlável e nenhum `RequestNotifyDeath` no servidor.
-4. **HP.** Achado em 13/09: `PlayerCtrl+0x168` atual, `+0x16c` mínimo
-   (-99999), `+0x170` máximo — 869/914 no Samuel. É também o "portão" que
-   barrava o warp de chegada nas tentativas de 12/09 (`HP > 0`). Falta
-   restaurá-lo no passo 3 e ver se o personagem sai do estado de morto.
+3. **Interceptar a morte.** — **feito em 13/09.** `DS2_DeathInterceptHook`
+   desvia `FUN_14013c720` só para o personagem local; `DS2_Death.req` escolhe
+   `observe` (padrão) ou `cancel`. Com o HP zerado e `cancel`, a morte não
+   acontece: HP de volta no mesmo quadro, controlador no estado 0, nenhum warp,
+   e o personagem andou 2,5 m. A primeira morte deixada passar na mesma conexão
+   imprimiu `First ... RequestNotifyDeath`, o controle de que as 2956
+   canceladas antes dela não chegaram ao servidor. Detalhes em DS2_SEAMLESS_COOP.md, "A morte medida, e
+   segurada".
+4. **HP.** — **feito junto com o 3.** `PlayerCtrl+0x168` atual, `+0x16c`
+   mínimo (-99999), `+0x170` máximo base, **`+0x174` máximo efetivo** (já com o
+   desconto do hollow: 915 → 869 → 823 em duas mortes). O cancelamento devolve
+   `+0x174`; sem devolver, `FUN_14016a650` religa o byte no quadro seguinte.
 5. **Juntar solo:** morrer → de pé na fogueira, sem carregamento. Então almas e
-   hollow à mão.
+   hollow à mão. **A morte por queda precisa de mais que o byte** (medido em
+   13/09): o controle de queda (`FUN_140372620` → `FUN_140372e20`, causa `0x5a`)
+   zera o HP todo quadro enquanto o personagem cai — o hook cancelou 2956 vezes
+   em 100 s —, e o teleporte para a fogueira para o loop mas deixa o
+   personagem sem controle e com a câmera parada. O bit `0x200` de
+   `*(chr+0xb8)+0x4c0`, que a queda liga, não é a trava toda. Reproduzir com
+   `cancel` ligado e comparar a memória do personagem contra o estado normal.
 6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum
    `RequestNotifyDeath` nem `RequestNotifyLeaveGuestPlayer` em 60 s, host em
    `0x10`, e o host **vê** o fantasma na fogueira. Depois o simétrico: o host

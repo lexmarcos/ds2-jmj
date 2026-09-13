@@ -35,6 +35,13 @@
 //             back, so the game never learns there was a death
 //   status    write the counters to the log
 //
+// Cancelling is only half of a respawn. A death by falling
+// (`FUN_140372e20`, cause 0x5a) zeroes the HP on every frame the character
+// is still in the air, so `cancel` holds it once a frame for as long as the
+// fall lasts, and moving the character out of the air stops that but leaves it
+// without control and with the camera parked where it fell. To get out of
+// that, switch back to `observe` and let a death through.
+//
 // `observe` is the default. Two more doors are only watched, never held:
 // `FUN_14013c500`, the instant death that fires every consequence at once and
 // never touches `+0x759`, and `FUN_14013c3b0`, which may be how a remote
