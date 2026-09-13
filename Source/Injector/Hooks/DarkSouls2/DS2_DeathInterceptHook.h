@@ -35,12 +35,17 @@
 //             back, so the game never learns there was a death
 //   status    write the counters to the log
 //
-// Cancelling is only half of a respawn. A death by falling
-// (`FUN_140372e20`, cause 0x5a) zeroes the HP on every frame the character
-// is still in the air, so `cancel` holds it once a frame for as long as the
-// fall lasts, and moving the character out of the air stops that but leaves it
-// without control and with the camera parked where it fell. To get out of
-// that, switch back to `observe` and let a death through.
+// A death by falling needs more than the byte. Touching a death volume of the
+// map (`FUN_14036fdf0`) sets bit 51 of `*(chr+0xb8)+0x4c0` and asks for
+// FallDeadCameraOperator through `CameraManager+0x450`; the fall controller
+// then kills (`FUN_140372e20`, cause 0x5a, bit 9) on every frame the character
+// is in the air. So when `cancel` refuses a death that carries those marks it
+// also moves the character to the spawn point of the bonfire in the respawn
+// record (or back to its last position on the ground, if that bonfire is not
+// in the loaded map), waits for the fall controller to say it is down, and
+// only then clears the bits and the camera byte - the camera manager pops its
+// own request. Without the camera, the stick looked dead: movement is relative
+// to a camera that was looking up at the character from where it fell.
 //
 // `observe` is the default. Two more doors are only watched, never held:
 // `FUN_14013c500`, the instant death that fires every consequence at once and

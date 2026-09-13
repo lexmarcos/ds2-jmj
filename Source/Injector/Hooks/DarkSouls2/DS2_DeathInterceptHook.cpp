@@ -66,7 +66,7 @@ namespace
     constexpr size_t kHpMax = 0x174;           // after hollowing; +0x170 is the base
 
     // *(chr+0xb8)
-    constexpr size_t kFallBits = 0x4c0;        // 0x200: fell to death (FUN_140372e20)
+    constexpr size_t kFallBits = 0x4c0;
     constexpr size_t kStateBits = 0x4c8;
     constexpr size_t kDeferred = 0x5fc;        // nonzero: the controller does not look
     constexpr size_t kPending = 0x759;
@@ -75,6 +75,56 @@ namespace
 
     // What the controller's own tail keeps clear while it sits in state 0.
     constexpr uint64_t kDyingBits = 0x4000 | 0x8000;
+
+    // What a death by falling leaves in +0x4c0, none of it undone by the byte:
+    //   bit 9   FUN_140372e20 and the landing damage: this character fell dead
+    //   bit 51  FUN_14036fdf0, touching a death volume of the map (zone kinds
+    //           1, 2, 5, 6); while it stands, FUN_140372620 calls the fall
+    //           death on every frame the character is off the ground
+    //   bit 52  the same, for zone kinds 3, 4, 7, 8
+    constexpr uint64_t kFallFamily = 0x200 | 0x8000000000000 | 0x10000000000000;
+
+    // The same touch asks the camera for FallDeadCameraOperator: a request of
+    // type 7 sets CameraManager+0x450, and the manager's update pushes a type 5
+    // request while that byte is set and pops it, by the id in +0x454, once it
+    // is not. Nothing clears it short of a reload, and with the camera looking
+    // at the character from where it fell, the stick moves it next to nothing
+    // - which read as a lock on the controls, and was only the camera.
+    constexpr size_t kCameraManager = 0x20;            // ctx+0x20
+    constexpr size_t kCameraManagerVftable = 0x10f45a8;
+    constexpr size_t kCameraFallWanted = 0x450;        // byte
+
+    // The step-1 teleport (docs/DS2_SEAMLESS_COOP.md): the game's own copies,
+    // the velocity tracker, and the Havok body, which is the one that counts.
+    constexpr size_t kActions = 0xe0;                  // chr+0xe0, PlayerActionCtrl
+    constexpr size_t kActionsFall = 0xb0;              // its fall controller (FUN_140372620)
+    constexpr size_t kFallInAir = 0x08;                // byte
+    constexpr size_t kFallGrounded = 0x20;             // last position on the ground
+    constexpr size_t kMotion = 0xf8;
+    constexpr size_t kPhysics = 0x100;
+    constexpr size_t kPhysicsProxy = 0x320;            // hkpCharacterRigidBody
+    constexpr size_t kProxyBody = 0x20;                // hkpRigidBody
+    constexpr size_t kRigidBodyVftable = 0x1126578;
+    constexpr float kBodyAboveFeet = 0.05f;
+
+    // The last bonfire, found the way the respawn finds it (step 2).
+    constexpr size_t kBonfireRecord = 0x70;            // ctx+0x70
+    constexpr size_t kRecordId = 0x16c;
+    constexpr size_t kRecordList = 0x58;
+    constexpr size_t kListFirst = 0x08;
+    constexpr size_t kNodeObject = 0x08;
+    constexpr size_t kNodeNext = 0x60;
+    constexpr size_t kObjectKind = 0xa2;               // 1 or 5: the short component path
+    constexpr size_t kObjectComponents = 0xb8;
+    constexpr size_t kComponentsReaction = 0x20;       // MapObjReactionComponent
+    constexpr size_t kReactionId = 0xe0;
+    constexpr size_t kObjectAxisZ = 0x60;
+    constexpr size_t kObjectTranslation = 0x70;
+    constexpr float kSpawnBehind = 1.1f;
+
+    // Frames to wait for the fall controller to say the character is down.
+    constexpr uint32_t kRecoveryRetryFrames = 30;
+    constexpr uint32_t kRecoveryGiveUpFrames = 300;
 
     enum Mode : int
     {
@@ -98,12 +148,23 @@ namespace
     std::atomic<uint64_t> s_unexplained{ 0 };
     std::atomic<uint64_t> s_instant{ 0 };
     std::atomic<uint64_t> s_replica_calls{ 0 };
+    std::atomic<uint64_t> s_recovered{ 0 };
+    std::atomic<uint64_t> s_recovery_failed{ 0 };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
     uint8_t s_local_state = 0xff;
     uint64_t s_streak = 0;
     ULONGLONG s_last_cancel_ms = 0;
+
+    struct Recovery
+    {
+        bool Active = false;
+        uint32_t Frames = 0;
+        float Target[3] = {};
+        const char* Where = "";
+    };
+    Recovery s_recovery;
 
     struct Watched
     {
@@ -153,6 +214,231 @@ namespace
         return Context == 0 ? nullptr : *(void**)(Context + kLocalCharacter);
     }
 
+    // Guarded access for everything past the character itself: map objects,
+    // the camera and the Havok body can all be gone mid-load. Functions of
+    // their own, because MSVC refuses __try where objects need unwinding.
+    bool ReadBytes(uintptr_t Address, void* Out, size_t Length)
+    {
+        __try
+        {
+            memcpy(Out, (const void*)Address, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool WriteBytes(uintptr_t Address, const void* In, size_t Length)
+    {
+        __try
+        {
+            memcpy((void*)Address, In, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool ReadPointer(uintptr_t Address, uintptr_t& Out)
+    {
+        Out = 0;
+        return ReadBytes(Address, &Out, sizeof(Out)) && Out != 0;
+    }
+
+    uintptr_t CameraManager()
+    {
+        uintptr_t Context = 0, Manager = 0, Vftable = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kCameraManager, Manager) ||
+            !ReadPointer(Manager, Vftable) || Vftable != s_base + kCameraManagerVftable)
+        {
+            return 0;
+        }
+        return Manager;
+    }
+
+    bool CameraWantsFallDead()
+    {
+        const uintptr_t Manager = CameraManager();
+        uint8_t Wanted = 0;
+        return Manager != 0 && ReadBytes(Manager + kCameraFallWanted, &Wanted, 1) && Wanted != 0;
+    }
+
+    uintptr_t FallController(uint8_t* Chr)
+    {
+        uintptr_t Actions = 0, Fall = 0;
+        return ReadPointer((uintptr_t)Chr + kActions, Actions) && ReadPointer(Actions + kActionsFall, Fall) ? Fall : 0;
+    }
+
+    // The spawn point of the bonfire in the respawn record, if that bonfire is
+    // in the loaded map: translation - 1.1 * Z axis of its map object, which is
+    // where the game itself put the character (0.000 m, measured on 13/09).
+    bool FindBonfireSpawn(float Out[3], uint32_t& Id)
+    {
+        uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
+        Id = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kBonfireRecord, Record) ||
+            !ReadBytes(Record + kRecordId, &Id, sizeof(Id)) ||
+            !ReadPointer(Record + kRecordList, List) ||
+            !ReadPointer(List + kListFirst, Node))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < 256 && Node != 0; ++i)
+        {
+            uintptr_t Object = 0, Components = 0, Reaction = 0, IdAt = 0;
+            uint8_t Kind = 0;
+            uint32_t NodeId = 0;
+            if (ReadPointer(Node + kNodeObject, Object) &&
+                ReadBytes(Object + kObjectKind, &Kind, 1) && (Kind == 1 || Kind == 5) &&
+                ReadPointer(Object + kObjectComponents, Components) &&
+                ReadPointer(Components + kComponentsReaction, Reaction) &&
+                ReadPointer(Reaction + kReactionId, IdAt) &&
+                ReadBytes(IdAt, &NodeId, sizeof(NodeId)) && NodeId == Id)
+            {
+                float Axis[4] = {}, Translation[4] = {};
+                if (!ReadBytes(Object + kObjectAxisZ, Axis, sizeof(Axis)) ||
+                    !ReadBytes(Object + kObjectTranslation, Translation, sizeof(Translation)))
+                {
+                    return false;
+                }
+                for (int k = 0; k < 3; ++k)
+                {
+                    Out[k] = Translation[k] - kSpawnBehind * Axis[k];
+                }
+                return true;
+            }
+
+            uintptr_t Next = 0;
+            if (!ReadBytes(Node + kNodeNext, &Next, sizeof(Next)))
+            {
+                break;
+            }
+            Node = Next;
+        }
+        return false;
+    }
+
+    // XYZ only, every w left alone; the order is the one that worked by hand.
+    bool TeleportLocal(uint8_t* Chr, const float Target[3])
+    {
+        uintptr_t Motion = 0, Physics = 0, Proxy = 0, Body = 0, Vftable = 0;
+        if (!ReadPointer((uintptr_t)Chr + kMotion, Motion) ||
+            !ReadPointer((uintptr_t)Chr + kPhysics, Physics) ||
+            !ReadPointer(Physics + kPhysicsProxy, Proxy) ||
+            !ReadPointer(Proxy + kProxyBody, Body) ||
+            !ReadPointer(Body, Vftable) || Vftable != s_base + kRigidBodyVftable)
+        {
+            return false;
+        }
+
+        const float Feet[3] = { Target[0], Target[1], Target[2] };
+        const float Centre[3] = { Target[0], Target[1] + kBodyAboveFeet, Target[2] };
+        const uint8_t Still[16] = {};
+        return WriteBytes((uintptr_t)Chr + 0x90, Feet, sizeof(Feet)) &&
+            WriteBytes((uintptr_t)Chr + 0xa0, Feet, sizeof(Feet)) &&
+            WriteBytes(Physics + 0x80, Feet, sizeof(Feet)) &&
+            WriteBytes(Motion + 0x50, Feet, sizeof(Feet)) &&
+            WriteBytes(Physics + 0x60, Still, sizeof(Still)) &&
+            WriteBytes(Physics + 0x70, Still, sizeof(Still)) &&
+            WriteBytes(Body + 0x250, Centre, sizeof(Centre)) &&
+            WriteBytes(Body + 0x260, Centre, sizeof(Centre)) &&
+            WriteBytes(Body + 0x1b0, Centre, sizeof(Centre)) &&
+            WriteBytes(Body + 0x1c0, Centre, sizeof(Centre)) &&
+            WriteBytes(Body + 0x1a0, Centre, sizeof(Centre)) &&
+            WriteBytes(Physics + 0x1c0, Centre, sizeof(Centre));
+    }
+
+    // A fall that was refused still leaves the character in the air, in a
+    // death volume, with the fall camera. Out of the air first; the flags only
+    // once the fall controller agrees the character is down, or the next frame
+    // in the air is another fall death.
+    void StartRecovery(uint8_t* Chr)
+    {
+        Recovery Next;
+        Next.Active = true;
+        uint32_t Id = 0;
+        if (FindBonfireSpawn(Next.Target, Id))
+        {
+            Next.Where = "fogueira do registro";
+        }
+        else
+        {
+            const uintptr_t Fall = FallController(Chr);
+            if (Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
+            {
+                ++s_recovery_failed;
+                Append(StringFormat("%s  queda: sem fogueira %08x no mapa e sem a ultima posicao no chao; nada a fazer\n",
+                    Clock().c_str(), Id));
+                return;
+            }
+            Next.Where = "ultima posicao no chao";
+        }
+
+        s_recovery = Next;
+        const bool Moved = TeleportLocal(Chr, s_recovery.Target);
+        Append(StringFormat("%s  queda: levando para %s (%.3f, %.3f, %.3f) id=%08x %s\n",
+            Clock().c_str(), s_recovery.Where, s_recovery.Target[0], s_recovery.Target[1], s_recovery.Target[2],
+            Id, Moved ? "teleportado" : "TELEPORTE FALHOU"));
+    }
+
+    void ContinueRecovery(uint8_t* Chr, uint8_t* Data)
+    {
+        ++s_recovery.Frames;
+
+        const uintptr_t Fall = FallController(Chr);
+        uint8_t InAir = 1;
+        const bool Down = Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
+        if (!Down)
+        {
+            if (s_recovery.Frames >= kRecoveryGiveUpFrames)
+            {
+                ++s_recovery_failed;
+                s_recovery.Active = false;
+                Append(StringFormat("%s  queda: %u quadros e o personagem nao pousou; desisto\n",
+                    Clock().c_str(), s_recovery.Frames));
+            }
+            else if (s_recovery.Frames % kRecoveryRetryFrames == 0)
+            {
+                TeleportLocal(Chr, s_recovery.Target);
+            }
+            return;
+        }
+
+        uint64_t Bits = 0;
+        const bool HadBits = ReadBytes((uintptr_t)Data + kFallBits, &Bits, sizeof(Bits));
+        const uint64_t Before = Bits;
+        Bits &= ~kFallFamily;
+        if (HadBits && Bits != Before)
+        {
+            WriteBytes((uintptr_t)Data + kFallBits, &Bits, sizeof(Bits));
+        }
+
+        // Clearing the byte is the whole job: the manager pops its own request.
+        bool Camera = false;
+        if (const uintptr_t Manager = CameraManager())
+        {
+            uint8_t Wanted = 0;
+            if (ReadBytes(Manager + kCameraFallWanted, &Wanted, 1) && Wanted != 0)
+            {
+                const uint8_t Clear = 0;
+                Camera = WriteBytes(Manager + kCameraFallWanted, &Clear, 1);
+            }
+        }
+
+        ++s_recovered;
+        s_recovery.Active = false;
+        Append(StringFormat("%s  queda desfeita em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s\n",
+            Clock().c_str(), s_recovery.Frames, (unsigned long long)Before, (unsigned long long)Bits,
+            Camera ? "desligada" : "nao estava ligada"));
+    }
+
     // The parameters the controller would have copied: who killed (a handle
     // FUN_14017b4f0 resolves), the flags that suppress single consequences,
     // and the cause that picks the timing row (10 for HP).
@@ -187,8 +473,14 @@ namespace
         {
             s_local_ctrl = Ctrl;
             s_local_state = Before;
+            s_recovery.Active = false;
             Append(StringFormat("%s  controlador do jogador local %p, personagem %p, estado %u\n",
                 Clock().c_str(), Ctrl, Character, Before));
+        }
+
+        if (s_recovery.Active && Data != nullptr)
+        {
+            ContinueRecovery(Chr, Data);
         }
 
         // The same three tests the controller makes, in its order. The HP
@@ -205,6 +497,10 @@ namespace
 
             if (s_mode.load() == Cancel)
             {
+                // Read before anything is cleared: a fall leaves its marks in
+                // +0x4c0 and in the camera, not in the parameters.
+                const bool Fell = (*(const uint64_t*)(Data + kFallBits) & kFallFamily) != 0 || CameraWantsFallDead();
+
                 // Never leave the byte set: with it cleared and the HP back,
                 // the source has nothing to say next frame.
                 Data[kPending] = 0;
@@ -228,9 +524,14 @@ namespace
                 const uint64_t InStreak = ++s_streak;
                 if (InStreak <= 20 || InStreak % 300 == 0)
                 {
-                    Append(StringFormat("%s  morte CANCELADA #%llu (seguida %llu) hp=%d -> %d %s\n",
+                    Append(StringFormat("%s  morte CANCELADA #%llu (seguida %llu)%s hp=%d -> %d %s\n",
                         Clock().c_str(), (unsigned long long)Count, (unsigned long long)InStreak,
-                        Hp, Max, Params.c_str()));
+                        Fell ? " queda" : "", Hp, Max, Params.c_str()));
+                }
+
+                if (Fell && !s_recovery.Active)
+                {
+                    StartRecovery(Chr);
                 }
                 return;
             }
@@ -352,9 +653,10 @@ namespace
         }
         else if (Verb == "status")
         {
-            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu ===\n",
+            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu quedas_desfeitas=%llu quedas_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu ===\n",
                 Clock().c_str(), s_mode.load() == Cancel ? "cancelar" : "observar",
                 (unsigned long long)s_seen.load(), (unsigned long long)s_cancelled.load(),
+                (unsigned long long)s_recovered.load(), (unsigned long long)s_recovery_failed.load(),
                 (unsigned long long)s_unexplained.load(), (unsigned long long)s_instant.load(),
                 (unsigned long long)s_replica_calls.load()));
         }
