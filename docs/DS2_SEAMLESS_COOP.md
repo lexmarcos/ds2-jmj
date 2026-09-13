@@ -393,7 +393,10 @@ if (*(int *)(sessao + 0x1cc) != 0) {
 ```
 
 `+0x1cc` é o **motivo do fim**, e quem escreve nele é `FUN_1402c2f20`, o slot
-`+0x30` da sessão — "encerre, e este é o motivo". Ele confere um virtual
+**`+0xa0`** da sessão — "encerre, e este é o motivo". (Este parágrafo dizia
+`+0x30` até 13/09; o slot `+0x30` é `FUN_1402c2820`, e a chamada medida em
+`de=+0x2c9246` é `call *0xa0(%rax)`. O hook sempre funcionou porque detoura a
+função, não o slot.) Ele confere um virtual
 `+0xa8` antes, guarda `FUN_1402d4750(papel, motivo)` em `+0x1c8` e avisa o
 resto do jogo.
 
@@ -467,7 +470,7 @@ despachante** — nem o 3. Eles só rodam quando chega uma mensagem.
 
 ```c
 if (sessao[0x1f] != 2)                    { sessao[0x1f] = 0xb; ... return; }
-if (*(char*)(sessao[0x21] + 8) != 0)      { slot30(sessao, 0x13);     return; }
+if (*(char*)(sessao[0x21] + 8) != 0)      { slot30(sessao, 0x13);     return; }  /* slot30 = FUN_1402c2820, não o EndSession */
 if (!FUN_1402c6570(..., papel))           { sessao[0x1f] = 0xb; ... return; }
 
 sessao+0x19c = param_2[0];                // mapa
@@ -475,7 +478,7 @@ sessao+0x198 = param_2[7];
 
 /* o bloco "de onde ele veio": lido do jogador VIVO e dos contadores VIVOS */
 sessao+0x1a0 .. +0x1c8 = posição atual do jogador, ctx+0x70 +0x164/168/16c,
-                         ctx+0xd0 +0x168   /* o portão */
+                         ctx+0xd0 +0x168   /* o portão — ctx+0xd0 é o personagem local */
 
 pedido = { tipo 0, motivo 4, param_2[0], -1, 0, FUN_1402d4830(papel),
            param_2[1..3], 1.0f, quaternion de param_2[5] };
@@ -954,7 +957,9 @@ E nas telas: o nome e a barra do Samuel no HUD do Chico, o Samuel visível ao
 lado dele, o Chico desenhado como fantasma branco. Sessão de verdade, elo
 novo, os dois se vendo.
 
-**É este o formato da entrega do M2.** Não costurar o convidado de volta a uma
+**Isto é um contorno, não o M2** (corrigido em 13/09: o critério do M2 é
+morrer e continuar na *mesma* sessão, sem marca e sem reinvocação — ver a lista
+de tarefas). O que o parágrafo abaixo dizia em 12/09: não costurar o convidado de volta a uma
 sessão cujo fluxo peer já morreu — o host cronometra esse silêncio e derruba,
 medido — e sim deixar a morte correr, o convidado voltar para casa, pôr uma
 marca, e o host reinvocá-lo sozinho. Custa um carregamento e entrega o que o
@@ -996,3 +1001,70 @@ Vale lembrar que a alternativa honesta existe e já funciona: **um X do
 jogador**. Morreu, voltou para casa, apertou X, o host o traz de volta
 sozinho. Não é "seamless" do jeito do enunciado, mas é um botão por morte e
 não depende de mais nada.
+
+
+## O parecer de 13/09: como o jogo renasce, e por que o warp tira o fantasma
+
+Pedido ao Fable com o registro inteiro deste documento. Marcado abaixo o que foi
+**reconferido no binário** depois; o resto é leitura dele, com os endereços para
+quem for conferir.
+
+### O respawn comum não usa coordenadas
+
+- **[reconferido]** O registro da última fogueira é `*(ctx+0x70)`: `+0x164` mapa,
+  `+0x168` tipo, `+0x16c` id. `FUN_14044ed40` monta o pedido a partir dele —
+  tipo 0 do registro vira pedido tipo 3, tipo 2 vira "player start" do mapa, e
+  qualquer outro vira um destino padrão (`FUN_14039a9a0`).
+- Quem grava o registro: acender/interagir (`FUN_1401caf50`) e sentar
+  (`FUN_1401cb950`) — só se quem interagiu é o jogador local; viagem pelo menu
+  (`FUN_14017fdb0`); e dois outros chamadores não lidos (`FUN_140040060`,
+  `FUN_140461f20`). O registro é recriado a cada carga.
+- O id (`0x7ba7` na medição) é de um **objeto de mapa**, e só é resolvido
+  **depois** da recarga: `FUN_1401c3c60` procura o objeto na lista
+  `*(ctx+0x70)+0x58` e **[reconferido]** `FUN_1401cb1b0` põe o jogador em
+  `translação − 1,1 × eixo Z` da matriz do objeto (`DAT_1410bf020 = 1.1f`),
+  virado como ela.
+
+Logo **coordenadas de fogueira existem, mas só do mapa carregado.**
+
+### Todo warp recarrega, e é isso que tira o fantasma
+
+Leitura do Fable da máquina do loader (`GameManagerImp`, vftable `0x1410c4c68`):
+a entrada do warp só aceita no estado `0x1e`; ao aceitar, notifica o multiplay e
+arma um atraso (6 s para morte, 2 s para os outros); o estado `0x14` destrói
+**incondicionalmente** o mapa, os personagens e **`ctx+0xd0 = 0`**; o `0xb` recria
+tudo. Os tipos 0–4 resolvem o destino só depois disso. Não há atalho de "mesmo
+mapa". **[reconferido]** `FUN_140419610` recria o personagem com
+`ctx[0x1a] = chr` — então **`ctx+0xd0` é o personagem local**, e o que este
+documento chamava de "contador de multiplay em `ctx+0xd0 +0x168`" é um campo do
+personagem, reconstruído a cada carga.
+
+Sobrevive à recarga o gerenciador de sessão (`ctx+0x22f0`) — por isso as sessões
+ficavam de pé no estado 7. Não sobrevive a presença: do lado do convidado, os
+jogadores remotos são registrados no estado 5 (`FUN_1402c3c80` →
+`FUN_14051b0e0`), que **não aparece no rastro da nona tentativa**; do lado do
+host, o personagem do convidado é criado na sequência `0xd → 0xe
+(WaitGuestWarpFinished) → 0xf`, que o host parado em `0x10` nunca refaz.
+
+### A morte tem um ponto só
+
+**[reconferido]** `FUN_14013c3b0` (slot `+0x10` de `ChrDeadActionCtrl`, vftable
+`0x1410bf308`) sai se `*(chr+0xb8)+0x5fc != 0`, sai se `+0x759 == 0`, copia os
+parâmetros da morte de `+0x75c..+0x76d` e só então chama `FUN_14013d430`. Segundo
+o Fable, dano letal (`FUN_14013a9b0`), flags do personagem, evento de animação
+`0x19` e status todos escrevem `+0x759 = 1`. Cancelar ali impede que o resto do
+jogo veja uma morte — sem sequência de "YOU DIED", sem `RequestNotifyDeath`, sem
+`EndSession`, sem warp. É o plano do M2 na lista de tarefas.
+
+Riscos nomeados por ele: fontes de morte que não passem por `+0x759` (a função de
+dano é virtual em quatro vtables e só uma foi lida); deixar `+0x759` ligado com
+`+0x5fc != 0` faz o consumidor ignorar a morte; e cada consequência reproduzida à
+mão que ficar de fora é uma divergência de save entre os dois jogadores.
+
+### A morte do host, lida e não medida
+
+O warp do host chama `FUN_1402bd0d0(ctrl, 4)`, que **só encerra a sessão se o
+host não está em `0x10`**. Quem encerra, na morte do host, é o convidado: o
+terminal de morte de fantasma roda com motivo ≠ 2 e pede o fim. Com a morte
+interceptada nos dois clientes, o host nunca morre nem warpa, e não há o que
+suprimir.

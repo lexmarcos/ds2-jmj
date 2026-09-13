@@ -190,7 +190,7 @@ It is **character state in the save**, so it survives a full `down`/`up` of
 the server and both instances, and burning effigies does nothing for it. The
 only cure is a **Bone of Order**. On 12/09 this cost most of an afternoon:
 hollowing, an offline client, the seamless hooks, the arrival guard byte, the
-multiplay counter at `ctx+0xd0 +0x168`, position and X delivery were each
+local character's counter at `ctx+0xd0 +0x168` (`ctx+0xd0` is the local character, rebuilt on every load), position and X delivery were each
 measured and cleared before the game finally said what was wrong — and it only
 said it on the client's own screen, never in any log.
 

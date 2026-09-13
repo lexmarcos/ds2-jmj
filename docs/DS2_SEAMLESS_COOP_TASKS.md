@@ -124,34 +124,68 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ## M2 — respawn dentro da sessão
 
-**Resolvido em 12/09, por outro caminho que o previsto aqui.** O que segue
-abaixo é o histórico da abordagem que não fechou, e vale ler porque cada
-parágrafo dela é uma coisa medida; mas a entrega é esta:
+**Não está feito.** O critério, definido pelo dono do projeto em 13/09:
 
-> O convidado morre, a morte corre normalmente, ele volta ao próprio mundo, põe
-> uma marca branca, e **o host o reinvoca sozinho**. Sessão nova de verdade,
-> elo novo, os dois se vendo. Custa um carregamento.
->
-> Medido às 22:46 sem nenhuma intervenção humana entre a marca e a sessão —
-> `Sign 1016 created` → `revanche: invocando a placa 80000031` →
-> `RequestNotifyJoinGuestPlayer` + `RequestNotifyJoinSession` → host em `0x10`.
-> Ver "Reinvocação automática, ponta a ponta" em
-> [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md).
+> morre → respawna → continua na **mesma** sessão, e o host continua jogando
+> normalmente. Vale para a morte de **qualquer** um dos dois, host ou fantasma.
 
-**Falta uma peça para ficar sem mão humana:** o convidado pôr a marca sozinho
-ao voltar. Hoje é um X manual; o resto da cadeia já é automático. Duas arestas
-conhecidas: o `DS2_RematchHook` só tem o ponteiro do manager depois de uma
-invocação manual por sessão de jogo, e ele tenta toda placa que chega —
-inclusive marcas velhas no cache, cada uma rendendo um "Summoning failed" na
-tela do host. Filtrar por dono resolve a segunda.
+A reinvocação automática medida em 12/09 — o convidado volta para casa, põe a
+marca, e o `DS2_RematchHook` do host o traz de volta sozinho — é **um contorno**:
+é outra sessão, com carregamento, e depende de o jogador pôr a marca de novo.
+Fica registrada em [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) como plano de
+reserva, não como entrega. Declarei o M2 fechado com ela em 12/09 e estava
+errado.
 
-**Por que a abordagem original não fechou**, e isto é o achado que fecha o
-assunto: costurar o convidado de volta à sessão *existente* funciona dos dois
-lados e mesmo assim morre. A máquina do convidado completa o join até o estado
-7; a do host fica de pé em `0x10` o tempo todo, sem sequer notar a morte. O que
-derruba é o host mandando `RequestNotifyLeaveGuestPlayer` **vinte e três
-segundos** depois da morte — temporizador, não reação. O fluxo peer não volta
-junto com a máquina de estados, e é o silêncio dele que o host mede.
+**Por que costurar a sessão existente depois de um warp não fecha** — medido
+em 12/09: a máquina do convidado completa o join até o estado 7; a do host fica
+em `0x10` o tempo todo, sem notar a morte; e o host manda
+`RequestNotifyLeaveGuestPlayer` **vinte e três segundos** depois — temporizador,
+não reação.
+
+**E por que nenhum warp vai fechar** — lido no binário em 13/09: todo warp, de
+qualquer tipo, passa pelo teardown do loader, que destrói o personagem local
+(`ctx+0xd0`), os personagens remotos e o mapa, e recria tudo. É isso que tira o
+fantasma do mundo do host. O gerenciador de sessão (`ctx+0x22f0`) sobrevive à
+recarga; a presença do outro jogador, não. Não existe no jogo um warp que não
+recarregue.
+
+### Próximo: não deixar a morte virar morte
+
+Todas as fontes de morte convergem num byte, `*(chr+0xb8)+0x759`, e ele tem um
+consumidor só: `FUN_14013c3b0`, slot `+0x10` de `ChrDeadActionCtrl`. Interceptar
+ali — cancelar a morte, restaurar o HP, pôr o personagem 1,1 m à frente da
+fogueira **sem warp** e aplicar as consequências à mão — não toca em sessão
+nenhuma, e é o mesmo hook no host e no convidado.
+
+Em ordem, cada passo com o seu sinal positivo. Os quatro primeiros são solo,
+sem sessão, e não custam desconexão ilegal:
+
+1. **Teleporte sem warp.** Escrever a posição viva do personagem e ver se ele
+   obedece; se não, achar o setter na vtable do chr. *Positivo:* `where` muda e
+   o personagem fica de pé no lugar novo.
+2. **Coordenadas da fogueira ao vivo.** Percorrer a lista de objetos do mapa
+   (`*(ctx+0x70)+0x58`), achar o id da última fogueira e calcular
+   `translação − 1,1 × eixo Z`. *Positivo:* menos de 0,5 m do lugar onde o jogo
+   põe o jogador numa morte comum.
+3. **Interceptar a morte.** Detour em `FUN_14013c3b0`: primeiro só registrar
+   `+0x759`, `+0x75c..+0x76d`, `+0x5fc`; depois cancelar. *Positivo:*
+   personagem controlável e nenhum `RequestNotifyDeath` no servidor.
+4. **HP.** Achar o campo (trace na aplicação de dano, ou varredura pelo valor)
+   e restaurar no passo 3.
+5. **Juntar solo:** morrer → de pé na fogueira, sem carregamento. Então almas e
+   hollow à mão.
+6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum
+   `RequestNotifyDeath` nem `RequestNotifyLeaveGuestPlayer` em 60 s, host em
+   `0x10`, e o host **vê** o fantasma na fogueira. Depois o simétrico: o host
+   morre.
+7. **Fogueira compartilhada.** O convidado não grava a própria fogueira no mundo
+   do host (`FUN_1401caf50` só grava para o jogador local, e com uma condição
+   que parece ser "não estou no mundo de outro" — inferência). O triplo
+   `{mapa, tipo, id}` precisa de um canal do mod, provavelmente pelo servidor.
+
+**Limite conhecido:** isto só vale para fogueira no mapa carregado. Fogueira em
+outro mapa exige warp, e warp exige religar a presença dos dois lados depois da
+recarga — que é a abordagem das tentativas 8 e 9 — ou cair no contorno.
 
 ---
 
