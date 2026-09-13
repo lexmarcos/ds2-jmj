@@ -33,6 +33,11 @@
 //   observe   write down every death of the local player and let it happen
 //   cancel    clear the byte before the controller sees it, and give the HP
 //             back, so the game never learns there was a death
+//   respawn   cancel, and pay for the death the way the game would, without
+//             the reload: the carried souls into a bloodstain where the
+//             character died (the old one removed), hollowing, Estus
+//             refilled, and the character standing at the spawn point of the
+//             last bonfire with full HP
 //   status    write the counters to the log
 //
 // A death by falling needs more than the byte. Touching a death volume of the

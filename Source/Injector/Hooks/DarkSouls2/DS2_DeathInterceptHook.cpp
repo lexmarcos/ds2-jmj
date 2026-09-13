@@ -126,11 +126,85 @@ namespace
     constexpr uint32_t kRecoveryRetryFrames = 30;
     constexpr uint32_t kRecoveryGiveUpFrames = 300;
 
+    // What a death costs, applied with the game's own functions (step 5, all
+    // measured on 13/09 against a death the game carried out itself).
+    //
+    // Souls: the "YOU DIED" sequence reaches FUN_14026af40 through NetSvrManager
+    // slot +0xe0. It moves the carried souls into the bloodstain record of
+    // NetSvrBloodstainManager (+0x2c has one, +0x30 souls, +0x34 map, position,
+    // angle and cell, taken from the last safe position, so a fall leaves it at
+    // the edge), zeroes PlayerParam+0xec and marks the record done (+0x2d).
+    // After the reload, slot +0x28 (FUN_14026b0d0) clears the mark and puts the
+    // bloodstain in the world: a type 10 sign of BloodstainSetCtrl.
+    constexpr size_t kRecordSoulsOffset = 0x26af40;
+    constexpr uint8_t kRecordSoulsBytes[] = { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x58 };
+    constexpr size_t kSpawnBloodstainOffset = 0x26b0d0;
+    constexpr uint8_t kSpawnBloodstainBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x2c, 0x00 };
+    // Hollowing: FUN_14037dcc0, on the frame the controller enters state 2,
+    // calls FUN_140202c30(PlayerParam, *(data+0x76d)), which adds a param row's
+    // delta to the hollow level at PlayerParam+0x1ac - unless FUN_14031c850 or
+    // the flags below say this death carries no penalty.
+    constexpr size_t kHollowOffset = 0x202c30;
+    constexpr uint8_t kHollowBytes[] = { 0x48, 0x85, 0xc9, 0x74, 0x5f, 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57 };
+    constexpr size_t kNoPenaltyOffset = 0x31c850;
+    constexpr uint8_t kNoPenaltyBytes[] = { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0xd9, 0x45, 0x33, 0xd2 };
+    constexpr size_t kNotAPlayerOffset = 0x16f740;
+    constexpr uint8_t kNotAPlayerBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0xd1 };
+    // Estus: the rest at a bonfire refills it through FUN_1401ac370(inventory).
+    constexpr size_t kRefillEstusOffset = 0x1ac370;
+    constexpr uint8_t kRefillEstusBytes[] = { 0x48, 0x8b, 0x49, 0x10, 0xe9, 0xe7, 0xae, 0xff, 0xff };
+
+    constexpr size_t kPlayerParam = 0x490;             // chr+0x490
+    constexpr size_t kParamSouls = 0xec;
+    constexpr size_t kParamHollow = 0x1ac;             // byte, 0 to 32
+    constexpr size_t kDeathKind = 0x76d;               // *(chr+0xb8), byte
+    constexpr uint64_t kNoPenaltyBit = 0x80000000000000;       // +0x4c8
+    constexpr uint64_t kNoHollowBit = 0x400000000000000;       // +0x4b8
+    constexpr size_t kEffectBits = 0x4b8;
+
+    constexpr size_t kInventoryHolder = 0xa8;          // ctx+0xa8
+    constexpr size_t kHolderInventory = 0x10;
+
+    constexpr size_t kNetGlobalOffset = 0x1616cf8;     // *(global)+0x30 is NetSvrManager
+    constexpr size_t kNetManager = 0x30;
+    constexpr size_t kNetBloodstains = 0x90;
+    constexpr size_t kBloodstainManagerVftable = 0x10d21c8;
+    constexpr size_t kBloodstainDone = 0x2d;
+
+    constexpr size_t kSignsHolder = 0x90;              // ctx+0x90
+    constexpr size_t kSignsHolderInner = 0x68;
+    constexpr size_t kSignsSetCtrl = 0x28;             // BloodstainSetCtrl
+    constexpr size_t kSetCtrlVftable = 0x10caed8;
+    constexpr size_t kSetCtrlInterface = 0x28;         // IBloodstainSetCtrl
+    constexpr size_t kInterfaceVftable = 0x10caf28;
+    constexpr size_t kInterfaceRemove = 0x20;          // void(iface, entry*)
+    constexpr size_t kSetCount = 0x18;                 // uint32(set)
+    constexpr size_t kSetEntry = 0x10;                 // entry*(set, index)
+    constexpr size_t kSignSets[] = { 0x18, 0x20 };
+    constexpr uint32_t kSoulsBloodstainType = 10;
+
     enum Mode : int
     {
         Observe = 0,
         Cancel = 1,
+        Respawn = 2,
     };
+
+    using RecordSouls_p = void(*)(void* Manager, uint64_t* Out);
+    using SpawnBloodstain_p = uint8_t(*)(void* Manager);
+    using Hollow_p = void(*)(void* PlayerParam, int Kind);
+    using Check_p = uint64_t(*)(void* Object);
+    using RefillEstus_p = void(*)(void* Inventory);
+    using SetCount_p = uint32_t(*)(void* Set);
+    using SetEntry_p = uint32_t*(*)(void* Set, uint32_t Index);
+    using RemoveSign_p = void(*)(void* Interface, uint32_t* Entry);
+
+    RecordSouls_p s_record_souls = nullptr;
+    SpawnBloodstain_p s_spawn_bloodstain = nullptr;
+    Hollow_p s_hollow = nullptr;
+    Check_p s_no_penalty = nullptr;
+    Check_p s_not_a_player = nullptr;
+    RefillEstus_p s_refill_estus = nullptr;
 
     using Update_p = void(*)(void* Ctrl, float Delta);
     using Replica_p = void(*)(void* Ctrl);
@@ -150,6 +224,7 @@ namespace
     std::atomic<uint64_t> s_replica_calls{ 0 };
     std::atomic<uint64_t> s_recovered{ 0 };
     std::atomic<uint64_t> s_recovery_failed{ 0 };
+    std::atomic<uint64_t> s_respawns{ 0 };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
@@ -163,6 +238,7 @@ namespace
         uint32_t Frames = 0;
         float Target[3] = {};
         const char* Where = "";
+        const char* Why = "";
     };
     Recovery s_recovery;
 
@@ -355,14 +431,319 @@ namespace
             WriteBytes(Physics + 0x1c0, Centre, sizeof(Centre));
     }
 
+    // Calls into the game, each behind its own __try so a fault inside comes
+    // back as false instead of taking the process. Functions of their own for
+    // the same reason as ReadBytes.
+    bool CallRecordSouls(uintptr_t Manager, uint64_t& Out)
+    {
+        __try
+        {
+            s_record_souls((void*)Manager, &Out);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallSpawnBloodstain(uintptr_t Manager)
+    {
+        __try
+        {
+            s_spawn_bloodstain((void*)Manager);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallHollow(uintptr_t PlayerParam, int Kind)
+    {
+        __try
+        {
+            s_hollow((void*)PlayerParam, Kind);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallCheck(Check_p Check, uintptr_t Object, bool& Result)
+    {
+        __try
+        {
+            Result = (Check((void*)Object) & 0xff) != 0;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallRefillEstus(uintptr_t Inventory)
+    {
+        __try
+        {
+            s_refill_estus((void*)Inventory);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallSetCount(uintptr_t Set, uint32_t& Count)
+    {
+        __try
+        {
+            const uintptr_t Vftable = *(const uintptr_t*)Set;
+            Count = (*(SetCount_p*)(Vftable + kSetCount))((void*)Set);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallSetEntry(uintptr_t Set, uint32_t Index, uint32_t*& Entry)
+    {
+        __try
+        {
+            const uintptr_t Vftable = *(const uintptr_t*)Set;
+            Entry = (*(SetEntry_p*)(Vftable + kSetEntry))((void*)Set, Index);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallRemoveSign(uintptr_t Interface, uint32_t* Entry)
+    {
+        __try
+        {
+            const uintptr_t Vftable = *(const uintptr_t*)Interface;
+            (*(RemoveSign_p*)(Vftable + kInterfaceRemove))((void*)Interface, Entry);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    uintptr_t BloodstainManager()
+    {
+        uintptr_t Global = 0, Net = 0, Manager = 0, Vftable = 0;
+        if (!ReadPointer(s_base + kNetGlobalOffset, Global) ||
+            !ReadPointer(Global + kNetManager, Net) ||
+            !ReadPointer(Net + kNetBloodstains, Manager) ||
+            !ReadPointer(Manager, Vftable) || Vftable != s_base + kBloodstainManagerVftable)
+        {
+            return 0;
+        }
+        return Manager;
+    }
+
+    uintptr_t BloodstainSetCtrl()
+    {
+        uintptr_t Context = 0, Holder = 0, Inner = 0, SetCtrl = 0, Vftable = 0, InterfaceVftable = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kSignsHolder, Holder) ||
+            !ReadPointer(Holder + kSignsHolderInner, Inner) ||
+            !ReadPointer(Inner + kSignsSetCtrl, SetCtrl) ||
+            !ReadPointer(SetCtrl, Vftable) || Vftable != s_base + kSetCtrlVftable ||
+            !ReadPointer(SetCtrl + kSetCtrlInterface, InterfaceVftable) ||
+            InterfaceVftable != s_base + kInterfaceVftable)
+        {
+            return 0;
+        }
+        return SetCtrl;
+    }
+
+    // Without a reload nothing clears the bloodstain of the previous death, and
+    // FUN_14020e4e0 only evicts when the set is full; so the old souls
+    // bloodstain goes first, the way the reload would have taken it.
+    int RemoveSoulsBloodstains(uintptr_t SetCtrl)
+    {
+        uint32_t* Found[16] = {};
+        size_t Count = 0;
+        for (size_t Offset : kSignSets)
+        {
+            uintptr_t Set = 0;
+            uint32_t Size = 0;
+            if (!ReadPointer(SetCtrl + Offset, Set) || !CallSetCount(Set, Size))
+            {
+                continue;
+            }
+            for (uint32_t i = 0; i < Size && i < 4096 && Count < 16; ++i)
+            {
+                uint32_t* Entry = nullptr;
+                uint32_t Handle = 0, Flags = 0;
+                if (CallSetEntry(Set, i, Entry) && Entry != nullptr &&
+                    ReadBytes((uintptr_t)Entry, &Handle, sizeof(Handle)) &&
+                    ReadBytes((uintptr_t)Entry + 0x14, &Flags, sizeof(Flags)) &&
+                    (int32_t)Flags < 0 && (Handle & 0xf) == kSoulsBloodstainType)
+                {
+                    Found[Count++] = Entry;
+                }
+            }
+        }
+
+        int Removed = 0;
+        for (size_t i = 0; i < Count; ++i)
+        {
+            if (CallRemoveSign(SetCtrl + kSetCtrlInterface, Found[i]))
+            {
+                ++Removed;
+            }
+        }
+        return Removed;
+    }
+
+    int CountSoulsBloodstains(uintptr_t SetCtrl)
+    {
+        int Count = 0;
+        for (size_t Offset : kSignSets)
+        {
+            uintptr_t Set = 0;
+            uint32_t Size = 0;
+            if (!ReadPointer(SetCtrl + Offset, Set) || !CallSetCount(Set, Size))
+            {
+                continue;
+            }
+            for (uint32_t i = 0; i < Size && i < 4096; ++i)
+            {
+                uint32_t* Entry = nullptr;
+                uint32_t Handle = 0, Flags = 0;
+                if (CallSetEntry(Set, i, Entry) && Entry != nullptr &&
+                    ReadBytes((uintptr_t)Entry, &Handle, sizeof(Handle)) &&
+                    ReadBytes((uintptr_t)Entry + 0x14, &Flags, sizeof(Flags)) &&
+                    (int32_t)Flags < 0 && (Handle & 0xf) == kSoulsBloodstainType)
+                {
+                    ++Count;
+                }
+            }
+        }
+        return Count;
+    }
+
+    // Everything a death costs except the reload, in the order the game pays
+    // it: souls into the bloodstain record while the character still stands
+    // where it died (the record takes the last safe position), hollowing, the
+    // bloodstain put in the world, and the Estus the respawn refills.
+    void ApplyDeathCosts(uint8_t* Chr, uint8_t* Data)
+    {
+        const uintptr_t Player = (uintptr_t)Chr;
+        uintptr_t Param = 0;
+        const bool HaveParam = ReadPointer(Player + kPlayerParam, Param);
+
+        uint32_t SoulsBefore = 0;
+        uint8_t HollowBefore = 0;
+        if (HaveParam)
+        {
+            ReadBytes(Param + kParamSouls, &SoulsBefore, sizeof(SoulsBefore));
+            ReadBytes(Param + kParamHollow, &HollowBefore, 1);
+        }
+
+        // Souls first.
+        std::string Souls = "sem gerenciador de manchas";
+        const uintptr_t Manager = BloodstainManager();
+        if (Manager != 0)
+        {
+            uint8_t Done = 1;
+            ReadBytes(Manager + kBloodstainDone, &Done, 1);
+            if (Done != 0)
+            {
+                Souls = "registro ja marcado nesta carga; almas ficam";
+            }
+            else
+            {
+                uint64_t Out = 0;
+                const bool Called = CallRecordSouls(Manager, Out);
+                Souls = StringFormat("%s: %u almas para a mancha, %u perdidas da anterior",
+                    Called ? "registradas" : "FALHOU", (uint32_t)(Out >> 32), (uint32_t)Out);
+            }
+        }
+
+        // Hollowing, with the checks FUN_14037dcc0 makes before it.
+        std::string Hollow = "sem PlayerParam";
+        if (HaveParam)
+        {
+            bool Exempt = false, NotPlayer = false;
+            uint64_t StateBits = 0, EffectBits = 0;
+            ReadBytes((uintptr_t)Data + kStateBits, &StateBits, sizeof(StateBits));
+            ReadBytes((uintptr_t)Data + kEffectBits, &EffectBits, sizeof(EffectBits));
+            const bool Checked = CallCheck(s_no_penalty, (uintptr_t)Data, Exempt) &&
+                CallCheck(s_not_a_player, Player, NotPlayer);
+            if (!Checked)
+            {
+                Hollow = "checagens FALHARAM; sem hollow";
+            }
+            else if (Exempt || (StateBits & kNoPenaltyBit) != 0 || NotPlayer || (EffectBits & kNoHollowBit) != 0)
+            {
+                Hollow = StringFormat("isento (penalidade=%d especial=%d bits=%d/%d)",
+                    Exempt ? 1 : 0, NotPlayer ? 1 : 0, (StateBits & kNoPenaltyBit) != 0 ? 1 : 0,
+                    (EffectBits & kNoHollowBit) != 0 ? 1 : 0);
+            }
+            else
+            {
+                const int Kind = (int)(int8_t)Data[kDeathKind];
+                const bool Called = CallHollow(Param, Kind);
+                uint8_t HollowAfter = HollowBefore;
+                ReadBytes(Param + kParamHollow, &HollowAfter, 1);
+                Hollow = StringFormat("%s: nivel %u -> %u", Called ? "aplicado" : "FALHOU", HollowBefore, HollowAfter);
+            }
+        }
+
+        // The old bloodstain out, the new one in.
+        std::string Bloodstain = "sem BloodstainSetCtrl";
+        const uintptr_t SetCtrl = BloodstainSetCtrl();
+        if (Manager != 0 && SetCtrl != 0)
+        {
+            const int Removed = RemoveSoulsBloodstains(SetCtrl);
+            const bool Spawned = CallSpawnBloodstain(Manager);
+            Bloodstain = StringFormat("%d antiga(s) removida(s), nova %s, agora %d no mundo",
+                Removed, Spawned ? "criada" : "FALHOU", CountSoulsBloodstains(SetCtrl));
+        }
+
+        // Estus, as the respawn at a bonfire refills it.
+        std::string Estus = "sem inventario";
+        uintptr_t Context = 0, Holder = 0, Inventory = 0;
+        if (ReadPointer(s_base + kContextOffset, Context) &&
+            ReadPointer(Context + kInventoryHolder, Holder) &&
+            ReadPointer(Holder + kHolderInventory, Inventory))
+        {
+            Estus = CallRefillEstus(Inventory) ? "recarregado" : "FALHOU";
+        }
+
+        uint32_t SoulsAfter = SoulsBefore;
+        if (HaveParam)
+        {
+            ReadBytes(Param + kParamSouls, &SoulsAfter, sizeof(SoulsAfter));
+        }
+        Append(StringFormat("%s  custos da morte: almas %u -> %u (%s); hollow %s; manchas: %s; estus %s\n",
+            Clock().c_str(), SoulsBefore, SoulsAfter, Souls.c_str(), Hollow.c_str(), Bloodstain.c_str(), Estus.c_str()));
+    }
+
     // A fall that was refused still leaves the character in the air, in a
     // death volume, with the fall camera. Out of the air first; the flags only
     // once the fall controller agrees the character is down, or the next frame
     // in the air is another fall death.
-    void StartRecovery(uint8_t* Chr)
+    void StartRecovery(uint8_t* Chr, const char* Why)
     {
         Recovery Next;
         Next.Active = true;
+        Next.Why = Why;
         uint32_t Id = 0;
         if (FindBonfireSpawn(Next.Target, Id))
         {
@@ -374,8 +755,8 @@ namespace
             if (Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
             {
                 ++s_recovery_failed;
-                Append(StringFormat("%s  queda: sem fogueira %08x no mapa e sem a ultima posicao no chao; nada a fazer\n",
-                    Clock().c_str(), Id));
+                Append(StringFormat("%s  %s: sem fogueira %08x no mapa e sem a ultima posicao no chao; nada a fazer\n",
+                    Clock().c_str(), Why, Id));
                 return;
             }
             Next.Where = "ultima posicao no chao";
@@ -383,8 +764,8 @@ namespace
 
         s_recovery = Next;
         const bool Moved = TeleportLocal(Chr, s_recovery.Target);
-        Append(StringFormat("%s  queda: levando para %s (%.3f, %.3f, %.3f) id=%08x %s\n",
-            Clock().c_str(), s_recovery.Where, s_recovery.Target[0], s_recovery.Target[1], s_recovery.Target[2],
+        Append(StringFormat("%s  %s: levando para %s (%.3f, %.3f, %.3f) id=%08x %s\n",
+            Clock().c_str(), Why, s_recovery.Where, s_recovery.Target[0], s_recovery.Target[1], s_recovery.Target[2],
             Id, Moved ? "teleportado" : "TELEPORTE FALHOU"));
     }
 
@@ -401,8 +782,8 @@ namespace
             {
                 ++s_recovery_failed;
                 s_recovery.Active = false;
-                Append(StringFormat("%s  queda: %u quadros e o personagem nao pousou; desisto\n",
-                    Clock().c_str(), s_recovery.Frames));
+                Append(StringFormat("%s  %s: %u quadros e o personagem nao pousou; desisto\n",
+                    Clock().c_str(), s_recovery.Why, s_recovery.Frames));
             }
             else if (s_recovery.Frames % kRecoveryRetryFrames == 0)
             {
@@ -432,11 +813,19 @@ namespace
             }
         }
 
+        // Last, so the maximum already carries this death's hollowing.
+        int32_t Hp = 0, Max = 0;
+        if (ReadBytes((uintptr_t)Chr + kHpMax, &Max, sizeof(Max)) && Max > 0)
+        {
+            ReadBytes((uintptr_t)Chr + kHp, &Hp, sizeof(Hp));
+            WriteBytes((uintptr_t)Chr + kHp, &Max, sizeof(Max));
+        }
+
         ++s_recovered;
         s_recovery.Active = false;
-        Append(StringFormat("%s  queda desfeita em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s\n",
-            Clock().c_str(), s_recovery.Frames, (unsigned long long)Before, (unsigned long long)Bits,
-            Camera ? "desligada" : "nao estava ligada"));
+        Append(StringFormat("%s  %s concluido em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s, hp %d -> %d\n",
+            Clock().c_str(), s_recovery.Why, s_recovery.Frames, (unsigned long long)Before, (unsigned long long)Bits,
+            Camera ? "desligada" : "nao estava ligada", Hp, Max));
     }
 
     // The parameters the controller would have copied: who killed (a handle
@@ -495,11 +884,21 @@ namespace
             const int32_t Max = *(const int32_t*)(Chr + kHpMax);
             const std::string Params = DescribeParams(Data);
 
-            if (s_mode.load() == Cancel)
+            const int Mode = s_mode.load();
+            if (Mode == Cancel || Mode == Respawn)
             {
                 // Read before anything is cleared: a fall leaves its marks in
                 // +0x4c0 and in the camera, not in the parameters.
                 const bool Fell = (*(const uint64_t*)(Data + kFallBits) & kFallFamily) != 0 || CameraWantsFallDead();
+
+                // One death, one bill. While a recovery runs, a byte that comes
+                // back is the same death still being held: a fall zeroes the HP
+                // on every frame the character is in the air.
+                const bool NewDeath = !s_recovery.Active;
+                if (Mode == Respawn && NewDeath)
+                {
+                    ApplyDeathCosts(Chr, Data);
+                }
 
                 // Never leave the byte set: with it cleared and the HP back,
                 // the source has nothing to say next frame.
@@ -529,9 +928,13 @@ namespace
                         Fell ? " queda" : "", Hp, Max, Params.c_str()));
                 }
 
-                if (Fell && !s_recovery.Active)
+                if (NewDeath && (Mode == Respawn || Fell))
                 {
-                    StartRecovery(Chr);
+                    if (Mode == Respawn)
+                    {
+                        ++s_respawns;
+                    }
+                    StartRecovery(Chr, Mode == Respawn ? "renascer" : "queda");
                 }
                 return;
             }
@@ -651,11 +1054,18 @@ namespace
             s_mode.store(Cancel);
             Append(StringFormat("%s  === modo: cancelar a morte do jogador local ===\n", Clock().c_str()));
         }
+        else if (Verb == "respawn")
+        {
+            s_mode.store(Respawn);
+            Append(StringFormat("%s  === modo: renascer na fogueira, pagando a morte ===\n", Clock().c_str()));
+        }
         else if (Verb == "status")
         {
-            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu quedas_desfeitas=%llu quedas_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu ===\n",
-                Clock().c_str(), s_mode.load() == Cancel ? "cancelar" : "observar",
+            const int Mode = s_mode.load();
+            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu renascimentos=%llu recuperacoes=%llu recuperacoes_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu ===\n",
+                Clock().c_str(), Mode == Respawn ? "renascer" : (Mode == Cancel ? "cancelar" : "observar"),
                 (unsigned long long)s_seen.load(), (unsigned long long)s_cancelled.load(),
+                (unsigned long long)s_respawns.load(),
                 (unsigned long long)s_recovered.load(), (unsigned long long)s_recovery_failed.load(),
                 (unsigned long long)s_unexplained.load(), (unsigned long long)s_instant.load(),
                 (unsigned long long)s_replica_calls.load()));
@@ -701,6 +1111,12 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
         { kUpdateOffset, kUpdateBytes, sizeof(kUpdateBytes), "controlador da morte" },
         { kReplicaOffset, kReplicaBytes, sizeof(kReplicaBytes), "slot +0x10" },
         { kInstantOffset, kInstantBytes, sizeof(kInstantBytes), "morte instantanea" },
+        { kRecordSoulsOffset, kRecordSoulsBytes, sizeof(kRecordSoulsBytes), "almas para a mancha" },
+        { kSpawnBloodstainOffset, kSpawnBloodstainBytes, sizeof(kSpawnBloodstainBytes), "mancha no mundo" },
+        { kHollowOffset, kHollowBytes, sizeof(kHollowBytes), "hollow" },
+        { kNoPenaltyOffset, kNoPenaltyBytes, sizeof(kNoPenaltyBytes), "morte sem penalidade" },
+        { kNotAPlayerOffset, kNotAPlayerBytes, sizeof(kNotAPlayerBytes), "personagem especial" },
+        { kRefillEstusOffset, kRefillEstusBytes, sizeof(kRefillEstusBytes), "estus" },
     };
     for (const auto& Check : Checks)
     {
@@ -718,6 +1134,12 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_original_update = (Update_p)(s_base + kUpdateOffset);
     s_original_replica = (Replica_p)(s_base + kReplicaOffset);
     s_original_instant = (Instant_p)(s_base + kInstantOffset);
+    s_record_souls = (RecordSouls_p)(s_base + kRecordSoulsOffset);
+    s_spawn_bloodstain = (SpawnBloodstain_p)(s_base + kSpawnBloodstainOffset);
+    s_hollow = (Hollow_p)(s_base + kHollowOffset);
+    s_no_penalty = (Check_p)(s_base + kNoPenaltyOffset);
+    s_not_a_player = (Check_p)(s_base + kNotAPlayerOffset);
+    s_refill_estus = (RefillEstus_p)(s_base + kRefillEstusOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
