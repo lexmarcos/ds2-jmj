@@ -757,3 +757,44 @@ Duas direções a partir daqui, e a segunda parece mais barata que a primeira:
    sozinho. Aplicá-lo à marca branca depois de uma morte de co-op reaproveita
    código provado e entrega o que o desenho pede ("morreu, renasce e continua
    na sessão") ao custo de um carregamento.
+
+### A nona: sem o handshake, a máquina anda
+
+Ir direto ao estado 2, sem devolver a sessão ao 1, muda o resultado:
+
+```
+morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
+fim de sessao RECUSADO  papel=1 estado=7 motivo=2
+levantando na ultima fogueira apos 90 quadros
+de pe de novo apos 421 quadros, guarda=00; indo para o estado 2 (sem refazer o handshake)
+pode entrar = 0 apos 0 quadros -> 1 apos 97 quadros
+estado 2; repetindo o convite: destino=6.16,-18.50,209.16
+depois da chegada: estado=3
+estado -> 4
+```
+
+e, lido ao vivo um minuto depois, `[sessao+0xf8] = 6`. Antes ela parava no 3;
+agora percorre **3 → 4 → 6**, e o convidado volta a ser desenhado como
+fantasma branco. Nem o 3 nem o 4 estão no switch do despachante, então cada
+passo veio de uma mensagem: alguma coisa do outro lado está respondendo.
+
+Também apareceu, na primeira rodada desta variante, um segundo pedido de fim
+que não vinha ao caso: `motivo=3` saindo de `+0x2c385c`, dentro do tratador do
+estado 7, na janela entre a morte e a reentrada. Bloqueá-lo (`block 3`) é uma
+linha no arquivo de pedido e tirou esse ruído do caminho.
+
+### O host não usa esta máquina
+
+E mesmo assim a sessão acaba, porque o host some. O que se sabe dele:
+
+- ele **nunca** pede fim de sessão — o log do `DS2_SeamlessSessionHook` do
+  host fica vazio a sessão inteira;
+- `bp 2c3630` **não dispara** no host depois da morte do convidado, e o
+  despachante é por frame: se ele não roda, não há objeto de sessão para
+  rodar.
+
+Ou seja o host não é a outra ponta desta mesma máquina de estados — ou o
+objeto dele é destruído por um caminho que não passa por `FUN_1402c2f20`. Essa
+é a próxima coisa a medir, e a medição é barata: armar `bp 2c3630` no host
+**enquanto a sessão está viva** responde de uma vez se ele tem um objeto
+destes e em que estado ele fica.
