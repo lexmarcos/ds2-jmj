@@ -798,3 +798,38 @@ objeto dele é destruído por um caminho que não passa por `FUN_1402c2f20`. Ess
 é a próxima coisa a medir, e a medição é barata: armar `bp 2c3630` no host
 **enquanto a sessão está viva** responde de uma vez se ele tem um objeto
 destes e em que estado ele fica.
+
+### O host tem a sua própria máquina, e ela tem nome
+
+O binário carrega RTTI, e as classes se leem sozinhas:
+
+```
+NetMultiplayCtrl
+├── NetJoinMultiplayCtrl     → NetSummonJoinMultiplayCtrl    (o convidado)
+└── NetAcceptMultiplayCtrl   → NetSummonAcceptMultiplayCtrl  (o host)
+```
+
+Tudo o que este documento chama de "a sessão" até aqui é a primeira: a vtable
+em `0x1410d7bd8`, o estado em `+0xf8`, o despachante `FUN_1402c3630`,
+`FUN_1402c2f20` para encerrar. É a máquina de **entrar no mundo de alguém**.
+
+O host usa a outra, e ela é diferente em tudo o que importa:
+
+| | convidado | host |
+| --- | --- | --- |
+| classe | `NetSummonJoinMultiplayCtrl` | `NetSummonAcceptMultiplayCtrl` |
+| vftable | `0x1410d7bd8` | `0x1410d7998` |
+| estado | `+0xf8` | `+0x150` |
+| despachante por frame | `FUN_1402c3630` | `FUN_1402bddb0` |
+| casos no switch | 0,1,4,5,6,7,8,10,0xb | 2,4,5,7,8,10,0xd,0xf,0x10,0x11,0x12 |
+
+Isso explica de uma vez duas coisas que vinham sendo lidas como fato sobre o
+jogo e eram fato sobre a instrumentação:
+
+- **"o host nunca pede fim de sessão"** — o `DS2_SeamlessSessionHook` observa
+  `FUN_1402c2f20`, que é da classe do convidado. O host nunca ia aparecer ali.
+- **"o host não tem objeto de sessão depois da morte"** — `bp 2c3630` é o
+  despachante do convidado. O host nunca ia disparar ali tampouco.
+
+A medição que interessa agora é direta: `bp 2bddb0 deref rcx+150 8` no host,
+com a sessão viva, e ver o que o estado dele faz quando o convidado morre.
