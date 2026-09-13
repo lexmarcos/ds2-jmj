@@ -970,3 +970,29 @@ Duas arestas conhecidas:
 - o hook tenta **toda** placa que chega, inclusive marcas velhas ainda no
   cache do cliente, e cada uma dessas rende um "Summoning failed. The sign has
   disappeared." na tela do host. Filtrar por dono resolveria.
+
+### A peça que falta, e onde ela está
+
+Para o M2 ficar sem mão humana, o convidado precisa pôr a marca sozinho ao
+voltar para casa. O RTTI já entrega a vizinhança:
+
+```
+ISummonSignSetCtrl / SummonSignSetCtrl   vftable 0x1410cb698
+   métodos em 0x140212cd0 .. 0x140213c80
+   FUN_140213160 (o AddSign que o DS2_RematchHook usa) é desta classe
+AbstractNetSvrMySignManager              vftable 0x1410d3518
+Frpg2RequestMessage::RequestCreateSign   vftable 0x141113378
+```
+
+O construtor da mensagem (`FUN_1406a0b10`, via a fábrica `FUN_140caa440`) não
+serve de gancho: é alocação de protobuf, longe de quem decide pôr a marca.
+
+**O jeito curto é medir, não ler.** Uma varredura de breakpoints sobre
+`0x140212cd0`–`0x140213c80` com o convidado apertando X diz em uma passada
+qual método é a colocação. É a mesma técnica que achou o warp, e aqui a faixa
+é de trinta funções em vez de trezentas.
+
+Vale lembrar que a alternativa honesta existe e já funciona: **um X do
+jogador**. Morreu, voltou para casa, apertou X, o host o traz de volta
+sozinho. Não é "seamless" do jeito do enunciado, mas é um botão por morte e
+não depende de mais nada.
