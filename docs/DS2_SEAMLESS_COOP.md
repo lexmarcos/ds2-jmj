@@ -892,3 +892,44 @@ O que diz onde o problema realmente está. Não é a máquina de estados de
 nenhum dos dois: as duas ficam de pé, uma em `0x10` e a outra chegando ao 7.
 É o **fluxo entre eles**. A nona variante preserva o objeto do elo mas não
 faz o convidado voltar a falar por ele, e o silêncio é o que o host cronometra.
+
+### A revanche serve para marca branca
+
+`DS2_RematchHook` foi escrito para duelos: ele guarda o ponteiro do manager
+quando o jogador invoca, e reinvoca sozinha qualquer placa que chegue depois
+ao cache do host. Nunca tinha disparado para uma marca branca, e o hook só
+falava quando agia — então não dava para saber se ele não era chamado ou se
+era chamado e desistia.
+
+Com uma linha a mais, registrando toda placa que entra:
+
+```
+placa recebida: tipo=1 alca=80000011 armado=1
+revanche pedida, mas ninguem invocou ainda: sem o manager nao da
+```
+
+`tipo=1` é a marca branca. Ele **é** chamado, a alça é válida e ele está
+armado: o que faltava era só o manager, que só chega quando o jogador invoca
+uma vez por sessão de jogo.
+
+Isso torna viável o caminho que a nona tentativa não alcança. Em vez de
+costurar o convidado de volta a uma sessão cujo fluxo peer já morreu — que é
+o que o host cronometra e derruba — o convidado volta para casa pela morte
+normal, põe uma marca, e o host a invoca sozinho. É uma sessão nova de
+verdade, com elo novo, ao custo de um carregamento.
+
+O que falta para fechar: semear o manager (uma invocação manual por sessão de
+jogo, ou achar de onde mais o ponteiro sai) e pôr a marca sozinho do lado do
+convidado.
+
+### Duas armadilhas de encenação que custaram ciclos
+
+**`up` reescreve o `Injector.config`.** Ligar `--auto-rematch` no
+`game prepare` e depois rodar `up --seamless` desliga de volta, e o log do
+hook continua mostrando as linhas do boot anterior — o que se lê exatamente
+como um hook vivo. Confira o **mtime** do log antes de acreditar nele.
+
+**A fogueira de Heide fica numa laje estreita sobre a água.** Qualquer `dpad`
+que erre o menu e chegue ao mundo empurra o personagem para o mar, e o teste
+morre junto. Toda navegação de menu tem que confirmar por captura que o menu
+abriu antes do próximo direcional.
