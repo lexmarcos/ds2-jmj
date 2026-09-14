@@ -35,10 +35,22 @@
 //             back, so the game never learns there was a death
 //   respawn   cancel, and pay for the death the way the game would, without
 //             the reload: the carried souls into a bloodstain where the
-//             character died (the old one removed), hollowing, Estus
-//             refilled, and the character standing at the spawn point of the
-//             last bonfire with full HP
+//             character died (the old one removed), hollowing, the death
+//             counters, a worn protection ring broken, Estus refilled,
+//             "YOU DIED", and the character standing at the spawn point of the
+//             last bonfire with full HP. Each cost goes through the game's own
+//             gate for who pays, so a phantom keeps its souls and its humanity
+//   feature <name> on|off
+//             switch one part off without a build: almas, hollow, contador,
+//             anel, mancha_online (off: sends nothing, see the .cpp), estus,
+//             banner, copias
 //   status    write the counters to the log
+//
+// In a session the death is the dying machine's to refuse, but its HP 0 can
+// reach the other machine first, and there the copy of the player dies through
+// its own controller ("Phantom Chico has been vanquished", measured 13/09).
+// With cancel or respawn, a pending death of another player's copy
+// (PlayerCtrl) is refused the same way.
 //
 // A death by falling needs more than the byte. Touching a death volume of the
 // map (`FUN_14036fdf0`) sets bit 51 of `*(chr+0xb8)+0x4c0` and asks for

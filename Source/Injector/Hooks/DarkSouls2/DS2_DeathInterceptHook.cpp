@@ -266,7 +266,9 @@ namespace
     // 3. Banner 3 also hides the HUD (+0x46c of *(frontend+0xd8)) and nothing
     // but a load puts it back: FUN_1404fffb0 sets +0x468, which the HUD's
     // update (FUN_140507360) takes as "show everything again". The hook calls
-    // it once FUN_140500b10 says the front end is no longer busy.
+    // it once FUN_140500b10 says the front end is no longer busy. Measured in
+    // a session on 14/09, host and phantom: the banner, the HUD hidden, and
+    // the HUD back 203 frames later.
     constexpr size_t kParamRowOffset = 0x44ed10;
     constexpr uint8_t kParamRowBytes[] = { 0x48, 0x8b, 0x81, 0x50, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc0 };
     constexpr size_t kBannerOffset = 0x5012e0;
@@ -390,7 +392,7 @@ namespace
     std::atomic<uint64_t> s_respawns{ 0 };
     std::atomic<uint64_t> s_remote_transitions{ 0 };
     std::atomic<uint64_t> s_remote_refused{ 0 };
-    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureRemote };
+    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureBanner | FeatureRemote };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
