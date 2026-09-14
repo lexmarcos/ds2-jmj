@@ -119,10 +119,17 @@ namespace
     // Every write to that 4 KB page faults, not just writes to the target, and
     // a heap page next to a player object is written many times a frame. So a
     // watch always carries a deadline, and the request thread lifts it.
+    //
+    // `wpr` watches reads too: the page is made inaccessible instead of
+    // read-only, and a read of the target is reported like a write. That is
+    // how a flag's readers are found when every one of them goes through a
+    // getter the listing does not show.
     struct WatchHit
     {
         uintptr_t Rip = 0;
         uint64_t Count = 0;
+        // 0 read, 1 write, as the fault reports it.
+        ULONG_PTR Kind = 1;
         // Fixed storage on purpose. The handler must not allocate: the page it
         // protects sits in a heap, and an allocation that touched it would fault
         // again on the same thread while this handler holds the lock.
@@ -133,6 +140,12 @@ namespace
     uintptr_t s_watch_address = 0;
     size_t s_watch_length = 0;
     uintptr_t s_watch_page = 0;
+    // Readable without the lock: a read fault on any other page must be passed
+    // on before taking it (see OnWatchException).
+    std::atomic<uintptr_t> s_watch_page_seen{ 0 };
+    std::atomic<bool> s_watch_reads{ false };
+    // PAGE_READONLY for a write watch, PAGE_NOACCESS for a read watch.
+    DWORD s_watch_trap = PAGE_READONLY;
     // The page of the last watch, kept after it is lifted. A thread that
     // faulted while the page was still read-only can reach the handler only
     // after the request thread has disarmed; that fault is ours to retry, and
@@ -193,7 +206,7 @@ namespace
             if (s_watch_armed.load())
             {
                 DWORD Ignored = 0;
-                VirtualProtect((LPVOID)s_watch_page, 0x1000, PAGE_READONLY, &Ignored);
+                VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_trap, &Ignored);
             }
             *Result = EXCEPTION_CONTINUE_EXECUTION;
             return true;
@@ -208,9 +221,19 @@ namespace
 
         // Decided before the lock. The frame walk below reads the stack under
         // __try, and a read that faults comes back through this handler first;
-        // taking the lock for it would deadlock the thread on itself. Only
-        // writes can belong to the watch.
-        if (Kind != 1)
+        // taking the lock for it would deadlock the thread on itself. Writes
+        // can belong to any watch; a read only to a read watch, and only on its
+        // own page (or the page just lifted), which the frame walk never reads.
+        const uintptr_t FaultPage = Target & kPageMask;
+        if (Kind == 0)
+        {
+            if (!s_watch_reads.load() ||
+                (FaultPage != s_watch_page_seen.load() && FaultPage != s_lifted_page.load()))
+            {
+                return false;
+            }
+        }
+        else if (Kind != 1)
         {
             return false;
         }
@@ -230,8 +253,10 @@ namespace
                 return false;
             }
             const DWORD Protection = Info.Protect & 0xFF;
-            if (Protection != PAGE_READWRITE && Protection != PAGE_WRITECOPY &&
-                Protection != PAGE_EXECUTE_READWRITE && Protection != PAGE_EXECUTE_WRITECOPY)
+            const bool Writable = Protection == PAGE_READWRITE || Protection == PAGE_WRITECOPY ||
+                Protection == PAGE_EXECUTE_READWRITE || Protection == PAGE_EXECUTE_WRITECOPY;
+            const bool Readable = Writable || Protection == PAGE_READONLY || Protection == PAGE_EXECUTE_READ;
+            if (Kind == 1 ? !Writable : !Readable)
             {
                 return false;
             }
@@ -271,6 +296,7 @@ namespace
                 Hit = &s_watch_hits[s_watch_hit_count++];
                 Hit->Rip = Rip;
                 Hit->Count = 0;
+                Hit->Kind = Kind;
                 char Frames[256];
                 DescribeFrames(Context, Frames, sizeof(Frames));
                 snprintf(Hit->First, sizeof(Hit->First),
@@ -305,6 +331,7 @@ namespace
         size_t Count = 0;
         uint64_t Faults = 0;
         uintptr_t Address = 0;
+        bool Reads = false;
         {
             std::scoped_lock Lock(s_watch_mutex);
             if (!s_watch_armed.load())
@@ -314,6 +341,7 @@ namespace
             // Protection first, so nothing below can fault on the page.
             s_lifted_page.store(s_watch_page);
             s_watch_armed.store(false);
+            Reads = s_watch_reads.load();
             DWORD Ignored = 0;
             VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_protection, &Ignored);
             Count = s_watch_hit_count;
@@ -327,21 +355,22 @@ namespace
         }
         std::vector<WatchHit> Hits(Copied, Copied + Count);
 
-        std::string Text = StringFormat("\n=== vigia de escrita em %016llx encerrada (%s): %llu faltas na pagina, %zu instrucoes ===\n",
-            (unsigned long long)Address, Why, (unsigned long long)Faults, Hits.size());
+        std::string Text = StringFormat("\n=== vigia de %s em %016llx encerrada (%s): %llu faltas na pagina, %zu instrucoes ===\n",
+            Reads ? "leitura" : "escrita", (unsigned long long)Address, Why, (unsigned long long)Faults, Hits.size());
         for (const WatchHit& Hit : Hits)
         {
             const bool InModule = Hit.Rip > s_base && Hit.Rip < s_base + kModuleSpan;
+            const char* Verb = Hit.Kind == 0 ? "leu" : "escreveu";
             Text += InModule
-                ? StringFormat("  escreveu em +0x%llx (%llux) %s\n", (unsigned long long)(Hit.Rip - s_base),
+                ? StringFormat("  %s em +0x%llx (%llux) %s\n", Verb, (unsigned long long)(Hit.Rip - s_base),
                     (unsigned long long)Hit.Count, Hit.First)
-                : StringFormat("  escreveu em %016llx (%llux) %s\n", (unsigned long long)Hit.Rip,
+                : StringFormat("  %s em %016llx (%llux) %s\n", Verb, (unsigned long long)Hit.Rip,
                     (unsigned long long)Hit.Count, Hit.First);
         }
         Append(Text);
     }
 
-    void ArmWatch(uintptr_t Address, size_t Length, int Seconds)
+    void ArmWatch(uintptr_t Address, size_t Length, int Seconds, bool Reads)
     {
         DisarmWatch("substituida");
 
@@ -363,16 +392,19 @@ namespace
                 s_watch_address = Address;
                 s_watch_length = Length == 0 ? 1 : Length;
                 s_watch_page = Address & kPageMask;
+                s_watch_page_seen.store(s_watch_page);
+                s_watch_reads.store(Reads);
+                s_watch_trap = Reads ? PAGE_NOACCESS : PAGE_READONLY;
                 s_watch_protection = Info.Protect;
                 s_watch_faults = 0;
                 s_watch_hit_count = 0;
                 s_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(Seconds);
 
                 // Format before protecting: nothing after VirtualProtect may allocate.
-                Outcome = StringFormat("\n=== vigiando escritas em %016llx (%zu bytes) por %d s ===\n",
-                    (unsigned long long)Address, s_watch_length, Seconds);
+                Outcome = StringFormat("\n=== vigiando %s em %016llx (%zu bytes) por %d s ===\n",
+                    Reads ? "leituras e escritas" : "escritas", (unsigned long long)Address, s_watch_length, Seconds);
                 DWORD Previous = 0;
-                if (VirtualProtect((LPVOID)s_watch_page, 0x1000, PAGE_READONLY, &Previous))
+                if (VirtualProtect((LPVOID)s_watch_page, 0x1000, s_watch_trap, &Previous))
                 {
                     s_watch_armed.store(true);
                 }
@@ -588,6 +620,7 @@ namespace
     //   clear
     //   report
     //   wp <hex absolute address> <decimal length> [seconds, default 3, max 20]
+    //   wpr <same>   (reads too)
     //   wpclear
     //
     // The deref is what makes an argument readable. Half the interesting
@@ -654,7 +687,7 @@ namespace
                     Added++;
                 }
             }
-            else if (Kind == "wp")
+            else if (Kind == "wp" || Kind == "wpr")
             {
                 // wp <hex absolute address> <decimal length> [seconds]
                 std::string Where;
@@ -665,7 +698,7 @@ namespace
                 if (Seconds > 20) { Seconds = 20; }
                 if (!Where.empty())
                 {
-                    ArmWatch((uintptr_t)strtoull(Where.c_str(), nullptr, 16), Length, Seconds);
+                    ArmWatch((uintptr_t)strtoull(Where.c_str(), nullptr, 16), Length, Seconds, Kind == "wpr");
                 }
             }
             else if (Kind == "wpclear")
