@@ -1523,8 +1523,9 @@ devolve: `FUN_1404fffb0` liga `+0x468`, que o update do HUD (`FUN_140507360`)
 lê como "mostrar tudo de novo". O hook chama a mesma função quando
 `FUN_140500b10` diz que o front end terminou. Medido no Chico e no Samuel, em
 sessão: o letreiro, o HUD sumido, e `banner 3 acabou em 203 quadros: HUD
-devolvido`. O som da morte (`FUN_1401905c0`, uma sobreposição de BGM que ninguém
-desfaz sem carga) ficou de fora.
+devolvido`. Ligado por padrão desde `22880bf2`, conferido solo com esse build
+(só `respawn` escrito, `banner=1` no status). O som da morte (`FUN_1401905c0`,
+uma sobreposição de BGM que ninguém desfaz sem carga) ficou de fora.
 
 Para fantasma, a morte comum mostra depois do banner "You have been
 vanquished. Returning to your world..." (mensagem `0x129da1` da linha 199). O
