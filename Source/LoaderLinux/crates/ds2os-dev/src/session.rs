@@ -368,9 +368,10 @@ pub fn command(env: &Environment) -> Result<(), String> {
     }
 }
 
-/// Server lines that say a player left a session. Informational: the server
-/// logs only the first of each message type per connection, so silence here
-/// proves nothing.
+/// Server lines that say a player left a session: `Notify ...` for each
+/// message on a current server, and the census's `First ...` on any. Only
+/// informational: an older server logs just the first per connection, so
+/// silence here proves nothing.
 fn leave_lines(text: &str) -> Vec<String> {
     text.lines().filter(|l| l.contains("LeaveSession") || l.contains("LeaveGuestPlayer")).map(str::to_owned).collect()
 }

@@ -444,8 +444,10 @@ O convidado paga uma morte de verdade: almas no chão e hollow. Queime uma
 efígie antes da próxima marca. `data.serverLines` traz as linhas
 `LeaveSession` e `LeaveGuestPlayer` do servidor, apenas como informação: o
 servidor só registra a primeira mensagem de cada tipo por conexão, e sem elas
-vem a nota `server_census_silent`. Medido: sessão terminada em 19,5 s, com as
-duas linhas no servidor.
+vem a nota `server_census_silent`. Com o servidor atual, que registra cada
+`RequestNotify*` (ver "A linha do tempo"), as linhas `Notify ...` aparecem em
+qualquer sessão. Medido: sessão terminada em 19,5 s, com as duas linhas no
+servidor.
 
 ### O guarda de `session_live`
 
@@ -510,6 +512,71 @@ de quem ficou. Nenhum
 poll dentro do prazo dá `inconclusive`, nunca `passed`. Poll com outro número
 no fim do prazo dá `failed` (`signs_remain`). O comando é só leitura e roda ao
 lado de um controlador.
+
+## A linha do tempo: `timeline`
+
+```bash
+ds2os-dev timeline --last 10m --json
+ds2os-dev timeline --since 17:39:50 --kind death_cost,respawn_done,server_notify
+ds2os-dev timeline --run <runId> --instance 2 --all
+```
+
+Junta, em ordem, o log do servidor, os logs de hook das duas instalações e o
+`events.jsonl` do harness em `data.entries[]`: `{atMs, at, resolutionMs,
+source, instance, kind, line, more}`. Linhas indentadas continuam a entrada
+de cima (`more`). Sem janela, vale `--last 10m`. `--limit` (padrão 2000)
+guarda as mais novas.
+
+| Fonte | Relógio | Resolução |
+| --- | --- | --- |
+| `server` | `AAAA-MM-DD HH:MM:SS`, hora local, sanitizado | 1000 ms |
+| `death`, `channel`, `backread` | `HH:MM:SS.mmm` sem data | 1 ms |
+| `session`, `seamless`, `respawn`, `crash`, `trace`, `rematch` | nenhum | `atMs: null` |
+| `harness` | `atMs` de cada `events.jsonl` | 1 ms |
+
+A data dos relógios sem data vem do mtime do arquivo, andando para trás, ou do
+início da execução no `--run`, andando para frente. Um relógio que volta mais
+de 12 h é virada de dia. Dentro do mesmo segundo do servidor, a ordem é por
+fonte: uma linha do servidor às `18:12:39.000` pode ter acontecido depois de
+uma de hook às `18:12:39.930`.
+
+Linhas sem relógio não cabem numa janela de hora. `--last`/`--since` as
+deixam de fora e dizem quais fontes escreveram na janela
+(`notes: untimed_sources`). `--run <id>` lê os trechos que a execução guardou
+em `logs/` e as inclui no fim, com `at: null`. Os timers, o MemProbe e as
+sondas de área não entram, porque o relógio deles é o uptime do processo ou
+não existe.
+
+Por padrão só aparecem linhas classificadas, sem `sign_poll`, `channel_status`
+nem eventos do harness. `--kind a,b` escolhe tipos, `--all` mostra tudo e
+`--instance N` filtra os logs de hook (servidor e harness ficam).
+
+| `kind` | Linha |
+| --- | --- |
+| `death_cost`, `death_cancelled`, `death_seen`, `copy_refused`, `respawn_step`, `respawn_done`, `death_order` | `DS2_Death.log`: custos, morte cancelada, morte vista, cópia recusada, passos e fim do renascer, ecos de ordem |
+| `session_end_request`, `host_state`, `session_order` | `DS2_Session.log`: `fim de sessao pedido\|RECUSADO`, estados da máquina do host, ecos |
+| `channel_members`, `channel_announce`, `channel_received`, `channel_status` | `DS2_Channel.log` |
+| `backread_state`, `backread_release`, `backread_keep`, `backread_focus`, `backread_order` | `DS2_Backread.log` |
+| `warp`, `warp_accepted`, `seamless_order` | `DS2_Seamless.log` |
+| `crash`, `trace_hit`, `trace_order`, `rematch`, `respawn_order`, `hook_boot` | os demais logs de hook; `hook_boot` é o `=== ds2os ...` de cada lançamento |
+| `server_notify` | `Notify RequestNotify<tipo>: ...`, uma por mensagem |
+| `server_notify_census` | `First DS2_Frpg2RequestMessage.RequestNotify*`, só a primeira por conexão |
+| `sign`, `sign_poll`, `disconnect`, `login` | placas criadas, removidas e invocadas; polls; conexões encerradas; logins |
+
+O servidor DS2 registra **cada** `RequestNotify*` que recebe
+(`DS2_LoggingManager.cpp`) e uma linha quando a placa de um cliente perdido
+enfim sai do cache. Um servidor anterior a essa mudança só tem o censo, e
+nesse caso `server_notify` fica vazio. O servidor compila local: `make Server`
+em `intermediate/make`, aplicado com `server restart` sem jogadores.
+
+Medido em 14/09, na segunda invocação da mesma conexão: `Notify
+RequestNotifyJoinGuestPlayer` e `JoinSession` sem nenhuma linha de censo. Uma
+morte com renascer dentro da sessão deu `death_cost` → `death_cancelled` →
+`respawn_step` → `respawn_done` em 17 ms, sem `RequestNotifyDeath` no servidor.
+Morte cancelada não notifica, e essa ausência é o sinal, não um buraco.
+
+Num cenário, `step_started` e `step_finished` trazem `logBytes`: o tamanho de
+cada log capturado naquele instante, para recortar as linhas de cada passo.
 
 ## Cenários
 
@@ -640,7 +707,7 @@ Cada invocação cria `~/.local/share/ds2os-dev/runs/<id>/`, respeitando
 | `environment.json` | Ambiente, identidade declarada, processos e configuração em disco |
 | `events.jsonl` | Progresso e eventos; cenários incluem observações e verdicts por assertion |
 | `result.json` | Mesmo contrato emitido em stdout com `--json` |
-| `logs/` | Trechos escritos durante a operação, com offsets e indicação de rotação/truncamento em `index.json` |
+| `logs/` | Trechos escritos durante a operação, com offsets e indicação de rotação/truncamento em `index.json`: o log do servidor, o de cada instância e **todo** `DS2_*.log`/`DS2OS_*.log` das duas instalações |
 | `manifest.json` | Nos cenários: `harnessBuild`, SHA-256 dos binários em disco e recibos disponíveis |
 | `scenario.json`, `fixtures.json` | Cenário executado e identificação dos snapshots, quando usados |
 | `step-*/`, `failure/`, PNGs | Capturas por instância com nomes únicos |
@@ -661,9 +728,13 @@ manifesto identifica o arquivo em disco; não prova que um processo aberto
 antes da cópia carregou esse arquivo.
 
 `players.souls`, `deathCount` e `multiplayCount` são `null`: o servidor DS2 não
-implementa essas medições. `watch` usa os logs de warp disponíveis, identifica
-jogadores por Steam ID e anuncia desconexão/perda/recuperação da API. Um hook
-de warp desativado ou uma morte que não dispara warp não produz prova de morte.
+implementa essas medições. `watch` lê, com a tabela do `timeline`, os logs de
+hook das duas instalações e o do servidor, e avisa morte e custo, morte
+cancelada ou recusada, renascer, warp e motivo, pedido de fim de sessão,
+membros do canal, crash, placa e cada `RequestNotify*`. Também identifica
+jogadores por Steam ID e anuncia entrada, troca de área e
+desconexão/perda/recuperação da API. Linhas de hook sem relógio recebem a hora
+da leitura, com granularidade de 1,5 s. Sem o hook de morte, morte não se prova.
 
 O cenário de respawn completo depende de uma fonte positiva para morte
 (`kill`), renascimento **no mundo do host** e interação entre peers após a

@@ -137,11 +137,20 @@ which hid a sign being created and removed repeatedly and cost a wrong
 diagnosis. Anyone reading that log should know it is a census, not a
 trace.
 
+Since 14/09 the DS2 server also writes `Notify RequestNotify<type>: ...` for
+**every** notify message it receives (`DS2_LoggingManager`), and a line when
+a lost client's sign is finally dropped. Measured the same day: a second
+summon on the same connections logged `Notify RequestNotifyJoinGuestPlayer`
+and `JoinSession` with no census line. The census still applies to every
+other message type. The `fields` in those lines are logged as received; what
+most of them mean is still unknown.
+
 ### `game leave` from a bonfire, right after a session
 
-Twice (T3 and 14/09 20:4x), `game leave --instance 1` failed with
-`leave_failed` on Samuel standing at the Majula bonfire just after the
-session ended. The screen the second time showed the bonfire's **Item box**:
+Three times (T3, 14/09 17:4x and 18:19, each right after a session ended),
+`game leave --instance 1` failed with `leave_failed` on Samuel standing at
+the Majula bonfire; Chico, the guest, left cleanly every time. The screen the
+last two times showed the bonfire's **Item box**:
 the walk's first `press start` was lost, `press a` rested at the bonfire and
 the rest of the walk navigated its menu. Two `press b` and a retry
 recovered it. Not yet known whether the lost press is the post-session
@@ -180,8 +189,9 @@ two gaps left open:
   human, so it proves nothing. The orb is the only item measured.
 - whether a fall death and a kill death produce the same message chain.
   The fall showed no `RequestNotifyDeath`, but the server census only
-  logs the first message of each type per client, so that is not
-  evidence either way. A staged kill needs the two characters next to
+  logged the first message of each type per client then, so that is not
+  evidence either way. The server now logs every `RequestNotifyDeath`;
+  the fall has not been repeated since. A staged kill needs the two characters next to
   each other, and the terrain around the Heide bonfire kept killing the
   phantom on the way over.
 

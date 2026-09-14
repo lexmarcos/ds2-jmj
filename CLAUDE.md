@@ -57,7 +57,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
 | `players --json` | API records; unsupported souls/death/session counters are `null` |
-| `watch` | warp events, area changes, disconnects and API availability; not a general death oracle |
+| `watch` | deaths and what they cost, respawns, warps, session end requests, channel members, crashes, signs and each `RequestNotify*`, from every hook log and the server, plus API presence |
+| `timeline --last 10m \| --since HH:MM \| --run <id>` | server, hook and harness logs merged, ordered and classified; hook logs without a clock only appear with `--run` |
 | `where` | where each character is standing, from the game's own memory |
 | `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
 | `death --instance N mode\|feature\|status` / `death profile set` | the death hook's mode and bill, confirmed by its echo; the profile is reapplied on every `game enter` |
@@ -69,7 +70,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `game watch` | asks the injector to watch the area address for a few seconds |
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |
 | `steam2 init\|run\|show` | the second Steam client, which gives instance 2 its own account |
-| `logs <server\|instance2\|injector\|timer\|cli>` | with `-g <pattern>`, `-n <lines>`, `-f` |
+| `logs <server\|instance2\|injector\|timer\|cli\|death\|backread\|channel\|crash\|trace\|session\|seamless\|respawn\|rematch\|memprobe>` | with `--instance N`, `-g <pattern>`, `-n <lines>`, `-f` |
 
 ### Contract for LLM-driven tests
 
@@ -474,7 +475,10 @@ proves nothing.
 
 **`LogFirstMessageOfEachType` is a census, not a trace.** It logs the first
 of each message type per client, which once hid a sign being created and
-removed repeatedly and cost a wrong diagnosis.
+removed repeatedly and cost a wrong diagnosis. The DS2 server now also logs
+every `RequestNotify*` as `Notify RequestNotify<type>: ...`, so joins, leaves
+and deaths are visible on any connection. Every other message type is still
+only in the census.
 
 **Patch the source of a value, not the value.** Poking the multiplay block
 counters cleared one consumer and moved the failure to the next, and the
@@ -497,8 +501,9 @@ crashed the game on save load.
 **A test that fails and a character that died look identical.** Both leave a
 log full of nothing, and telling them apart by screenshot afterwards has cost
 several afternoons. DS2 does not implement the API death counter: `players`
-reports `null`, not zero. `watch` reads warp reasons from the injector logs;
-a death without a warp, or with that hook disabled, is not observable there.
+reports `null`, not zero. `watch` and `timeline` read deaths from
+`DS2_Death.log` and warp reasons from `DS2_Seamless.log`; a death with the
+death hook absent is not observable there.
 `goto` stops on large discontinuities, falling, stale telemetry or a changed
 process/boot. A jump is a discontinuity, not by itself proof of death. Run a
 watch beside scripted actions and keep unknown evidence inconclusive.

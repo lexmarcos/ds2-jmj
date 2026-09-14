@@ -187,9 +187,11 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
         if scenario.hook_state == HookState::Reset { reset_hooks(env, &scenario.instances, "before")?; }
         for (index, step) in scenario.steps.iter().enumerate() {
             deadline.remaining()?;
-            output::event("step_started", json!({"index": index, "step": format!("{step:?}")}));
+            // Byte offsets of every log, so each step's own lines can be cut out afterwards.
+            let cursors = output::log_cursors(env);
+            output::event("step_started", json!({"index": index, "step": format!("{step:?}"), "logBytes": output::log_sizes(&cursors)}));
             let result = execute(env, step, &scenario.instances, deadline);
-            output::event("step_finished", json!({"index": index, "ok": result.is_ok(), "error": result.as_ref().err()}));
+            output::event("step_finished", json!({"index": index, "ok": result.is_ok(), "error": result.as_ref().err(), "logBytes": output::log_sizes(&cursors)}));
             // Evidence failure is recorded separately from the assertion verdict.
             capture(env, &format!("step-{index}"));
             result?;

@@ -22,6 +22,7 @@ mod output;
 mod observe;
 mod scenario;
 mod session;
+mod timeline;
 mod api;
 mod drive;
 mod env;
@@ -170,6 +171,34 @@ enum Command {
     Reload,
     /// Who the server has connected, and everything it knows about them
     Players,
+    /// Server, hook and harness logs merged into one ordered, classified timeline
+    ///
+    /// Hook logs without a clock (Session, Seamless, Respawn, Crash, Trace,
+    /// Rematch) only appear with `--run`. By default only classified lines are
+    /// shown, without sign polls, channel status blocks and harness events.
+    Timeline {
+        /// A window ending now: 90s, 10m, 2h (default 10m)
+        #[arg(long, conflicts_with = "run")]
+        last: Option<String>,
+        /// From HH:MM[:SS] today, or 'YYYY-MM-DD HH:MM:SS'
+        #[arg(long, conflicts_with_all = ["run", "last"])]
+        since: Option<String>,
+        /// What one run captured in its logs/ and events.jsonl
+        #[arg(long)]
+        run: Option<String>,
+        /// 1 or 2; server and harness lines are kept
+        #[arg(long)]
+        instance: Option<u8>,
+        /// Only these kinds, comma separated (death_cost,server_notify,...)
+        #[arg(long, value_delimiter = ',')]
+        kind: Vec<String>,
+        /// Every line, classified or not
+        #[arg(long)]
+        all: bool,
+        /// Keep at most this many of the newest entries
+        #[arg(long, default_value_t = 2000)]
+        limit: usize,
+    },
     /// Watches for anything that would silently ruin a test, above all a death
     Watch {
         /// How long to watch, in seconds
@@ -278,6 +307,9 @@ enum Command {
     Logs {
         #[arg(value_enum, default_value_t = LogName::Server)]
         which: LogName,
+        /// Which installation, for the logs the injector writes beside the game
+        #[arg(long, default_value_t = 1)]
+        instance: u8,
         /// How many matching lines to show
         #[arg(short = 'n', long, default_value_t = 40)]
         lines: usize,
@@ -584,6 +616,26 @@ enum LogName {
     Injector,
     /// The phantom timer patch
     Timer,
+    /// DS2_Death.log
+    Death,
+    /// DS2_Backread.log
+    Backread,
+    /// DS2_Channel.log
+    Channel,
+    /// DS2_Crash.log
+    Crash,
+    /// DS2_Trace.log
+    Trace,
+    /// DS2_Session.log
+    Session,
+    /// DS2_Seamless.log
+    Seamless,
+    /// DS2_Respawn.log
+    Respawn,
+    /// DS2_Rematch.log
+    Rematch,
+    /// DS2_MemProbe.log
+    Memprobe,
     /// Every ds2os-dev command that was run
     Cli,
 }
@@ -613,7 +665,7 @@ fn main() {
     let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
     let exclusive = !reads_only && !matches!(&cli.command,
         Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session { action: None } | Command::Players |
-        Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
+        Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } | Command::Timeline { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
@@ -696,6 +748,8 @@ fn run(command: Command) -> Result<(), String> {
             )
         }
         Command::Where { instance } => where_is(&environment, &instance),
+        Command::Timeline { last, since, run, instance, kind, all, limit } =>
+            timeline::command(&environment, last, since, run, timeline::Filter { instance, kinds: kind, all }, limit),
         Command::Probe { instance, timeout_ms, lines } => probe_command(&environment, instance, &lines, timeout_ms),
         Command::Death { instance, action } => death_command(&environment, &instance, action),
         Command::Kill { instance, real_death, seconds } => {
@@ -858,8 +912,8 @@ fn run(command: Command) -> Result<(), String> {
             }
             SaveAction::List => save::list(&environment),
         },
-        Command::Logs { which, lines, grep, follow } => {
-            let path = log_path(&environment, which)
+        Command::Logs { which, instance, lines, grep, follow } => {
+            let path = log_path(&environment, which, instance)
                 .ok_or("esse log não existe neste ambiente")?;
             logs::show(&path, &logs::Options { lines, grep: grep.as_deref(), follow })
                 .map_err(|e| e.to_string())
@@ -1454,13 +1508,24 @@ fn finish_failures(failures: Vec<String>) -> Result<(), String> {
     if failures.is_empty() { Ok(()) } else { Err(format!("partial_failure: {}", failures.join("; "))) }
 }
 
-fn log_path(environment: &Environment, which: LogName) -> Option<PathBuf> {
+fn log_path(environment: &Environment, which: LogName, instance: u8) -> Option<PathBuf> {
+    let beside_game = |file: &str| environment.installs.iter().find(|i| i.account == instance).map(|i| i.game_dir.join(file));
     match which {
         LogName::Server => Some(paths::server_log()),
         LogName::Instance2 => Some(paths::instance_log(2)),
         LogName::Cli => Some(paths::cli_log()),
-        LogName::Injector => game::injector_log(environment),
-        LogName::Timer => game::timer_log(environment),
+        LogName::Injector => beside_game("DS2OS_Injector.log"),
+        LogName::Timer => beside_game("DS2_TimerParamPatch.log"),
+        LogName::Death => beside_game("DS2_Death.log"),
+        LogName::Backread => beside_game("DS2_Backread.log"),
+        LogName::Channel => beside_game("DS2_Channel.log"),
+        LogName::Crash => beside_game("DS2_Crash.log"),
+        LogName::Trace => beside_game("DS2_Trace.log"),
+        LogName::Session => beside_game("DS2_Session.log"),
+        LogName::Seamless => beside_game("DS2_Seamless.log"),
+        LogName::Respawn => beside_game("DS2_Respawn.log"),
+        LogName::Rematch => beside_game("DS2_Rematch.log"),
+        LogName::Memprobe => beside_game("DS2_MemProbe.log"),
     }
 }
 

@@ -98,8 +98,15 @@ pub fn log_cursors(env: &crate::env::Environment) -> Vec<LogCursor> {
     let mut files = vec![(crate::paths::server_log(), "server.log".into())];
     for i in &env.installs {
         files.push((crate::paths::instance_log(i.account), format!("instance-{}.log", i.account)));
-        for name in ["DS2OS_Injector.log", "DS2_Seamless.log", "DS2_Session.log", "DS2_Respawn.log"] {
-            files.push((i.game_dir.join(name), format!("instance-{}-{name}", i.account)));
+        // Every log the injector writes beside the game, whatever hooks this
+        // build has: a run that did not keep DS2_Death.log could not show a death.
+        let mut names: Vec<String> = std::fs::read_dir(&i.game_dir).map(|d| d.flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".log") && (n.starts_with("DS2_") || n.starts_with("DS2OS_")))
+            .collect()).unwrap_or_default();
+        names.sort();
+        for name in names {
+            files.push((i.game_dir.join(&name), format!("instance-{}-{name}", i.account)));
         }
     }
     files.into_iter().map(|(path, name)| {
@@ -107,6 +114,11 @@ pub fn log_cursors(env: &crate::env::Environment) -> Vec<LogCursor> {
         LogCursor { path, name, inode: meta.as_ref().map(|m| m.ino()).unwrap_or(0), offset: meta.map(|m| m.len()).unwrap_or(0) }
     }).collect()
 }
+/// The size of every captured log now, for a scenario step to record its own delta.
+pub fn log_sizes(cursors: &[LogCursor]) -> Value {
+    Value::Object(cursors.iter().map(|c| (c.name.clone(), json!(std::fs::metadata(&c.path).map(|m| m.len()).unwrap_or(0)))).collect())
+}
+
 pub fn capture_logs(cursors: &[LogCursor]) -> Result<(), String> {
     use std::io::{Seek, SeekFrom};
     let dest = dir().join("logs");
