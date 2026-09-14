@@ -101,7 +101,7 @@ namespace
     constexpr size_t kActions = 0xe0;                  // chr+0xe0, PlayerActionCtrl
     constexpr size_t kActionsFall = 0xb0;              // its fall controller (FUN_140372620)
     constexpr size_t kFallInAir = 0x08;                // byte
-    constexpr size_t kFallGrounded = 0x20;             // last position on the ground
+    constexpr size_t kFallGrounded = 0x20;             // last position on the ground, where a fall is measured from
     constexpr size_t kMotion = 0xf8;
     constexpr size_t kPhysics = 0x100;
     constexpr size_t kPhysicsProxy = 0x320;            // hkpCharacterRigidBody
@@ -621,18 +621,38 @@ namespace
         return Map;
     }
 
-    int32_t MapIndexUnder(uint8_t* Chr)
+    // The handle of what the character stands on, raw: its kind in the low
+    // nibble, and for collision (7) or a map object (1) the map index in bits
+    // 4..9. False in the air.
+    bool ContactHandle(uint8_t* Chr, uint32_t& Handle)
     {
         uintptr_t Physics = 0, Contact = 0;
+        Handle = 0;
+        return ReadPointer((uintptr_t)Chr + kPhysics, Physics) &&
+            ReadPointer(Physics + kPhysicsContact, Contact) &&
+            ReadBytes(Contact + kContactHandle, &Handle, sizeof(Handle));
+    }
+
+    int32_t MapIndexUnder(uint8_t* Chr)
+    {
         uint32_t Handle = 0;
-        if (!ReadPointer((uintptr_t)Chr + kPhysics, Physics) ||
-            !ReadPointer(Physics + kPhysicsContact, Contact) ||
-            !ReadBytes(Contact + kContactHandle, &Handle, sizeof(Handle)))
+        if (!ContactHandle(Chr, Handle))
         {
             return -1;
         }
         const uint32_t Kind = Handle & 0xf;
         return Kind == 7 || Kind == 1 ? (int32_t)((Handle >> 4) & 0x3f) : -1;
+    }
+
+    // Where the character stands and on what, for the log.
+    std::string DescribeFooting(uint8_t* Chr)
+    {
+        float Feet[3] = {};
+        uint32_t Handle = 0;
+        const bool HaveFeet = ReadBytes((uintptr_t)Chr + 0x90, Feet, sizeof(Feet));
+        const bool HaveHandle = ContactHandle(Chr, Handle);
+        return StringFormat("em (%s), contato %s", HaveFeet ? StringFormat("%.3f, %.3f, %.3f", Feet[0], Feet[1], Feet[2]).c_str() : "?",
+            HaveHandle ? StringFormat("%08x", Handle).c_str() : "nenhum");
     }
 
     uint8_t RoleOf(uint8_t* Chr)
@@ -712,6 +732,13 @@ namespace
     }
 
     // XYZ only, every w left alone; the order is the one that worked by hand.
+    //
+    // The fall controller's ground position goes along. A landing is measured
+    // from it (FUN_140372560: `*(fall+0x24)` minus the height now), and the
+    // game's own position request (`*(chr+0xc8)`, bit 0 of +0xfc) moves it too,
+    // in FUN_140372620. Measured 14/09: a respawn 24.5 m below the death, whose
+    // ground came in a few frames after the character, landed as a fall from
+    // the death's height and killed the character a second time (cause 60).
     bool TeleportLocal(uint8_t* Chr, const float Target[3])
     {
         uintptr_t Motion = 0, Physics = 0, Proxy = 0, Body = 0, Vftable = 0;
@@ -727,7 +754,7 @@ namespace
         const float Feet[3] = { Target[0], Target[1], Target[2] };
         const float Centre[3] = { Target[0], Target[1] + kBodyAboveFeet, Target[2] };
         const uint8_t Still[16] = {};
-        return WriteBytes((uintptr_t)Chr + 0x90, Feet, sizeof(Feet)) &&
+        const bool Moved = WriteBytes((uintptr_t)Chr + 0x90, Feet, sizeof(Feet)) &&
             WriteBytes((uintptr_t)Chr + 0xa0, Feet, sizeof(Feet)) &&
             WriteBytes(Physics + 0x80, Feet, sizeof(Feet)) &&
             WriteBytes(Motion + 0x50, Feet, sizeof(Feet)) &&
@@ -739,6 +766,12 @@ namespace
             WriteBytes(Body + 0x1c0, Centre, sizeof(Centre)) &&
             WriteBytes(Body + 0x1a0, Centre, sizeof(Centre)) &&
             WriteBytes(Physics + 0x1c0, Centre, sizeof(Centre));
+        const uintptr_t Fall = FallController(Chr);
+        if (Moved && Fall != 0)
+        {
+            WriteBytes(Fall + kFallGrounded, Feet, sizeof(Feet));
+        }
+        return Moved;
     }
 
     // Calls into the game, each behind its own __try so a fault inside comes
@@ -1486,12 +1519,13 @@ namespace
 
     // The bonfire's map is coming in. Once it is loaded and the bonfire is in
     // the list, the character goes there; the map stays held until it stands.
-    void ContinueLoading(uint8_t* Chr)
+    // True on the frame the character was sent.
+    bool ContinueLoading(uint8_t* Chr)
     {
         ++s_recovery.LoadFrames;
         if (s_recovery.LoadFrames % kLoadPollFrames != 0)
         {
-            return;
+            return false;
         }
 
         uint8_t State = 0;
@@ -1516,7 +1550,7 @@ namespace
             Append(StringFormat("%s  %s: o mapa %08x carregou em %u quadros; levando para a fogueira %08x (%.3f, %.3f, %.3f) %s\n",
                 Clock().c_str(), s_recovery.Why, s_recovery.LoadMap, s_recovery.LoadFrames, s_recovery.LoadId,
                 Spawn[0], Spawn[1], Spawn[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
-            return;
+            return true;
         }
 
         if (s_recovery.LoadFrames >= kLoadGiveUpFrames)
@@ -1528,6 +1562,7 @@ namespace
             Append(StringFormat("%s  %s: %u quadros e o mapa %08x nao trouxe a fogueira %08x (estado %u); fica na ultima posicao no chao\n",
                 Clock().c_str(), s_recovery.Why, s_recovery.LoadFrames, s_recovery.LoadMap, s_recovery.LoadId, State));
         }
+        return false;
     }
 
     // Holding the map the character jumped to until the streamer has it under
@@ -1543,24 +1578,30 @@ namespace
             if (Current != 0 && s_settle.Frames % kSettleRetryFrames == 0)
             {
                 ++s_settle.Retries;
+                const std::string Where = DescribeFooting(Chr);
                 const bool Moved = TeleportLocal(Chr, s_settle.Target);
-                Append(StringFormat("%s  pisando no mapa %08x e nao no %08x; de novo para a fogueira (%u) %s\n",
-                    Clock().c_str(), Current, s_settle.Map, s_settle.Retries, Moved ? "teleportado" : "TELEPORTE FALHOU"));
+                Append(StringFormat("%s  pisando no mapa %08x e nao no %08x (%s); de novo para a fogueira (%u) %s\n",
+                    Clock().c_str(), Current, s_settle.Map, Where.c_str(), s_settle.Retries, Moved ? "teleportado" : "TELEPORTE FALHOU"));
             }
             return;
         }
         DS2_Backread::Unfocus();
         DS2_Backread::Release();
         s_settle.Active = false;
-        Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
-            Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str()));
+        Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
+            Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str(),
+            DescribeFooting(Chr).c_str()));
     }
 
     void ContinueRecovery(uint8_t* Chr, uint8_t* Data)
     {
-        if (s_recovery.Loading)
+        // Not a frame to ask whether the character is down: the fall controller
+        // has not run since it was sent, and still answers for the place it
+        // left. Measured 14/09, the recovery ended on that answer, and the fall
+        // that followed was billed as a death of its own.
+        if (s_recovery.Loading && ContinueLoading(Chr))
         {
-            ContinueLoading(Chr);
+            return;
         }
         ++s_recovery.Frames;
 
