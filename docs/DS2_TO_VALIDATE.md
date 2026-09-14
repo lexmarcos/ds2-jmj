@@ -153,7 +153,9 @@ the Majula bonfire; Chico, the guest, left cleanly every time. The screen the
 last two times showed the bonfire's **Item box**:
 the walk's first `press start` was lost, `press a` rested at the bonfire and
 the rest of the walk navigated its menu. Two `press b` and a retry
-recovered it. Not yet known whether the lost press is the post-session
+recovered it. Why only the host pays: Samuel stands on the bonfire, where the
+first A prompt is `Rest at bonfire`; Chico's is `Touch your bloodstain`,
+which does nothing harmful when the lost `start` lets `press a` through. Not yet known whether the lost press is the post-session
 state, the prompt toggle left on the bonfire, or timing; `leave` does not
 check that its first press opened the menu.
 

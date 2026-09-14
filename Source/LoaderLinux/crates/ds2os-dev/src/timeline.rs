@@ -385,7 +385,8 @@ pub struct Filter { pub instance: Option<u8>, pub kinds: Vec<String>, pub all: b
 pub fn keep(entry: &Entry, filter: &Filter) -> bool {
     if let (Some(wanted), Some(instance)) = (filter.instance, entry.instance) { if wanted != instance { return false; } }
     if !filter.kinds.is_empty() { return entry.kind.is_some_and(|k| filter.kinds.iter().any(|w| w == k)); }
-    filter.all || entry.kind.is_some_and(|k| k != "harness" && k != "sign_poll" && k != "channel_status")
+    // Order echoes are the harness's own requests answered, and drown the events.
+    filter.all || entry.kind.is_some_and(|k| k != "harness" && k != "sign_poll" && k != "channel_status" && !k.ends_with("_order"))
 }
 
 pub fn command(env: &Environment, last: Option<String>, since: Option<String>, run: Option<String>, filter: Filter, limit: usize) -> Result<(), String> {
@@ -530,5 +531,9 @@ mod tests {
         let poll = entry(Some(0), 1000, "server", None, "Log | 1:Samuel | Sign poll: area 0x0, 1 signs cached");
         assert!(!keep(&poll, &filter));
         assert!(keep(&poll, &Filter { instance: None, kinds: vec!["sign_poll".into()], all: false }));
+        let echo = entry(Some(0), 1, "death", Some(1), "=== modo: observar ===");
+        assert_eq!(echo.kind, Some("death_order"));
+        assert!(!keep(&echo, &filter));
+        assert!(keep(&echo, &Filter { instance: None, kinds: vec!["death_order".into()], all: false }));
     }
 }

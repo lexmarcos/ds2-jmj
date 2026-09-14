@@ -547,8 +547,8 @@ em `logs/` e as inclui no fim, com `at: null`. Os timers, o MemProbe e as
 sondas de área não entram, porque o relógio deles é o uptime do processo ou
 não existe.
 
-Por padrão só aparecem linhas classificadas, sem `sign_poll`, `channel_status`
-nem eventos do harness. `--kind a,b` escolhe tipos, `--all` mostra tudo e
+Por padrão só aparecem linhas classificadas, sem `sign_poll`, `channel_status`,
+ecos de ordem (`*_order`) nem eventos do harness. `--kind a,b` escolhe tipos, `--all` mostra tudo e
 `--instance N` filtra os logs de hook (servidor e harness ficam).
 
 | `kind` | Linha |
