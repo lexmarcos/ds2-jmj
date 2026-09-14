@@ -521,7 +521,11 @@ ds2os-dev teleport --instance 1 --to-bonfire 0x7ba2 --json
 ds2os-dev teleport --instance 1 --to 6.186,-18.517,209.053 --json
 ds2os-dev goto-map --instance 1 --map 0a040000 --to 10.53,5.92,-16.25 --json
 ds2os-dev backread --instance 1 load|focus <mapa> x y z|unfocus|clear|keep <i> <ms>|status --json
+ds2os-dev scenario run docs/scenarios/teleport-roundtrip.json --json
 ```
+
+`teleport-roundtrip.json` usa as coordenadas do Samuel em Heide e Majula: vai à
+Catedral, a Majula e volta à primeira fogueira de Heide.
 
 `bonfires` lê, numa só ida e volta, o registro da última fogueira e os nós da
 lista do mapa carregado: id, mapa e ponto de nascimento (translação menos
@@ -557,7 +561,9 @@ e sem dano de queda.
 `--to-bonfire` só aceita fogueira da lista carregada
 (`bonfire_not_loaded`: use `goto-map`).
 
-`backread` fala com o `DS2_Backread.req` e sempre devolve o status junto. Um
+`backread` fala com o `DS2_Backread.req` e sempre devolve o status junto.
+`keep <i> <ms>` não é reversível: nenhum verbo solta um keep antes do prazo, e
+`keep i 0` em muitos índices ocupa as 8 vagas (ver `hooks reset`). Um
 eco só diz que o pedido foi lido, então `goto-map` espera o efeito:
 
 1. `load <mapa>` até o status do hook listar o mapa em `estado 5` (no log,
@@ -581,7 +587,13 @@ Heide → Majula: contato `0x3c17` (índice 1), e Majula → Heide: `0xc7`
 `where` mostra, em `pose.live`, os pés do personagem publicados pelo
 `DS2_NavHook` (ver abaixo), e em `data.navLag` as instâncias cuja pose publicada
 está a mais de 1 m deles. Depois do teleporte para a Catedral, a pose antiga
-ficou 68 m atrás, e só o `live` estava certo.
+ficou 68 m atrás, e só o `live` estava certo. `goto` e `goto --to-instance` ainda leem essa
+pose, então depois de um teleporte andam a partir de uma posição velha.
+
+`teleport` sozinho prova posição, não mapa: sobre coordenadas que dois mapas
+compartilham, ele pode passar em pé no chão do mapa errado. Quem confere o
+contato é o `goto-map`. A checagem de morte por 3 s é negativa e só vale
+com `DS2 Death Intercept` no recibo deste boot.
 
 ## A linha do tempo: `timeline`
 

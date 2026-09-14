@@ -169,6 +169,11 @@ the overlap landing on a Majula rock (it did not happen in either direction
 this time), a teleport of the guest inside a session, and any map pair other
 than Heide and Majula.
 
+After the teleport to the cathedral, the Nav's own pose (`ctx+0xa8` chain)
+stayed at the old bonfire, 68 m away, with its tick advancing; only the new
+`live` field followed. `goto` and `goto --to-instance` still read that pose.
+Unknown whether walking brings it back; `nav::read` should prefer `live`.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway
