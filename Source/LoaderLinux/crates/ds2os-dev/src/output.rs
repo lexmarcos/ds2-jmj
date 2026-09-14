@@ -40,6 +40,22 @@ pub fn line(args: std::fmt::Arguments<'_>) {
     if !machine { std::println!("{message}"); }
 }
 
+/// The commit this binary was built from (`build.rs`), or `unknown`.
+pub const HARNESS_COMMIT: &str = env!("DS2OS_HARNESS_COMMIT");
+/// Whether the harness sources had uncommitted edits when it was built.
+pub const HARNESS_DIRTY: bool = const_str_eq(env!("DS2OS_HARNESS_DIRTY"), "true");
+
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() { return false; }
+    let mut i = 0;
+    while i < a.len() { if a[i] != b[i] { return false; } i += 1; }
+    true
+}
+
+/// Which harness produced a run.
+pub fn harness_build() -> Value { json!({"commit": HARNESS_COMMIT, "dirty": HARNESS_DIRTY}) }
+
 pub fn fingerprint(path: &Path) -> Value {
     let result = (|| -> std::io::Result<String> {
         let mut file = std::fs::File::open(path)?;
@@ -59,7 +75,7 @@ pub fn manifest(env: &crate::env::Environment) -> Result<(), String> {
         "configuredInjector": std::fs::read_to_string(i.game_dir.join("Injector.config")).ok(),
         "loadedHooks": crate::observe::hooks(&i.game_dir),
     })).collect();
-    let manifest = json!({"schemaVersion": 1, "environment": env,
+    let manifest = json!({"schemaVersion": 1, "environment": env, "harnessBuild": harness_build(),
         "harness": fingerprint(&std::env::current_exe().map_err(|e| e.to_string())?),
         "server": env.server.as_ref().map(|s| fingerprint(&s.binary)), "installs": installs});
     std::fs::write(dir().join("manifest.json"), serde_json::to_vec_pretty(&manifest).unwrap()).map_err(|e| e.to_string())
@@ -128,7 +144,7 @@ pub fn finish(result: Result<(), String>) -> i32 {
         .filter(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
         .unwrap_or("operation_failed"));
     let mut payload = json!({"schemaVersion": 1, "runId": run.dir.file_name().unwrap().to_string_lossy(),
-        "status": status, "ok": code == 0, "durationMs": run.started.elapsed().as_millis(),
+        "status": status, "ok": code == 0, "durationMs": run.started.elapsed().as_millis(), "harnessBuild": harness_build(),
         "data": run.data, "error": error, "errorCode": error_code, "artifacts": run.dir });
     let saved = (|| -> std::io::Result<()> {
         writeln!(run.events, "{}", json!({"atMs": now_ms(), "kind": "result", "data": payload}))?;

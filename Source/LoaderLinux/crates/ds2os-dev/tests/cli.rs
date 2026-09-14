@@ -41,6 +41,13 @@ fn doctor_json_and_exit_code_agree_even_when_environment_is_incomplete() {
     let ready = value["data"]["ok"].as_bool().unwrap();
     assert_eq!(result.status.code(), Some(if ready { 0 } else { 1 }));
     assert_eq!(value["ok"], ready);
+    // Only a problem fails the command; a check that could not run is never ok.
+    let checks = value["data"]["checks"].as_array().unwrap();
+    assert!(checks.iter().all(|c| ["ok", "warning", "problem", "skipped"].contains(&c["status"].as_str().unwrap())));
+    assert_eq!(ready, checks.iter().all(|c| c["status"] != "problem"));
+    let commit = value["harnessBuild"]["commit"].as_str().unwrap();
+    assert!(commit == "unknown" || (commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit())), "{commit}");
+    assert!(value["harnessBuild"]["dirty"].is_boolean());
 }
 
 #[test]

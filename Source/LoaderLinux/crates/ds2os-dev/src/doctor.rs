@@ -55,6 +55,7 @@ impl Check {
 pub fn checks(env: &Environment) -> Vec<Check> {
     let mut checks: Vec<Check> = env.problems().into_iter()
         .map(|p| Check::new("environment", None, Status::Problem, p.what).fix(p.fix)).collect();
+    checks.push(harness_build(env.repo_root.as_deref()));
     let settings = HarnessConfig::load();
 
     let server_pid = server::status(env).pid;
@@ -114,6 +115,51 @@ pub fn checks(env: &Environment) -> Vec<Check> {
     checks.push(wine_orphans(&every_game));
     checks.push(x11_clients());
     checks
+}
+
+/// Whether the running binary is the code in the tree: built from the commit
+/// the repository is on, and not older than any of its sources.
+fn harness_build(repo: Option<&Path>) -> Check {
+    let embedded = crate::output::HARNESS_COMMIT;
+    let Some(repo) = repo else {
+        return Check::new("harness_build", None, Status::Skipped, format!("commit {embedded}; repositório não encontrado"));
+    };
+    let head = std::process::Command::new("git").arg("-C").arg(repo).args(["rev-parse", "HEAD"]).output().ok()
+        .filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    let crates = repo.join("Source/LoaderLinux/crates");
+    let newest = [crates.join("ds2os-dev/src"), crates.join("ds2os-dev/build.rs"), crates.join("ds2os-dev/Cargo.toml"),
+        crates.join("ds2os-core/src"), crates.join("ds2os-core/Cargo.toml")]
+        .iter().filter_map(|path| newest_file(path)).max_by_key(|(modified, _)| *modified);
+    let built = std::env::current_exe().ok().and_then(|exe| std::fs::metadata(exe).ok()?.modified().ok());
+    staleness(embedded, crate::output::HARNESS_DIRTY, head.as_deref(), built, newest)
+}
+
+fn newest_file(path: &Path) -> Option<(std::time::SystemTime, std::path::PathBuf)> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() { return Some((meta.modified().ok()?, path.to_path_buf())); }
+    std::fs::read_dir(path).ok()?.flatten().filter_map(|entry| newest_file(&entry.path())).max_by_key(|(modified, _)| *modified)
+}
+
+fn staleness(embedded: &str, dirty: bool, head: Option<&str>, built: Option<std::time::SystemTime>,
+    newest: Option<(std::time::SystemTime, std::path::PathBuf)>) -> Check {
+    const NAME: &str = "harness_build";
+    let short = |commit: &str| commit.chars().take(8).collect::<String>();
+    let data = json!({"commit": embedded, "dirty": dirty, "repositoryHead": head, "newestSource": newest.as_ref().map(|(_, path)| path)});
+    let rebuild = "`~/.cargo/bin/cargo build -p ds2os-dev` em Source/LoaderLinux";
+    if embedded == "unknown" {
+        return Check::new(NAME, None, Status::Warning, "binário compilado sem git: não diz de que código é").fix(rebuild).data(data);
+    }
+    if let Some(head) = head.filter(|head| *head != embedded) {
+        return Check::new(NAME, None, Status::Warning, format!("binário do commit {}, repositório em {}", short(embedded), short(head)))
+            .fix(rebuild).data(data);
+    }
+    if let (Some(built), Some((modified, path))) = (built, &newest) {
+        if modified > &built {
+            return Check::new(NAME, None, Status::Warning, format!("{} mudou depois do build", path.display())).fix(rebuild).data(data);
+        }
+    }
+    let edits = if dirty { " com edições não commitadas" } else { "" };
+    Check::new(NAME, None, Status::Ok, format!("commit {}{edits}, sem código mais novo que o binário", short(embedded))).data(data)
 }
 
 fn read_json(path: &Path) -> Option<Value> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() }
@@ -456,6 +502,21 @@ mod tests {
         assert_eq!(memprobe(&located).status, Status::Ok);
         located.elapsed_ms = 2400;
         assert_eq!(memprobe(&located).status, Status::Warning);
+    }
+
+    #[test]
+    fn a_binary_behind_the_tree_says_so() {
+        use std::time::{Duration, SystemTime};
+        let built = SystemTime::now();
+        let source = Some((built - Duration::from_secs(60), std::path::PathBuf::from("src/probe.rs")));
+        assert_eq!(staleness("abc", false, Some("abc"), Some(built), source.clone()).status, Status::Ok);
+        assert!(staleness("abc", true, Some("abc"), Some(built), source.clone()).detail.contains("não commitadas"));
+        assert_eq!(staleness("abc", false, Some("def"), Some(built), source.clone()).status, Status::Warning);
+        assert_eq!(staleness("unknown", false, Some("abc"), Some(built), source).status, Status::Warning);
+        let edited = Some((built + Duration::from_secs(5), std::path::PathBuf::from("src/probe.rs")));
+        let check = staleness("abc", false, Some("abc"), Some(built), edited);
+        assert_eq!(check.status, Status::Warning);
+        assert!(check.detail.contains("src/probe.rs"), "{}", check.detail);
     }
 
     #[test]

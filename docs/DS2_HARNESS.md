@@ -57,6 +57,7 @@ nova DLL ou configuração. `reload` serve para alterações do servidor.
   "status": "failed",
   "ok": false,
   "durationMs": 840,
+  "harnessBuild": {"commit": "<sha do commit>", "dirty": false},
   "data": {},
   "error": "assertion_failed: conta 2, /state esperado world",
   "errorCode": "assertion_failed",
@@ -69,6 +70,12 @@ nova DLL ou configuração. `reload` serve para alterações do servidor.
 | 0 | `passed` | O comando cumpriu seu contrato; num cenário, todas as assertions passaram |
 | 1 | `failed` | Falha de ação, assertion, configuração, cancelamento ou persistência |
 | 2 | `inconclusive` | A observação/assertion não conseguiu obter a evidência necessária |
+
+`harnessBuild` diz que código produziu o resultado: `commit` é o HEAD no
+momento do build e `dirty` indica edições não commitadas em `ds2os-dev` ou
+`ds2os-core` naquele build (`unknown`/`false` quando compilado sem git). O
+binário em `target/debug` sobrevive a checkouts e edições; um resultado sem
+isso não diz se veio do código atual.
 
 `errorCode` extrai o prefixo estável de erros como `busy`, `timeout`,
 `instance_unresolved`, `wrong_character`, `partial_failure` e `cleanup_failed`.
@@ -109,6 +116,7 @@ outra notação pela API).
 | `name` | O que exercita |
 | --- | --- |
 | `environment` | Cada problema de `environment.problems()` (Steam, jogo, Proton, servidor, injector) |
+| `harness_build` | O binário é do commit em que o repositório está e nenhum fonte dos crates é mais novo que ele; senão `warning` |
 | `server_api` | A API responde e todo Steam ID listado é decimal de 17 dígitos |
 | `identities_distinct` | As duas contas configuradas são diferentes |
 | `identity` | A conta tem um SteamID64 decimal configurado |
@@ -356,7 +364,7 @@ Cada invocação cria `~/.local/share/ds2os-dev/runs/<id>/`, respeitando
 | `events.jsonl` | Progresso e eventos; cenários incluem observações e verdicts por assertion |
 | `result.json` | Mesmo contrato emitido em stdout com `--json` |
 | `logs/` | Trechos escritos durante a operação, com offsets e indicação de rotação/truncamento em `index.json` |
-| `manifest.json` | Nos cenários: SHA-256 dos binários em disco e recibos disponíveis |
+| `manifest.json` | Nos cenários: `harnessBuild`, SHA-256 dos binários em disco e recibos disponíveis |
 | `scenario.json`, `fixtures.json` | Cenário executado e identificação dos snapshots, quando usados |
 | `step-*/`, `failure/`, PNGs | Capturas por instância com nomes únicos |
 
