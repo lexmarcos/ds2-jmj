@@ -45,8 +45,14 @@ namespace
 
     constexpr size_t kOwnerVftable = 0x10e87f0;        // MapAreaCtrlOwner
     constexpr size_t kOwnerMap = 0x08;
-    constexpr size_t kOwnerMask = 0x10;                // 4 x uint32
-    constexpr size_t kOwnerMaskCopy = 0x40;            // the streamer writes both
+    constexpr size_t kOwnerMask = 0x10;                // 4 x uint32, the parts the streamer asks for
+    // Every 128-bit parts mask the owner carries, one after another from
+    // +0x10. The streamer writes +0x10 and +0x40; FUN_1403dc930 writes +0x50
+    // (what the world says is visible), +0x60 (the backread of the visible
+    // parts) and +0x70 (the parts the player is in), and the parts controller
+    // +0x20 and +0x30. Measured 14/09: with only +0x10 and +0x40 forced, a map
+    // came in with no ground. +0x70 is left to the game.
+    constexpr size_t kOwnerMasks[] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 };
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
@@ -142,15 +148,17 @@ namespace
         const uint8_t One = 1;
         WriteBytes(Owner + kOwnerForced, &One, 1);
 
-        uint32_t Mask[4] = {};
-        if (ReadBytes(Owner + kOwnerMask, Mask, sizeof(Mask)))
+        for (const size_t At : kOwnerMasks)
         {
-            for (int i = 0; i < 4; ++i)
+            uint32_t Mask[4] = {};
+            if (ReadBytes(Owner + At, Mask, sizeof(Mask)))
             {
-                Mask[i] |= s_mask[i].load();
+                for (int i = 0; i < 4; ++i)
+                {
+                    Mask[i] |= s_mask[i].load();
+                }
+                WriteBytes(Owner + At, Mask, sizeof(Mask));
             }
-            WriteBytes(Owner + kOwnerMask, Mask, sizeof(Mask));
-            WriteBytes(Owner + kOwnerMaskCopy, Mask, sizeof(Mask));
         }
     }
 
@@ -228,15 +236,20 @@ namespace
             Clock().c_str(), Count, s_map.load(), DescribeMask(Asked).c_str());
         for (int i = 0; i < Count; ++i)
         {
-            uint32_t Map = 0, Mask[4] = {};
-            uint8_t State[2] = {};
+            uint32_t Map = 0, Masks[7][4] = {};
+            uint8_t State[4] = {};
             if (ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)) &&
-                ReadBytes(Owners[i] + kOwnerMask, Mask, sizeof(Mask)) &&
+                ReadBytes(Owners[i] + kOwnerMask, Masks, sizeof(Masks)) &&
                 ReadBytes(Owners[i] + kOwnerState, State, sizeof(State)) &&
-                (State[0] != 0 || State[1] != 0 || Mask[0] || Mask[1] || Mask[2] || Mask[3]))
+                (State[0] != 0 || State[1] != 0))
             {
-                Text += StringFormat("    [%d] mapa %08x estado %u forcado %u partes %s\n", i, Map, State[0], State[1],
-                    DescribeMask(Mask).c_str());
+                std::string Parts;
+                for (int k = 0; k < 7; ++k)
+                {
+                    Parts += StringFormat(" +%02x=%s", 0x10 + k * 0x10, DescribeMask(Masks[k]).c_str());
+                }
+                Text += StringFormat("    [%d] mapa %08x estado %u forcado %u quer %u:%s\n", i, Map, State[0], State[1],
+                    State[3], Parts.c_str());
             }
         }
         Append(Text);
