@@ -76,6 +76,11 @@ target_include_directories(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" 
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE -D_CRT_SECURE_NO_WARNINGS -D_WINSOCK_DEPRECATED_NO_WARNINGS -D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
 
+# The commit the DLL is built from, written into its hook receipt. CI passes
+# -DDS2OS_BUILD_SHA=<sha>; a local build says "unknown".
+set(DS2OS_BUILD_SHA "unknown" CACHE STRING "Commit the injector is built from")
+target_compile_definitions(${PROJECT_NAME} PRIVATE DS2OS_BUILD_SHA="${DS2OS_BUILD_SHA}")
+
 util_setup_folder_structure(${PROJECT_NAME} SOURCES "DS3OS")
 
 target_link_libraries(

@@ -262,8 +262,10 @@ bool Injector::Init()
     }
 
     // Current-boot installation receipts, not old log lines or configuration intent.
+    // `build` is the commit CI built this DLL from ("unknown" for a local build),
+    // so the harness can tell which code the running game has.
     nlohmann::json Receipt = {
-        {"schemaVersion", 1}, {"bootId", BootId}, {"hooks", HookStates},
+        {"schemaVersion", 1}, {"bootId", BootId}, {"build", DS2OS_BUILD_SHA}, {"hooks", HookStates},
         {"configured", {{"seamless", Config.DS2SeamlessCoop},
                         {"autoRematch", Config.DS2AutoRematch},
                         {"forceZone", Config.DS2ForceMultiPlayZone},
