@@ -47,7 +47,8 @@
 // cell of a position in the forced map instead.
 //
 // `DS2_Backread.req`: `load <map hex> [<mask hex> x4]` (every part by
-// default), `focus <map hex> <x> <y> <z>`, `unfocus`, `clear`, `status`.
+// default), `focus <map hex> <x> <y> <z>`, `unfocus`, `clear`, `status`, and
+// `keep <map index> <ms>`, the keep a remote player gets, for testing solo.
 class DS2_BackreadHook : public Hook
 {
 public:

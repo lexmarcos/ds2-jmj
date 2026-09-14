@@ -481,6 +481,15 @@ namespace
             DS2_Backread::Unfocus();
             Append(StringFormat("%s  === pedido: sem foco ===\n", Clock().c_str()));
         }
+        else if (Verb == "keep")
+        {
+            // What another player standing in that map does, without a session.
+            int32_t Index = -1;
+            uint32_t Milliseconds = 0;
+            Parts >> Index >> Milliseconds;
+            DS2_Backread::KeepIndex(Index, Milliseconds);
+            Append(StringFormat("%s  === pedido: manter o mapa de indice %d por %u ms ===\n", Clock().c_str(), Index, Milliseconds));
+        }
         else if (Verb == "clear")
         {
             DS2_Backread::Release();
