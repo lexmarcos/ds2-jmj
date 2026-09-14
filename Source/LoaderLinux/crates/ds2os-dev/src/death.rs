@@ -15,17 +15,16 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::env::{Environment, Install};
+use crate::hook_request::{self, text};
 use crate::probe::{self, Reply, Where};
 
-const REQUEST: &str = "DS2_Death.req";
+const STEM: &str = "DS2_Death";
 const LOG: &str = "DS2_Death.log";
-/// The hook knows nothing of it: it keeps the harness's own writers from
-/// overwriting each other's orders before the hook reads them.
-const LOCK: &str = "DS2_Death.lock";
 
 /// The parts of a death's bill the hook can switch off, as it names them.
 pub const FEATURES: [&str; 10] = ["almas", "hollow", "contador", "anel", "mancha_online", "estus", "banner", "copias",
@@ -93,15 +92,6 @@ fn parse_status(text: &str) -> Option<Status> {
     })
 }
 
-/// A log line without the hook's `HH:MM:SS.mmm  ` clock.
-fn text(line: &str) -> &str {
-    let line = line.trim_end_matches(['\n', '\r']);
-    match line.split_once("  ") {
-        Some((clock, rest)) if clock.len() == 12 && clock.as_bytes()[2] == b':' => rest,
-        _ => line,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Echo { Done, Status(Status) }
 
@@ -134,38 +124,11 @@ fn log_size(dir: &Path) -> u64 { std::fs::metadata(dir.join(LOG)).map(|m| m.len(
 
 /// Writes the orders and waits for every echo. Passes only on the echo.
 pub fn send(install: &Install, orders: &[Order], timeout: Duration) -> Result<Vec<Echo>, String> {
-    let deadline = Instant::now() + timeout;
-    let dir = install.game_dir.as_path();
-    let _lock = loop {
-        match crate::control::Lock::acquire(&dir.join(LOCK)) {
-            Ok(lock) => break lock,
-            Err(e) if !e.starts_with("busy:") => return Err(format!("request_write_failed: {e}")),
-            Err(_) if Instant::now() >= deadline => return Err("probe_busy: DS2_Death.lock ocupado".into()),
-            Err(_) => crate::control::sleep(Duration::from_millis(50))?,
-        }
-    };
-    // The hook reads the file and then removes it; replacing it in between
-    // would lose the new orders unread. So an order waits for the last one to go.
-    while dir.join(REQUEST).exists() {
-        if Instant::now() >= deadline { return Err("request_not_consumed: um DS2_Death.req anterior não foi lido".into()); }
-        crate::control::sleep(Duration::from_millis(100))?;
-    }
-    let from = log_size(dir);
     let body: String = orders.iter().map(|o| o.line() + "\n").collect();
-    let temporary = dir.join("DS2_Death.req.tmp");
-    std::fs::write(&temporary, &body).and_then(|_| std::fs::rename(&temporary, dir.join(REQUEST)))
-        .map_err(|e| format!("request_write_failed: {e}"))?;
-    let result = loop {
-        crate::control::check()?;
-        let found = echoes(&probe_read_from(dir, from), orders)?;
-        if found.iter().all(Option::is_some) { break Ok(found.into_iter().map(Option::unwrap).collect()); }
-        if Instant::now() >= deadline {
-            break Err(if dir.join(REQUEST).exists() {
-                "request_not_consumed: o hook de morte não leu o pedido (jogo iniciando, ou DLL sem o hook)".to_owned()
-            } else { format!("no_answer: {} de {} ordens confirmadas", found.iter().filter(|e| e.is_some()).count(), orders.len()) });
-        }
-        crate::control::sleep(Duration::from_millis(100))?;
-    };
+    let result = hook_request::exchange(&install.game_dir, STEM, &body, timeout, |appended| {
+        let found = echoes(appended, orders)?;
+        Ok(found.iter().all(Option::is_some).then(|| found.into_iter().map(Option::unwrap).collect::<Vec<_>>()))
+    });
     crate::output::event("death_orders", json!({"instance": install.account, "orders": orders.iter().map(Order::line).collect::<Vec<_>>(),
         "ok": result.is_ok(), "error": result.as_ref().err(),
         "status": result.as_ref().ok().and_then(|echoes: &Vec<Echo>| echoes.iter().find_map(|x| match x { Echo::Status(s) => Some(s.clone()), _ => None }))}));

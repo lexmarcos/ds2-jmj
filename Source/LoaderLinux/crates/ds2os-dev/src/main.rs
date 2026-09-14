@@ -15,10 +15,12 @@ macro_rules! println {
 mod control;
 mod death;
 mod doctor;
+mod hook_request;
 mod memory;
 mod output;
 mod observe;
 mod scenario;
+mod session;
 mod api;
 mod drive;
 mod env;
@@ -99,7 +101,12 @@ enum Command {
         /// Also read the local character from memory (one more MemProbe round trip)
         #[arg(long)]
         character: bool,
+        /// Also sample the session between the two instances (several seconds) and decide p2pSessionVerified
+        #[arg(long)]
+        session: bool,
     },
+    /// Whether the two instances share a session and their peers exchange data
+    Session,
     /// The local character, from the game's memory: HP, souls, hollowing, deaths, role, bonfire
     Character {
         /// 1, 2, or both
@@ -550,7 +557,7 @@ fn main() {
     // Read-only observation and the pad daemon do not monopolize the control lock.
     let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
     let exclusive = !reads_only && !matches!(&cli.command,
-        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Players |
+        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
@@ -595,7 +602,9 @@ fn run(command: Command) -> Result<(), String> {
     let cursors = output::log_cursors(&environment);
     let result = (|| { match command {
         Command::Doctor => doctor(&environment),
-        Command::Observe { instance, character } => observe::command(&environment, &accounts(&instance)?, character),
+        Command::Observe { instance, character, session } =>
+            observe::command(&environment, &accounts(&instance)?, observe::Include { character, session }),
+        Command::Session => session::command(&environment),
         Command::Character { instance } => character_command(&environment, &accounts(&instance)?),
         Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
         Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),

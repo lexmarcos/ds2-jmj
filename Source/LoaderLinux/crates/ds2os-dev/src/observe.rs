@@ -116,6 +116,9 @@ pub struct Instance {
     /// Only when asked for: it costs another MemProbe round trip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub character: Option<crate::memory::Character>,
+    /// Only when asked for: both instances are sampled for several seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<crate::session::View>,
     pub problems: Vec<String>,
 }
 
@@ -135,12 +138,21 @@ pub fn collect(env: &Environment, accounts: &[u8]) -> Observation {
 }
 
 pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::control::Deadline) -> Observation {
-    collect_with(env, accounts, deadline, false)
+    collect_with(env, accounts, deadline, Include::default())
+}
+
+/// The observations that cost extra MemProbe round trips, taken only when asked for.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Include {
+    /// The local character, for instances confirmed in the world.
+    pub character: bool,
+    /// The session between the two instances and `p2pSessionVerified`.
+    pub session: bool,
 }
 
 /// `character` adds the local character read from memory, for instances
 /// confirmed in the world.
-pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control::Deadline, character: bool) -> Observation {
+pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control::Deadline, include: Include) -> Observation {
     let started = Instant::now();
     let server_players = env.server.as_ref().ok_or_else(|| "servidor não encontrado".to_string())
         .and_then(|s| api::players_until(s, api::web_port(&s.config), deadline.remaining()?.min(Duration::from_secs(10))));
@@ -152,7 +164,7 @@ pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control
         let mut item = Instance { instance: account, observed_at_ms: crate::output::now_ms(), processes: pids.clone(),
             steam_id: id.clone().ok(), identity_source: "harness_config", state: Where::Unknown,
             state_reason: Reason::InstanceStopped, pose: None, pose_age_ms: None, boot_id: None, player: None,
-            server_connected: None, p2p_session_verified: None, hooks: None, character: None, problems: Vec::new() };
+            server_connected: None, p2p_session_verified: None, hooks: None, character: None, session: None, problems: Vec::new() };
         if let Err(e) = &id { item.problems.push(e.clone()); }
         if let (Ok(id), Ok(players)) = (&id, &server_players) {
             match player_for(players, id) {
@@ -187,7 +199,7 @@ pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control
                         item.hooks = hooks(&install.game_dir);
                         if item.state == Where::World { item.pose = nav::read(&install.game_dir); }
                         item.pose_age_ms = age_ms(&install.game_dir.join("DS2_Nav.txt"));
-                        if character && item.state == Where::World {
+                        if include.character && item.state == Where::World {
                             match deadline.remaining().and_then(|left| crate::memory::read(install, left.min(Duration::from_secs(3)))) {
                                 Ok(read) => item.character = Some(read),
                                 Err(e) => item.problems.push(format!("character_unread: {e}")),
@@ -205,12 +217,24 @@ pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control
         item.observed_at_ms = crate::output::now_ms();
         instances.push(item);
     }
+    if include.session {
+        // The verdict is about the pair, so both instances are sampled whichever were asked for.
+        match deadline.remaining().and_then(|left| crate::session::observe(env, left.min(Duration::from_secs(30)))) {
+            Ok((assessment, _)) => for item in &mut instances {
+                item.session = assessment.instances.iter().find(|v| v.instance == item.instance).cloned();
+                item.p2p_session_verified = assessment.p2p_session_verified;
+                item.problems.extend(assessment.problems.iter().map(|p| format!("session: {p}")));
+            },
+            Err(e) => for item in &mut instances { item.problems.push(format!("session_unread: {e}")); },
+        }
+    }
     Observation { schema_version: 1, observed_at_ms: crate::output::now_ms(), duration_ms: started.elapsed().as_millis(),
         server_error: server_players.err(), server_observed_at_ms, instances }
 }
 
-pub fn command(env: &Environment, accounts: &[u8], character: bool) -> Result<(), String> {
-    let observation = collect_with(env, accounts, crate::control::Deadline::after(Duration::from_secs(20)), character);
+pub fn command(env: &Environment, accounts: &[u8], include: Include) -> Result<(), String> {
+    let seconds = if include.session { 50 } else { 20 };
+    let observation = collect_with(env, accounts, crate::control::Deadline::after(Duration::from_secs(seconds)), include);
     crate::output::data(json!(observation));
     for i in &observation.instances { println!("conta {}: {} ({}), personagem {}, posição {:?}", i.instance, i.state, i.state_reason,
         i.player.as_ref().map(|p| p.name.as_str()).unwrap_or("desconhecido"), i.pose); }

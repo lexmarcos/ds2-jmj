@@ -160,7 +160,8 @@ ds2os-dev players --json
 | `bootId` | Identificador do carregamento do injector; `null` com DLL antiga |
 | `player`, `serverConnected` | Registro da API filtrado pelo Steam ID; `null` quando não verificável |
 | `hooks` | Recibo dos hooks instalados no mesmo boot da telemetria |
-| `p2pSessionVerified` | Reservado para uma prova de interação entre peers; atualmente `null` |
+| `p2pSessionVerified` | Só com `--session`: `true` quando a sessão existe e dados atravessaram entre os peers; ver "A sessão" |
+| `session` | Só com `--session`: papel, membros, estados das máquinas e contadores do canal desta instância |
 | `problems` | Motivos pelos quais alguma observação não pôde ser confirmada; um `unknown` aparece como `state_unknown: <motivo>` |
 
 `observedAtMs`, `serverObservedAtMs` e `durationMs` tornam visível quando as
@@ -365,6 +366,57 @@ outra instalação escreveu no mesmo intervalo). Escrita recusada é
 `poke_not_written`; HP zerado sem as linhas em 15 s é `inconclusive`. Cenários
 ganham a ação `{"action": "kill", "instance": N}`, que recusa o modo `observe`.
 
+## A sessão: `session`
+
+```bash
+ds2os-dev session --json
+ds2os-dev observe --instance both --session --json
+```
+
+Amostra as duas instâncias em paralelo: o `status` do `DS2_Channel.req` duas
+vezes, com pelo menos 2,5 s entre elas, e as duas máquinas de sessão por
+varredura de vtable (`NetSummonAcceptMultiplayCtrl` `0x1410d7998`, estado em
+`+0x150`; `NetSummonJoinMultiplayCtrl` `0x1410d7bd8`, estado em `+0xf8`). Leva
+de 4 a 5 segundos, por isso só entra no `observe` com `--session` e nas
+assertions que pedem `/session/*` ou `/p2pSessionVerified`.
+
+A decisão tem dois níveis, e `data.assessment` diz qual passou:
+
+| Campo | Exige |
+| --- | --- |
+| `objectsAgree` | host com o controlador em `0x10`, convidado com o seu em 7, e os canais das duas máquinas listando os mesmos dois membros, com o mesmo marcado `(host)`, que são as duas contas configuradas |
+| `peersExchange` | entre as amostras, `enviados` do host sobe com `falhas` inalterado **e** `recebidos` do convidado sobe (o host anuncia a fogueira a cada 2 s por Steam P2P) |
+
+`p2pSessionVerified` é `true` só com os dois; `false` só quando nenhuma das
+duas instâncias tem sessão no canal nem controlador ativo; `null` em todo o
+resto, com o motivo em `problems`:
+
+| Problema | Significa |
+| --- | --- |
+| `session_objects_only` | a sessão existe e nenhum dado atravessou; o controlador do host já foi medido em `0x10` minutos depois de a sessão acabar |
+| `channel_counters_stalled`, `host_loading` | contadores parados; em carregamento o host para de anunciar |
+| `members_disagree`, `not_our_pair` | os canais divergem, ou há mais que as duas contas (três jogadores não são testáveis nesta máquina) |
+| `host_controller_inactive`, `guest_controller_inactive` | a máquina de sessão não está no estado de sessão ativa |
+| `roles_incomplete` | um lado mostra sessão ou controlador e o outro não |
+| `identity_mismatch` | a conta que o canal diz rodar não é a configurada |
+
+Duas coisas medidas em 14/09 que o harness trata:
+
+- fora de sessão o canal publica `eu=0000000000000000`: o hook só aprende a
+  própria conta ao consultar uma sessão. `samples[].second.me` fica `null`, e
+  isso não é conta errada.
+- a varredura acha a própria agulha do injector, num endereço baixo que aparece
+  **nas duas** varreduras e, depois da segunda, contém a vtable do convidado.
+  Endereço presente nas duas listas é descartado, e todo candidato tem a
+  vtable relida antes de o estado contar.
+
+`data.samples[]` guarda as duas amostras cruas do canal e os controladores de
+cada instância; `data.assessment.instances[]` traz `role` (`host`, `guest`,
+`none`, `unknown`), `members`, `hostState`, `guestState` e os deltas `sent`,
+`failed`, `received`, `refused`. O comando termina `passed` com uma decisão
+(`true` ou `false`) e `inconclusive` com `null`. O pedido de canal usa um
+`DS2_Channel.lock` do harness, como `DS2_Death`.
+
 ## Cenários
 
 ```bash
@@ -416,7 +468,8 @@ não declaradas, valores inválidos e cenários sem assertions são recusados.
 Os pointers são relativos à observação da **instância identificada pelo
 número**, não a um índice de array. São aceitos `/state`, `/serverConnected`,
 `/player/name`, `/player/location`, `/pose/archetype`, `/p2pSessionVerified`,
-os `/character/*` listados acima e `/hooks/hooks/<nome exato do hook>`. Consulte `observe` para os nomes dos hooks.
+`/session/role`, os `/character/*` listados acima e
+`/hooks/hooks/<nome exato do hook>`. Consulte `observe` para os nomes dos hooks.
 `equals` usa igualdade JSON; campo ausente ou `null` é inconclusivo. Esperar
 `null` ou `unknown` não é uma assertion válida. Divergência conhecida é falha.
 `wait` repete até atingir o valor ou vencer seu prazo.
@@ -508,11 +561,10 @@ implementa essas medições. `watch` usa os logs de warp disponíveis, identific
 jogadores por Steam ID e anuncia desconexão/perda/recuperação da API. Um hook
 de warp desativado ou uma morte que não dispara warp não produz prova de morte.
 
-O cenário de respawn completo depende de uma fonte positiva para morte,
-renascimento **no mundo do host** e interação entre peers após a volta. O
-campo `p2pSessionVerified` fica `null` enquanto essa fonte não existir. Um
-teste que exigir `true` será inconclusivo; HUD, papel de fantasma, PID vivo,
-posição na fogueira ou presença na API isoladamente não aprovam esse teste.
+O cenário de respawn completo depende de uma fonte positiva para morte
+(`kill`), renascimento **no mundo do host** e interação entre peers após a
+volta (`p2pSessionVerified`). HUD, papel de fantasma, PID vivo, posição na
+fogueira ou presença na API isoladamente não aprovam esse teste.
 
 Os testes automatizados do crate exercitam parsing, correlação, assertions,
 locks, falhas do protocolo do pad, cópia de saves e contrato CLI. Eles não

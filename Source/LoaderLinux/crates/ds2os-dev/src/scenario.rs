@@ -62,7 +62,7 @@ fn evaluate(observation: &Value, instance: u8, pointer: &str, expected: &Value) 
     }
     match item.pointer(pointer) {
         None | Some(Value::Null) => Verdict::Inconclusive,
-        Some(v) if pointer == "/state" && v == "unknown" => Verdict::Inconclusive,
+        Some(v) if (pointer == "/state" || pointer == "/session/role") && v == "unknown" => Verdict::Inconclusive,
         Some(v) if v == expected => Verdict::Passed,
         Some(_) => Verdict::Failed,
     }
@@ -85,7 +85,7 @@ fn validate(scenario: &Scenario) -> Result<(), String> {
                 if equals.is_null() || equals == "unknown" || !(matches!(pointer.as_str(), "/state" | "/serverConnected" | "/player/name" |
                     "/player/location" | "/pose/archetype" | "/p2pSessionVerified" | "/character/hp" | "/character/hpMax" |
                     "/character/souls" | "/character/deaths" | "/character/hollow" | "/character/hollowState" | "/character/role" |
-                    "/character/bonfire/id" | "/character/bonfire/map") || pointer.starts_with("/hooks/hooks/")) {
+                    "/character/bonfire/id" | "/character/bonfire/map" | "/session/role") || pointer.starts_with("/hooks/hooks/")) {
                     return Err(format!("invalid_assertion: {pointer}; valor desconhecido não pode aprovar teste"));
                 }
             }
@@ -236,7 +236,9 @@ fn assertion(env: &Environment, instance: u8, pointer: &str, equals: &Value, wai
     let observation_deadline = Deadline::after(window);
     loop {
         deadline.remaining()?;
-        let observation = json!(observe::collect_with(env, &[instance], observation_deadline, pointer.starts_with("/character/")));
+        let include = observe::Include { character: pointer.starts_with("/character/"),
+            session: pointer.starts_with("/session/") || pointer == "/p2pSessionVerified" };
+        let observation = json!(observe::collect_with(env, &[instance], observation_deadline, include));
         let verdict = evaluate(&observation, instance, pointer, equals);
         output::event("assertion", json!({"instance": instance, "pointer": pointer, "expected": equals,
             "verdict": format!("{verdict:?}").to_lowercase(), "observation": observation}));

@@ -58,6 +58,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `where` | where each character is standing, from the game's own memory |
 | `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
 | `death --instance N mode\|feature\|status` / `death profile set` | the death hook's mode and bill, confirmed by its echo; the profile is reapplied on every `game enter` |
+| `session` | both instances: roles, members, session machine states, channel counters, and `p2pSessionVerified` |
 | `kill --instance N` | zeroes HP with expected bytes and passes only on the hook's death lines |
 | `probe --instance N "<kind> <name> <args>"...` | raw MemProbe lines in one request, every reply parsed; lengths are decimal |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
@@ -92,9 +93,12 @@ Use this loop:
 
 `scenario run world-ready` checks world state and server presence for both
 accounts. It does **not** prove summoning, peer interaction or guest respawn.
-`p2pSessionVerified` is currently `null`; an assertion requiring it is
-inconclusive. Never convert missing observations, no error logs, an installed
-hook, a live PID or a phantom HUD into proof of a working co-op session.
+`p2pSessionVerified` comes from `session` (or `observe --session`): `true`
+needs the session objects and both coop channels to agree **and** packets to
+cross from host to guest between two samples; the objects alone stay `null`,
+because the host's controller outlives the session. Never convert missing
+observations, no error logs, an installed hook, a live PID or a phantom HUD
+into proof of a working co-op session.
 
 Each invocation records command, environment, events, result and bounded log
 excerpts in `~/.local/share/ds2os-dev/runs/<id>/` (or under `XDG_DATA_HOME`).
