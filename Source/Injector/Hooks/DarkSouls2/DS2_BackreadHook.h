@@ -48,7 +48,8 @@
 //
 // `DS2_Backread.req`: `load <map hex> [<mask hex> x4]` (every part by
 // default), `focus <map hex> <x> <y> <z>`, `unfocus`, `clear`, `status`, and
-// `keep <map index> <ms>`, the keep a remote player gets, for testing solo.
+// `keep <map index> <ms> [<mask hex> x4]`, the keep a remote player gets, for
+// testing solo.
 class DS2_BackreadHook : public Hook
 {
 public:
@@ -70,10 +71,11 @@ namespace DS2_Backread
     void Focus(uint32_t MapId, const float Position[3]);
     void Unfocus();
 
-    // Keep the map with this index whole (forced, every part) for the next
-    // few milliseconds; called again to keep it longer. For the maps other
-    // players stand in, which must not unload under them.
-    void KeepIndex(int32_t Index, uint32_t Milliseconds);
+    // Keep the map with this index forced, with these parts beside the ones
+    // the game wants, for the next few milliseconds; called again to keep it
+    // longer. For the maps other players stand in, which must not unload under
+    // them. Without a mask, the parts it already had, or every part.
+    void KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask = nullptr);
 
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.

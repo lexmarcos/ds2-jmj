@@ -154,12 +154,28 @@ namespace
     constexpr size_t kOwnerMap = 0x08;
     // The map a character stands in, the way FUN_140312ba0 finds it: the
     // physics contact `*(chr+0x100)+0x10`, whose handle at +0xe0 has the kind
-    // in the low nibble (7 a map hit, 1 a map object) and the map index in
-    // bits 4..9. Other players' maps are kept whole on this machine
-    // (DS2_BackreadHook) for a few seconds after they were last seen there.
+    // in the low nibble (7 a map hit, 1 a map object), the map index in bits
+    // 4..9 and, for a hit, the index of the collision in bits 10 and up.
+    // Other players' maps are kept on this machine (DS2_BackreadHook) for a
+    // few seconds after they were last seen there.
     constexpr size_t kPhysicsContact = 0x10;
     constexpr size_t kContactHandle = 0xe0;
     constexpr uint32_t kKeepOtherPlayerMs = 5000;
+
+    // With the parts around them, not whole. FUN_140312ba0 resolves the contact
+    // to a map entity, a part when its kind (+0xa2) is 2, which is how
+    // FUN_1403be060 finds the player's. A part carries the parts to have in
+    // around it (`*(*(part+0x30)+0x70)` points at 128 bits), the sets the streamer ORs
+    // together for the cells near the player (FUN_1403da960), and its map index
+    // is `*(*(part+0x28)+0xc)` (FUN_1403ba380). Measured 14/09: a map kept
+    // whole put Majula's sea rocks over Heide's first bonfire.
+    constexpr size_t kPartUnderOffset = 0x312ba0;
+    constexpr uint8_t kPartUnderBytes[] = { 0x48, 0x8b, 0x81, 0x00, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x27 };
+    constexpr size_t kEntityKind = 0xa2;               // byte
+    constexpr uint8_t kEntityPart = 2;
+    constexpr size_t kPartInfo = 0x30;
+    constexpr size_t kPartSet = 0x70;                  // -> 4 x uint32
+    constexpr size_t kOwnerIndex = 0x0c;
 
     // What a death costs, applied with the game's own functions (step 5, all
     // measured on 13/09 against a death the game carried out itself).
@@ -410,6 +426,8 @@ namespace
     Banner_p s_banner = nullptr;
     Check_p s_front_end_busy = nullptr;
     Action_p s_hud_reset = nullptr;
+    using PartUnder_p = uintptr_t(*)(void* Chr);
+    PartUnder_p s_part_under = nullptr;
 
     using Update_p = void(*)(void* Ctrl, float Delta);
     using Replica_p = void(*)(void* Ctrl);
@@ -642,6 +660,36 @@ namespace
         }
         const uint32_t Kind = Handle & 0xf;
         return Kind == 7 || Kind == 1 ? (int32_t)((Handle >> 4) & 0x3f) : -1;
+    }
+
+    uintptr_t CallPartUnder(uint8_t* Chr)
+    {
+        __try
+        {
+            return s_part_under(Chr);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    // The map index of the part a character stands on and the parts around
+    // it. False in the air, on a map object, or with no parts to say.
+    bool PartsUnder(uint8_t* Chr, int32_t& Index, uint32_t Mask[4])
+    {
+        const uintptr_t Part = CallPartUnder(Chr);
+        uint8_t Kind = 0;
+        uintptr_t Owner = 0, Info = 0, Set = 0;
+        Index = -1;
+        return Part != 0 &&
+            ReadBytes(Part + kEntityKind, &Kind, 1) && Kind == kEntityPart &&
+            ReadPointer(Part + kPartOwner, Owner) &&
+            ReadBytes(Owner + kOwnerIndex, &Index, sizeof(Index)) && Index >= 0 &&
+            ReadPointer(Part + kPartInfo, Info) &&
+            ReadPointer(Info + kPartSet, Set) &&
+            ReadBytes(Set, Mask, 4 * sizeof(uint32_t)) &&
+            (Mask[0] | Mask[1] | Mask[2] | Mask[3]) != 0;
     }
 
     // Where the character stands and on what, for the log.
@@ -1723,8 +1771,13 @@ namespace
             if (Character != nullptr && Enabled(FeatureOtherMap) && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
                 ((const uint8_t*)Character)[kChrType] == kRemotePlayerCopy)
             {
-                const int32_t Index = MapIndexUnder((uint8_t*)Character);
-                if (Index >= 0)
+                int32_t Index = -1;
+                uint32_t Parts[4] = {};
+                if (PartsUnder((uint8_t*)Character, Index, Parts))
+                {
+                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs, Parts);
+                }
+                else if ((Index = MapIndexUnder((uint8_t*)Character)) >= 0)
                 {
                     DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs);
                 }
@@ -2080,6 +2133,7 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
         { kBannerOffset, kBannerBytes, sizeof(kBannerBytes), "banner" },
         { kFrontEndBusyOffset, kFrontEndBusyBytes, sizeof(kFrontEndBusyBytes), "front end ocupado" },
         { kHudResetOffset, kHudResetBytes, sizeof(kHudResetBytes), "devolver o HUD" },
+        { kPartUnderOffset, kPartUnderBytes, sizeof(kPartUnderBytes), "parte sob um personagem" },
     };
     for (const auto& Check : Checks)
     {
@@ -2117,6 +2171,7 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_banner = (Banner_p)(s_base + kBannerOffset);
     s_front_end_busy = (Check_p)(s_base + kFrontEndBusyOffset);
     s_hud_reset = (Action_p)(s_base + kHudResetOffset);
+    s_part_under = (PartUnder_p)(s_base + kPartUnderOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());

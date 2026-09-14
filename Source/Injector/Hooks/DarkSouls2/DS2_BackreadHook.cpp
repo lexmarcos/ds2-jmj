@@ -110,16 +110,17 @@ namespace
     std::atomic<uint32_t> s_map{ 0 };
     std::atomic<uint32_t> s_mask[4];
 
-    // Maps kept whole for a while, by map index: the maps where other players
-    // stand. Measured 14/09: a guest's respawn in another map unloaded the map
-    // the host was standing in on the guest's machine, and the guest's game
-    // closed a moment later.
+    // Maps kept for a while, by map index: the maps where other players stand,
+    // with the parts around them. Measured 14/09: a guest's respawn in another
+    // map unloaded the map the host was standing in on the guest's machine,
+    // and the guest's game closed a moment later.
     constexpr int kMaxKept = 8;
     struct Kept
     {
         int32_t Index = -1;
         ULONGLONG Until = 0;
         bool Forced = false;
+        uint32_t Mask[4] = {};
     };
     std::mutex s_keep_mutex;
     Kept s_kept[kMaxKept];
@@ -215,9 +216,10 @@ namespace
         }
     }
 
-    // Game's thread: is this owner's map kept, and should its force byte go?
+    // Game's thread: is this owner's map kept, with which parts, and should its
+    // force byte go?
     enum class KeepVerdict { None, Keep, Drop };
-    KeepVerdict CheckKept(uintptr_t Owner)
+    KeepVerdict CheckKept(uintptr_t Owner, uint32_t Mask[4])
     {
         int32_t Index = -1;
         if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0)
@@ -235,6 +237,7 @@ namespace
             if (Now < Entry.Until)
             {
                 Entry.Forced = true;
+                memcpy(Mask, Entry.Mask, sizeof(Entry.Mask));
                 return KeepVerdict::Keep;
             }
             const bool WasForced = Entry.Forced;
@@ -248,7 +251,8 @@ namespace
     {
         uint32_t Map = 0;
         const bool HaveMap = Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMap, &Map, sizeof(Map)) && Map != 0;
-        const KeepVerdict Verdict = HaveMap ? CheckKept((uintptr_t)Owner) : KeepVerdict::None;
+        uint32_t KeptMask[4] = {};
+        const KeepVerdict Verdict = HaveMap ? CheckKept((uintptr_t)Owner, KeptMask) : KeepVerdict::None;
         if (HaveMap)
         {
             if (Verdict == KeepVerdict::Keep)
@@ -257,8 +261,15 @@ namespace
                 WriteBytes((uintptr_t)Owner + kOwnerForced, &One, 1);
                 for (const size_t At : kOwnerMasks)
                 {
-                    const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
-                    WriteBytes((uintptr_t)Owner + At, Every, sizeof(Every));
+                    uint32_t Mask[4] = {};
+                    if (ReadBytes((uintptr_t)Owner + At, Mask, sizeof(Mask)))
+                    {
+                        for (int i = 0; i < 4; ++i)
+                        {
+                            Mask[i] |= KeptMask[i];
+                        }
+                        WriteBytes((uintptr_t)Owner + At, Mask, sizeof(Mask));
+                    }
                 }
             }
             else if (Verdict == KeepVerdict::Drop && Map != s_map.load())
@@ -487,8 +498,20 @@ namespace
             int32_t Index = -1;
             uint32_t Milliseconds = 0;
             Parts >> Index >> Milliseconds;
-            DS2_Backread::KeepIndex(Index, Milliseconds);
-            Append(StringFormat("%s  === pedido: manter o mapa de indice %d por %u ms ===\n", Clock().c_str(), Index, Milliseconds));
+            uint32_t Mask[4] = {};
+            int Words = 0;
+            for (; Words < 4; ++Words)
+            {
+                std::string Word;
+                if (!(Parts >> Word))
+                {
+                    break;
+                }
+                Mask[Words] = (uint32_t)strtoul(Word.c_str(), nullptr, 16);
+            }
+            DS2_Backread::KeepIndex(Index, Milliseconds, Words == 4 ? Mask : nullptr);
+            Append(StringFormat("%s  === pedido: manter o mapa de indice %d por %u ms, partes %s ===\n", Clock().c_str(), Index,
+                Milliseconds, Words == 4 ? DescribeMask(Mask).c_str() : "todas"));
         }
         else if (Verb == "clear")
         {
@@ -556,41 +579,58 @@ void DS2_Backread::Release()
 #endif
 }
 
-void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds)
+void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask)
 {
 #ifdef _WIN32
     if (Index < 0 || Index > 0x3f)
     {
         return;
     }
+    const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
     const ULONGLONG Until = GetTickCount64() + Milliseconds;
-    bool Added = false;
+    bool Added = false, Changed = false;
+    uint32_t Now[4] = {};
     {
         std::scoped_lock Lock(s_keep_mutex);
+        Kept* Entry = nullptr;
         Kept* Free = nullptr;
-        for (Kept& Entry : s_kept)
+        for (Kept& Candidate : s_kept)
         {
-            if (Entry.Index == Index)
+            if (Candidate.Index == Index)
             {
-                Entry.Until = Until;
-                return;
+                Entry = &Candidate;
+                break;
             }
-            if (Entry.Index < 0 && Free == nullptr)
+            if (Candidate.Index < 0 && Free == nullptr)
             {
-                Free = &Entry;
+                Free = &Candidate;
             }
         }
-        if (Free != nullptr)
+        if (Entry == nullptr && Free != nullptr)
         {
-            Free->Index = Index;
-            Free->Until = Until;
-            Free->Forced = false;
+            Entry = Free;
+            Entry->Index = Index;
+            Entry->Forced = false;
+            // With nothing to say which parts, every part: the player is not
+            // left without ground.
+            memcpy(Entry->Mask, Mask != nullptr ? Mask : Every, sizeof(Entry->Mask));
             Added = true;
         }
+        else if (Entry != nullptr && Mask != nullptr && memcmp(Entry->Mask, Mask, sizeof(Entry->Mask)) != 0)
+        {
+            memcpy(Entry->Mask, Mask, sizeof(Entry->Mask));
+            Changed = true;
+        }
+        if (Entry != nullptr)
+        {
+            Entry->Until = Until;
+            memcpy(Now, Entry->Mask, sizeof(Now));
+        }
     }
-    if (Added)
+    if (Added || Changed)
     {
-        Append(StringFormat("%s  mapa de indice %d mantido: um jogador esta nele\n", Clock().c_str(), Index));
+        Append(StringFormat("%s  mapa de indice %d mantido: um jogador esta nele, partes %s\n", Clock().c_str(), Index,
+            DescribeMask(Now).c_str()));
     }
 #endif
 }
