@@ -45,6 +45,10 @@ void DS2_SignManager::OnLostPlayer(GameClient* Client)
     // Remove all the players signs from the cache.
     for (std::shared_ptr<SummonSign> Sign : Client->ActiveSummonSigns)
     {
+        // A killed client's sign stays live until this runs, and looks real
+        // until then, so say when it finally goes.
+        LogS(Client->GetName().c_str(), "Sign %u removed with its lost owner, %zu aware player(s) told.",
+            Sign->SignId, Sign->AwarePlayerIds.size());
         RemoveSignAndNotifyAware(Sign);
     }
     Client->ActiveSummonSigns.clear();
