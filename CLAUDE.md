@@ -175,10 +175,13 @@ explains it. The connections are not the harness's: each Wine prefix leaves
 `winedevice.exe` behind when a game stops, and they pile up across launches —
 22 hours' worth were still connected when this first bit.
 
-With both games stopped, they are orphans and safe to clear:
+With both games stopped, they are orphans and safe to clear. `doctor` lists
+them under `wine_orphans`, with the pids to kill, and counts the connections
+under `x11_clients`. Match the process name, not the command line: `pkill -f`
+also matches the shell running it, and kills that first.
 
 ```
-pkill -f xalia.exe ; pkill -f winedevice.exe
+pkill -x xalia.exe ; pkill -x winedevice.exe
 ss -x | grep -c X11-unix        # was 201, then 171
 ```
 

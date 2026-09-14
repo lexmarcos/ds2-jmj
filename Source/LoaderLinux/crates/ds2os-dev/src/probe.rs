@@ -438,7 +438,8 @@ mod tests {
 
         // A pose that stays put is a frozen game, not a world.
         std::fs::write(fake.root.join("DS2_Nav.txt"), "1 2 3 0 1 00007FFFF03A6690 7 6 boot-1\n").unwrap();
-        let found = fake.locate(Duration::from_millis(1500));
+        // Well inside the two seconds after which `nav::read` stops believing the file.
+        let found = fake.locate(Duration::from_millis(1000));
         assert_eq!((found.state, found.reason), (Where::Unknown, Reason::TelemetryStalled));
         assert_eq!(found.tick_before, Some(7));
 

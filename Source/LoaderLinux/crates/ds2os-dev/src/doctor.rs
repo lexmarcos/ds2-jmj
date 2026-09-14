@@ -398,8 +398,10 @@ fn wine_orphans(every_game: &[u32]) -> Check {
         return Check::new("wine_orphans", None, Status::Ok, "nenhum xalia.exe/winedevice.exe sem jogo");
     }
     let pids: Vec<String> = orphans.iter().map(|(pid, _, _)| pid.to_string()).collect();
+    // By pid: `pkill -f xalia.exe` also matches the shell that runs it, and
+    // kills that shell first.
     Check::new("wine_orphans", None, Status::Warning, format!("{} processo(s) do Wine de prefixos sem jogo", orphans.len()))
-        .fix(if every_game.is_empty() { "pkill -f xalia.exe ; pkill -f winedevice.exe".to_owned() } else { format!("kill {}", pids.join(" ")) })
+        .fix(format!("kill {}", pids.join(" ")))
         .data(json!(orphans.iter().map(|(pid, name, prefix)| json!({"pid": pid, "name": name, "winePrefix": prefix})).collect::<Vec<_>>()))
 }
 

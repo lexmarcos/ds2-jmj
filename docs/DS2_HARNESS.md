@@ -220,6 +220,12 @@ Cada pergunta ao jogo, cada tecla e cada espera pela API ficam em
 | `press` | `instance`, `command`, `ok`, `error` |
 | `enter` | `phase: "world_without_api_record"` com `expected`, `listed` (os Steam IDs que a API listou) e `offlineForMs`; `phase: "offline_recovery"` com `attempt` |
 
+`world_without_api_record` é normal nos primeiros segundos no mundo: o servidor
+leva de 2 a 5 segundos para listar quem acabou de chegar (medido em 14/09: seis
+eventos seguidos, e a chegada logo depois). Só aos 45 segundos sem a conta o
+`enter` desiste do mundo e faz `offline_recovery`; `listed` com a conta em
+outra notação, ou vazio por muito tempo, é o que merece atenção.
+
 Um `timeout` ou `leave_failed` de `game enter`, `game leave`, `reload` e
 `up --no-enter` acrescenta ao erro o último estado e motivo lidos, quantas
 teclas foram enviadas e quantas leituras da API vieram sem a conta — por
