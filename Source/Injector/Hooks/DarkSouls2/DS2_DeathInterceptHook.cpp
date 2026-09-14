@@ -147,6 +147,14 @@ namespace
     constexpr size_t kStreamerPart = 0x28;             // the part the player was last on (FUN_1403dc8e0)
     constexpr size_t kPartOwner = 0x28;                // MapEntity -> MapAreaCtrlOwner
     constexpr size_t kOwnerMap = 0x08;
+    // The map a character stands in, the way FUN_140312ba0 finds it: the
+    // physics contact `*(chr+0x100)+0x10`, whose handle at +0xe0 has the kind
+    // in the low nibble (7 a map hit, 1 a map object) and the map index in
+    // bits 4..9. Other players' maps are kept whole on this machine
+    // (DS2_BackreadHook) for a few seconds after they were last seen there.
+    constexpr size_t kPhysicsContact = 0x10;
+    constexpr size_t kContactHandle = 0xe0;
+    constexpr uint32_t kKeepOtherPlayerMs = 5000;
 
     // What a death costs, applied with the game's own functions (step 5, all
     // measured on 13/09 against a death the game carried out itself).
@@ -604,6 +612,20 @@ namespace
             ReadBytes(Owner + kOwnerMap, &Map, sizeof(Map));
         }
         return Map;
+    }
+
+    int32_t MapIndexUnder(uint8_t* Chr)
+    {
+        uintptr_t Physics = 0, Contact = 0;
+        uint32_t Handle = 0;
+        if (!ReadPointer((uintptr_t)Chr + kPhysics, Physics) ||
+            !ReadPointer(Physics + kPhysicsContact, Contact) ||
+            !ReadBytes(Contact + kContactHandle, &Handle, sizeof(Handle)))
+        {
+            return -1;
+        }
+        const uint32_t Kind = Handle & 0xf;
+        return Kind == 7 || Kind == 1 ? (int32_t)((Handle >> 4) & 0x3f) : -1;
     }
 
     uint8_t RoleOf(uint8_t* Chr)
@@ -1638,6 +1660,17 @@ namespace
         void* Character = *(void**)(Bytes + kCtrlCharacter);
         if (Character == nullptr || Character != LocalCharacter())
         {
+            // The map another player stands in must not unload under its
+            // copy here, whatever this machine's player does.
+            if (Character != nullptr && Enabled(FeatureOtherMap) && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable)
+            {
+                const int32_t Index = MapIndexUnder((uint8_t*)Character);
+                if (Index >= 0)
+                {
+                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs);
+                }
+            }
+
             // Another player's copy, with a death pending: the same three
             // tests as for the local player, and only for PlayerCtrl.
             const int RemoteMode = s_mode.load();

@@ -75,7 +75,7 @@ namespace
     constexpr uint8_t kNavFindCellBytes[] = { 0x48, 0x8b, 0xc4, 0x56, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x29, 0x70, 0xd8 };
     constexpr size_t kContextNav = 0xbc0;              // *(ctx+0xbc0)+0x10
     constexpr size_t kNavManager = 0x10;
-    constexpr size_t kOwnerIndex = 0x0c;
+    constexpr size_t kOwnerIndexField = 0x0c;
     constexpr float kNavSearchRadius = 10.0f;
     constexpr int32_t kNavSearchLimit = 0x40;
 
@@ -109,6 +109,20 @@ namespace
 
     std::atomic<uint32_t> s_map{ 0 };
     std::atomic<uint32_t> s_mask[4];
+
+    // Maps kept whole for a while, by map index: the maps where other players
+    // stand. Measured 14/09: a guest's respawn in another map unloaded the map
+    // the host was standing in on the guest's machine, and the guest's game
+    // closed a moment later.
+    constexpr int kMaxKept = 8;
+    struct Kept
+    {
+        int32_t Index = -1;
+        ULONGLONG Until = 0;
+        bool Forced = false;
+    };
+    std::mutex s_keep_mutex;
+    Kept s_kept[kMaxKept];
     std::atomic<uint32_t> s_released_map{ 0 };
     std::atomic<uint64_t> s_request_ms{ 0 };
 
@@ -201,12 +215,59 @@ namespace
         }
     }
 
+    // Game's thread: is this owner's map kept, and should its force byte go?
+    enum class KeepVerdict { None, Keep, Drop };
+    KeepVerdict CheckKept(uintptr_t Owner)
+    {
+        int32_t Index = -1;
+        if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0)
+        {
+            return KeepVerdict::None;
+        }
+        const ULONGLONG Now = GetTickCount64();
+        std::scoped_lock Lock(s_keep_mutex);
+        for (Kept& Entry : s_kept)
+        {
+            if (Entry.Index != Index)
+            {
+                continue;
+            }
+            if (Now < Entry.Until)
+            {
+                Entry.Forced = true;
+                return KeepVerdict::Keep;
+            }
+            const bool WasForced = Entry.Forced;
+            Entry = Kept();
+            return WasForced ? KeepVerdict::Drop : KeepVerdict::None;
+        }
+        return KeepVerdict::None;
+    }
+
     void OwnerUpdateHook(void* Owner, void* Arg)
     {
         uint32_t Map = 0;
         const bool HaveMap = Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMap, &Map, sizeof(Map)) && Map != 0;
+        const KeepVerdict Verdict = HaveMap ? CheckKept((uintptr_t)Owner) : KeepVerdict::None;
         if (HaveMap)
         {
+            if (Verdict == KeepVerdict::Keep)
+            {
+                const uint8_t One = 1;
+                WriteBytes((uintptr_t)Owner + kOwnerForced, &One, 1);
+                for (const size_t At : kOwnerMasks)
+                {
+                    const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+                    WriteBytes((uintptr_t)Owner + At, Every, sizeof(Every));
+                }
+            }
+            else if (Verdict == KeepVerdict::Drop && Map != s_map.load())
+            {
+                const uint8_t Zero = 0;
+                WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
+                Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
+            }
+
             if (Map == s_map.load())
             {
                 Force((uintptr_t)Owner);
@@ -297,7 +358,7 @@ namespace
             uint32_t Id = 0;
             if (ReadBytes(Owners[i] + kOwnerMap, &Id, sizeof(Id)) && Id == Map)
             {
-                ReadBytes(Owners[i] + kOwnerIndex, &Index, sizeof(Index));
+                ReadBytes(Owners[i] + kOwnerIndexField, &Index, sizeof(Index));
                 break;
             }
         }
@@ -482,6 +543,45 @@ void DS2_Backread::Release()
     if (Previous != 0)
     {
         s_released_map.store(Previous);
+    }
+#endif
+}
+
+void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds)
+{
+#ifdef _WIN32
+    if (Index < 0 || Index > 0x3f)
+    {
+        return;
+    }
+    const ULONGLONG Until = GetTickCount64() + Milliseconds;
+    bool Added = false;
+    {
+        std::scoped_lock Lock(s_keep_mutex);
+        Kept* Free = nullptr;
+        for (Kept& Entry : s_kept)
+        {
+            if (Entry.Index == Index)
+            {
+                Entry.Until = Until;
+                return;
+            }
+            if (Entry.Index < 0 && Free == nullptr)
+            {
+                Free = &Entry;
+            }
+        }
+        if (Free != nullptr)
+        {
+            Free->Index = Index;
+            Free->Until = Until;
+            Free->Forced = false;
+            Added = true;
+        }
+    }
+    if (Added)
+    {
+        Append(StringFormat("%s  mapa de indice %d mantido: um jogador esta nele\n", Clock().c_str(), Index));
     }
 #endif
 }

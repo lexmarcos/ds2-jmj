@@ -69,6 +69,11 @@ namespace DS2_Backread
     void Focus(uint32_t MapId, const float Position[3]);
     void Unfocus();
 
+    // Keep the map with this index whole (forced, every part) for the next
+    // few milliseconds; called again to keep it longer. For the maps other
+    // players stand in, which must not unload under them.
+    void KeepIndex(int32_t Index, uint32_t Milliseconds);
+
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.
     bool Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4]);

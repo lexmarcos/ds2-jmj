@@ -39,6 +39,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CrashHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -221,6 +222,9 @@ bool Injector::Init()
             Hooks.push_back(std::make_unique<DS2_NavHook>());
             Hooks.push_back(std::make_unique<DS2_MemProbeHook>());
             Hooks.push_back(std::make_unique<DS2_TraceHook>());
+            // Only writes down where the game faults, and only faults whose
+            // instruction is in the game's image.
+            Hooks.push_back(std::make_unique<DS2_CrashHook>());
             break;
         }
     }

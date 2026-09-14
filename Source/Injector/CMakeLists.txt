@@ -49,6 +49,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_CoopChannelHook.cpp
     Hooks/DarkSouls2/DS2_BackreadHook.h
     Hooks/DarkSouls2/DS2_BackreadHook.cpp
+    Hooks/DarkSouls2/DS2_CrashHook.h
+    Hooks/DarkSouls2/DS2_CrashHook.cpp
     Hooks/DarkSouls2/DS2_TraceHook.h
     Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
