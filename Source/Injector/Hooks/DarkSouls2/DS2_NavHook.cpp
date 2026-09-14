@@ -40,6 +40,10 @@ namespace
     // same number as `archetype`: 6 and 9 for the two characters here, and the
     // white co-op phantom's session role is 1 where the red invader's is 7.
     constexpr size_t kArchetypeOffset = 0x64;
+    // The local character the game moves and a teleport writes, `*(ctx+0xd0)`,
+    // and its feet. The pose above lags it after a teleport, so both go out.
+    constexpr size_t kCharacterOffset = 0xd0;
+    constexpr size_t kCharacterFeetOffset = 0x90;
 
     uintptr_t s_base = 0;
     std::string s_boot_id;
@@ -132,15 +136,27 @@ namespace
             float FacingZ = 0.0f;
             uint32_t Archetype = 0;
 
+            // Appended after the boot id, so readers that count fields from the
+            // front keep working: absent when the character does not resolve.
+            std::string Live;
+            uintptr_t Context = 0, Character = 0;
+            float Feet[3] = {};
+            if (ReadPointer(s_base + kContextOffset, Context) &&
+                ReadPointer(Context + kCharacterOffset, Character) &&
+                ReadGuarded(Character + kCharacterFeetOffset, Feet, sizeof(Feet)))
+            {
+                Live = StringFormat(" %.4f %.4f %.4f", Feet[0], Feet[1], Feet[2]);
+            }
+
             if (Resolve(Player) &&
                 ReadGuarded(Player + kPositionOffset, Position, sizeof(Position)) &&
                 ReadGuarded(Player + kFacingXOffset, &FacingX, sizeof(FacingX)) &&
                 ReadGuarded(Player + kFacingZOffset, &FacingZ, sizeof(FacingZ)) &&
                 ReadGuarded(Player + kArchetypeOffset, &Archetype, sizeof(Archetype)))
             {
-                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu %u %s\n",
+                Publish(StringFormat("%.4f %.4f %.4f %.4f %.4f %p %llu %u %s%s\n",
                     Position[0], Position[1], Position[2], FacingX, FacingZ,
-                    (void*)Player, (unsigned long long)Tick, Archetype, s_boot_id.c_str()));
+                    (void*)Player, (unsigned long long)Tick, Archetype, s_boot_id.c_str(), Live.c_str()));
             }
             else
             {
