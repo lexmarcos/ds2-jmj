@@ -13,6 +13,7 @@ macro_rules! println {
     ($($arg:tt)*) => { crate::output::line(format_args!($($arg)*)) };
 }
 mod control;
+mod death;
 mod doctor;
 mod memory;
 mod output;
@@ -54,6 +55,39 @@ struct Cli {
     json: bool,
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand)]
+enum DeathAction {
+    /// observe (the game's death), cancel (nothing happens) or respawn (paid, back at the bonfire)
+    Mode { mode: death::Mode },
+    /// Switches one part of the bill on or off
+    Feature {
+        /// almas, hollow, contador, anel, mancha_online, estus, banner, copias, fogueira_do_host, outro_mapa
+        name: String,
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
+    /// The mode, counters and bill the hook reports now
+    Status,
+    /// The mode and bill `game enter` applies on every arrival
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileAction {
+    /// Saves the profile; `--feature copias=off` may repeat
+    Set {
+        #[arg(long)]
+        mode: Option<death::Mode>,
+        #[arg(long = "feature")]
+        features: Vec<String>,
+    },
+    Show,
+    Clear,
 }
 
 #[derive(Subcommand)]
@@ -138,6 +172,26 @@ enum Command {
         /// The commands, one per argument
         #[arg(required = true)]
         lines: Vec<String>,
+    },
+    /// The death hook: mode, the parts of the bill, status, and the profile `game enter` applies
+    Death {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+        #[command(subcommand)]
+        action: DeathAction,
+    },
+    /// Kills the local character and waits for the death hook to write the death
+    Kill {
+        /// 1 or 2
+        #[arg(long)]
+        instance: u8,
+        /// Allow the game's own death when the hook is in observe mode
+        #[arg(long)]
+        real_death: bool,
+        /// How long to wait for the hook's lines, in seconds
+        #[arg(long, default_value_t = 15)]
+        seconds: u64,
     },
     /// Where a character is standing, as the game itself sees it
     Where {
@@ -499,6 +553,7 @@ fn main() {
         Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
+        Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
         Command::Save { action: SaveAction::List });
     let result = (|| {
@@ -569,6 +624,12 @@ fn run(command: Command) -> Result<(), String> {
         }
         Command::Where { instance } => where_is(&environment, &instance),
         Command::Probe { instance, timeout_ms, lines } => probe_command(&environment, instance, &lines, timeout_ms),
+        Command::Death { instance, action } => death_command(&environment, &instance, action),
+        Command::Kill { instance, real_death, seconds } => {
+            let data = death::kill(&environment, instance, real_death, std::time::Duration::from_secs(seconds))?;
+            println!("conta {instance}: {}", data["deathLines"].as_array().map(|l| l.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("\n  ")).unwrap_or_default());
+            Ok(())
+        }
         Command::Goto { instance, to, to_instance, radius, seconds } => {
             goto(&environment, instance, to, to_instance, radius, seconds)
         }
@@ -1057,6 +1118,53 @@ fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, 
         .iter()
         .find(|i| i.account == account)
         .ok_or_else(|| format!("conta {account} não encontrada"))
+}
+
+fn death_command(environment: &Environment, instance: &str, action: DeathAction) -> Result<(), String> {
+    let order = match action {
+        DeathAction::Profile { action } => {
+            let mut settings = HarnessConfig::load();
+            match action {
+                ProfileAction::Show => {}
+                ProfileAction::Clear => { settings.death_profile = None; settings.save()?; }
+                ProfileAction::Set { mode, features } => {
+                    let mut profile = death::Profile { mode, features: Default::default() };
+                    for feature in &features {
+                        let (name, state) = feature.split_once('=').filter(|(_, s)| *s == "on" || *s == "off")
+                            .ok_or_else(|| format!("invalid_feature: {feature}; use nome=on ou nome=off"))?;
+                        death::Order::feature(name, state == "on")?;
+                        profile.features.insert(name.to_owned(), state == "on");
+                    }
+                    if profile.orders().is_empty() { return Err("invalid_profile: informe --mode ou --feature".into()); }
+                    settings.death_profile = Some(profile);
+                    settings.save()?;
+                }
+            }
+            output::data(serde_json::json!({"profile": settings.death_profile}));
+            println!("perfil: {}", serde_json::to_string(&settings.death_profile).unwrap_or_default());
+            return Ok(());
+        }
+        DeathAction::Mode { mode } => death::Order::Mode(mode),
+        DeathAction::Feature { name, state } => death::Order::feature(&name, state == "on")?,
+        DeathAction::Status => death::Order::Status,
+    };
+    let mut instances = Vec::new();
+    let mut failures = Vec::new();
+    for account in accounts(instance)? {
+        let result = install_for(environment, account).and_then(|install| {
+            if observe::processes(environment, account).is_empty() { return Err(format!("instance_stopped: conta {account}")); }
+            death::send(install, std::slice::from_ref(&order), std::time::Duration::from_secs(5))
+        });
+        let status = result.as_ref().ok().and_then(|echoes| echoes.iter().find_map(|e| match e { death::Echo::Status(s) => Some(s.clone()), _ => None }));
+        match (&result, &status) {
+            (Ok(_), Some(s)) => println!("conta {account}: modo {:?}, cobranças {:?}, contadores {:?}", s.mode, s.features, s.counters),
+            (Ok(_), None) => println!("conta {account}: confirmado"),
+            (Err(e), _) => { println!("conta {account}: {e}"); failures.push(format!("conta {account}: {e}")); }
+        }
+        instances.push(serde_json::json!({"instance": account, "confirmed": result.is_ok(), "status": status, "error": result.as_ref().err()}));
+    }
+    output::data(serde_json::json!({"instances": instances}));
+    finish_failures(failures)
 }
 
 fn character_command(environment: &Environment, accounts: &[u8]) -> Result<(), String> {

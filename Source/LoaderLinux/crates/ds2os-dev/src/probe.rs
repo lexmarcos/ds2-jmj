@@ -349,6 +349,15 @@ fn round_trip(install: &Install, expected: Fingerprint, commands: &[Command], de
             Err(_) => if crate::control::sleep(Duration::from_millis(50)).is_err() { return Err(Cancelled); },
         }
     };
+    // The injector reads the file and then removes it; replacing it in between
+    // would lose this request unread. A leftover one is waited for.
+    while dir.join(REQUEST).exists() {
+        if Instant::now() >= deadline {
+            exchange.detail = Some("um pedido anterior ainda está no disco".into());
+            return Err(RequestNotConsumed);
+        }
+        if crate::control::sleep(Duration::from_millis(50)).is_err() { return Err(Cancelled); }
+    }
     let answer = dir.join(ANSWER);
     // Only what is appended after the request can answer it, so the log, which
     // grows by megabytes over a day, is not read whole on every poll.
@@ -389,7 +398,7 @@ fn write_request(install_dir: &Path, body: &str) -> std::io::Result<()> {
 
 /// What the log gained after byte `from`. A log that shrank was replaced, and
 /// its whole content is new.
-fn read_from(path: &Path, from: u64) -> Option<String> {
+pub fn read_from(path: &Path, from: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let start = if file.metadata().ok()?.len() < from { 0 } else { from };

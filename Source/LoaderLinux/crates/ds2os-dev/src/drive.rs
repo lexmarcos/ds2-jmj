@@ -122,6 +122,7 @@ fn enter_with(env: &Environment, instance: u8, expect: Option<&str>, deadline: D
                             return Err(format!("wrong_character: carregou {} e não {expected}", player.name));
                         }
                     }
+                    apply_death_profile(env, instance, deadline)?;
                     return Ok(Arrival { character: player.name.clone(), seconds: started.elapsed().as_secs_f64() });
                 }
                 // The second bug of 13/09 lived here: the API listed the
@@ -150,6 +151,16 @@ fn enter_with(env: &Environment, instance: u8, expect: Option<&str>, deadline: D
         }
         deadline.sleep(Duration::from_millis(300))?;
     }
+}
+
+/// Every launch starts the death hook over in observe mode, so a saved profile
+/// goes back on at each arrival, and only counts once the hook echoes it.
+fn apply_death_profile(env: &Environment, instance: u8, deadline: Deadline) -> Result<(), String> {
+    let Some(profile) = crate::settings::HarnessConfig::load().death_profile else { return Ok(()); };
+    let install = env.installs.iter().find(|i| i.account == instance).ok_or("instance_missing: instalação ausente")?;
+    let result = crate::death::apply_profile(install, &profile, deadline.remaining()?.min(Duration::from_secs(10)));
+    output::event("enter", json!({"instance": instance, "phase": "death_profile", "profile": profile, "ok": result.is_ok(), "error": result.as_ref().err()}));
+    result
 }
 
 pub fn leave(env: &Environment, instance: u8, timeout: Duration) -> Result<f64, String> {

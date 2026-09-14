@@ -318,6 +318,53 @@ Cenários aceitam `/character/hp`, `/character/hpMax`, `/character/souls`,
 observação dessas assertions já inclui o personagem, e fora de `state: world`
 elas são inconclusivas.
 
+## O hook de morte: `death` e `kill`
+
+```bash
+ds2os-dev death --instance both status --json
+ds2os-dev death --instance 1 mode respawn --json
+ds2os-dev death --instance 1 feature copias off --json
+ds2os-dev death profile set --mode respawn --feature copias=off
+ds2os-dev kill --instance 1 --json
+```
+
+`death` escreve ordens em `DS2_Death.req` e só confirma ao achar o **eco exato**
+no trecho do `DS2_Death.log` escrito depois da ordem: `=== modo: renascer na
+fogueira, pagando a morte ===`, `=== cobranca: feature copias off ===`, ou a
+linha de `status`. `=== nao entendi: ... ===` é `death_order_refused`, nunca
+sucesso. Sem eco, `request_not_consumed` (o hook não leu: jogo iniciando ou
+DLL sem o hook) ou `no_answer`. O harness usa um `DS2_Death.lock` próprio por
+instalação e espera um pedido anterior sumir antes de escrever o seu.
+
+Os modos são `observe` (a morte do jogo), `cancel` (a morte não acontece, nada
+é cobrado) e `respawn` (a morte é cobrada e o personagem volta à fogueira na
+mesma sessão). As partes da cobrança são `almas`, `hollow`, `contador`, `anel`,
+`mancha_online`, `estus`, `banner`, `copias`, `fogueira_do_host` e
+`outro_mapa`. `status` devolve `mode`, `counters` e `features`.
+
+**Todo lançamento começa em `observe` com a cobrança inteira ligada.** O perfil
+(`death profile set|show|clear`, guardado em `config.json`) é reaplicado pelo
+`game enter` a cada chegada ao mundo, depois de o recibo do boot mostrar
+`DS2 Death Intercept` instalado, e só conta com o eco; falhar aqui faz o
+`enter` falhar com o motivo. O evento `enter` com `phase: "death_profile"`
+registra o resultado.
+
+`kill` exige a instância num mundo confirmado, lê o modo com `status` e o
+personagem, e zera o HP com `pokeabs` **passando os bytes esperados**. Passa só
+com as linhas do hook para aquela morte:
+
+| Modo | Sinal positivo |
+| --- | --- |
+| `respawn` | exatamente um `custos da morte (...)` seguido de `renascer concluido em N quadros`; o `morte CANCELADA` entre eles é o hook segurando a morte do jogo |
+| `cancel` | `morte CANCELADA`, sem `custos da morte` |
+| `observe` | `morte vista`; exige `--real-death`, porque é a morte do jogo (almas no chão, carregamento e, em sessão, o fim dela) |
+
+`data` traz `mode`, `before` e `after` (o personagem antes e depois),
+`poke`, `deathLines` e `otherSide` (as linhas `morte da copia RECUSADA` que a
+outra instalação escreveu no mesmo intervalo). Escrita recusada é
+`poke_not_written`; HP zerado sem as linhas em 15 s é `inconclusive`. Cenários
+ganham a ação `{"action": "kill", "instance": N}`, que recusa o modo `observe`.
+
 ## Cenários
 
 ```bash

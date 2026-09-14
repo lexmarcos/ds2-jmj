@@ -57,6 +57,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `watch` | warp events, area changes, disconnects and API availability; not a general death oracle |
 | `where` | where each character is standing, from the game's own memory |
 | `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
+| `death --instance N mode\|feature\|status` / `death profile set` | the death hook's mode and bill, confirmed by its echo; the profile is reapplied on every `game enter` |
+| `kill --instance N` | zeroes HP with expected bytes and passes only on the hook's death lines |
 | `probe --instance N "<kind> <name> <args>"...` | raw MemProbe lines in one request, every reply parsed; lengths are decimal |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
 | `game options` | the line to paste into Steam's launch options |

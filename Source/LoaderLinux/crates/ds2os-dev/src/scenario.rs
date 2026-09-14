@@ -31,6 +31,8 @@ enum Step {
     Wait { instance: u8, pointer: String, equals: Value, seconds: u64 },
     Observe,
     Screenshot,
+    /// Kills the local character; the death hook must not be in observe mode.
+    Kill { instance: u8 },
 }
 fn default_radius() -> f32 { 2.0 }
 impl Step {
@@ -38,7 +40,7 @@ impl Step {
         match self {
             Self::Launch { instance } | Self::Enter { instance, .. } | Self::Leave { instance } |
             Self::Input { instance, .. } | Self::Goto { instance, .. } | Self::Assert { instance, .. } |
-            Self::Wait { instance, .. } => Some(*instance),
+            Self::Wait { instance, .. } | Self::Kill { instance } => Some(*instance),
             _ => None,
         }
     }
@@ -223,6 +225,8 @@ fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline) 
         Step::Wait { instance, pointer, equals, seconds } => assertion(env, *instance, pointer, equals, Some(Duration::from_secs(*seconds)), deadline),
         Step::Observe => { let value = observe::collect_until(env, accounts, deadline); output::event("observation", json!(value)); Ok(()) },
         Step::Screenshot => crate::shot_into(env, Some(output::dir().join("screenshots"))),
+        Step::Kill { instance } => crate::death::kill(env, *instance, false, deadline.remaining()?.min(Duration::from_secs(15)))
+            .map(|data| output::event("kill", data)),
     }
 }
 
