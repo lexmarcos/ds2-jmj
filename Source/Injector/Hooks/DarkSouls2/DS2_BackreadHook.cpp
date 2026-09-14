@@ -285,10 +285,16 @@ namespace
             }
             else if (Map == s_released_map.load())
             {
-                const uint8_t Zero = 0;
-                WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
+                // Not from under another player: its keep holds the byte.
+                const bool StillKept = Verdict == KeepVerdict::Keep;
+                if (!StillKept)
+                {
+                    const uint8_t Zero = 0;
+                    WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
+                }
                 s_released_map.store(0);
-                Append(StringFormat("%s  mapa %08x solto\n", Clock().c_str(), Map));
+                Append(StringFormat("%s  mapa %08x solto%s\n", Clock().c_str(), Map,
+                    StillKept ? ", mas segue mantido por outro jogador" : ""));
             }
         }
 

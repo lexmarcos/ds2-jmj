@@ -162,13 +162,17 @@ namespace
     constexpr size_t kContactHandle = 0xe0;
     constexpr uint32_t kKeepOtherPlayerMs = 5000;
 
-    // With the parts around them, not whole. FUN_140312ba0 resolves the contact
-    // to a map entity, a part when its kind (+0xa2) is 2, which is how
-    // FUN_1403be060 finds the player's. A part carries the parts to have in
-    // around it (`*(*(part+0x30)+0x70)` points at 128 bits), the sets the streamer ORs
-    // together for the cells near the player (FUN_1403da960), and its map index
-    // is `*(*(part+0x28)+0xc)` (FUN_1403ba380). Measured 14/09: a map kept
-    // whole put Majula's sea rocks over Heide's first bonfire.
+    // With the parts around them, not whole: what the game would have in for a
+    // player standing there, and no more, since maps share coordinates.
+    // FUN_140312ba0 resolves the contact to a map entity, a part when its kind
+    // (+0xa2) is 2, which is how FUN_1403be060 finds the player's. A part
+    // carries the parts to have in around it (`*(*(part+0x30)+0x70)` points at
+    // 128 bits), the sets the streamer ORs together for the cells near the
+    // player (FUN_1403da960), and its map index is `*(*(part+0x28)+0xc)`
+    // (FUN_1403ba380). Measured 14/09 solo, with `keep`: Majula kept whole
+    // did not reach Heide's first bonfire (a respawn there stood on Heide,
+    // contact 0xc7), and kept with the set of its bonfire's part (bit 37) it
+    // stayed loaded, forced, with only that part.
     constexpr size_t kPartUnderOffset = 0x312ba0;
     constexpr uint8_t kPartUnderBytes[] = { 0x48, 0x8b, 0x81, 0x00, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x27 };
     constexpr size_t kEntityKind = 0xa2;               // byte
