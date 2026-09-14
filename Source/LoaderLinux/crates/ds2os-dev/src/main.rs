@@ -13,6 +13,7 @@ macro_rules! println {
     ($($arg:tt)*) => { crate::output::line(format_args!($($arg)*)) };
 }
 mod control;
+mod doctor;
 mod output;
 mod observe;
 mod scenario;
@@ -1161,8 +1162,11 @@ fn log_path(environment: &Environment, which: LogName) -> Option<PathBuf> {
 
 fn doctor(environment: &Environment) -> Result<(), String> {
     let problems = environment.problems();
+    let checks = doctor::checks(environment);
+    let failed = checks.iter().filter(|c| c.status == doctor::Status::Problem).count();
 
-    output::data(serde_json::json!({"environment": environment, "problems": problems, "ok": problems.is_empty()}));
+    output::data(serde_json::json!({"environment": environment, "problems": problems, "checks": checks,
+        "summary": doctor::summary(&checks), "ok": failed == 0}));
 
     println!("ambiente");
     row("steam", environment.steam_root.as_ref());
@@ -1174,17 +1178,27 @@ fn doctor(environment: &Environment) -> Result<(), String> {
     row("injector", environment.injector_source.as_ref());
     row("estado", Some(&environment.state_dir));
 
-    if problems.is_empty() {
+    println!("\nverificações");
+    for check in &checks {
+        let status = match check.status {
+            doctor::Status::Ok => "ok",
+            doctor::Status::Warning => "atenção",
+            doctor::Status::Problem => "PROBLEMA",
+            doctor::Status::Skipped => "pulado",
+        };
+        let instance = check.instance.map(|i| format!("instância {i}")).unwrap_or_default();
+        println!("  {status:9} {instance:11} {:21} {}", check.name, check.detail);
+        if check.status != doctor::Status::Ok {
+            if let Some(fix) = &check.fix { println!("  {:9} {:11} → {fix}", "", ""); }
+        }
+    }
+
+    if failed == 0 {
         println!("\ntudo pronto");
         return Ok(());
     }
-
-    println!("\n{} problema(s)", problems.len());
-    for problem in &problems {
-        println!("  {}", problem.what);
-        println!("    → {}", problem.fix);
-    }
-    Err("o ambiente não está pronto".into())
+    println!("\n{failed} problema(s)");
+    Err(format!("environment_not_ready: {failed} problema(s); veja data.checks"))
 }
 
 fn row<T: std::fmt::Debug>(label: &str, value: Option<T>) {

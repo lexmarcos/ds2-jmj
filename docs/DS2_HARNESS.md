@@ -83,6 +83,54 @@ estão dentro de `data`. `doctor --json` devolve código 1 quando há problemas.
 estado exigido. `up --no-enter` espera confirmação do título; PID criado
 sozinho não aprova a operação. Capturas que falham também produzem erro.
 
+## `doctor`: a cadeia de prova
+
+```bash
+ds2os-dev doctor --json
+```
+
+`doctor` não só lista o que está instalado: exercita cada elo de que um teste
+depende, com o que estiver rodando. Em 13/09 ele dizia "tudo pronto" enquanto
+todo `game enter` falhava, porque conferia arquivos e os dois defeitos estavam
+um passo adiante (o executável lido do diretório errado e a conta escrita em
+outra notação pela API).
+
+`data` traz `environment`, `problems` (os do ambiente, no formato antigo),
+`checks`, `summary` e `ok`. Cada item de `checks` tem `name`, `instance`
+(quando é de uma conta), `status`, `detail`, `fix` e `data`:
+
+| `status` | Significado |
+| --- | --- |
+| `ok` | O elo foi exercitado e respondeu o esperado |
+| `warning` | Funciona, mas algo vai morder: DLL instalada diferente da de origem, logs enormes, órfãos do Wine |
+| `problem` | O elo está quebrado; `doctor` termina com código 1 e `errorCode` `environment_not_ready` |
+| `skipped` | Não foi possível exercitar (instância parada, servidor parado, lock do probe ocupado); **nunca** conta como `ok` |
+
+| `name` | O que exercita |
+| --- | --- |
+| `environment` | Cada problema de `environment.problems()` (Steam, jogo, Proton, servidor, injector) |
+| `server_api` | A API responde e todo Steam ID listado é decimal de 17 dígitos |
+| `identities_distinct` | As duas contas configuradas são diferentes |
+| `identity` | A conta tem um SteamID64 decimal configurado |
+| `install` | A instalação da conta foi resolvida |
+| `game_exe` | O executável que o probe confere (`installs[].gameExe`) é o 1.03 |
+| `injector_installed` | SHA-256 do `Injector.dll` instalado contra o de origem (`~/Downloads/injector`) |
+| `logs_size` | Logs `DS2*.log` da instalação; `warning` acima de 256 MB |
+| `game_processes` | Exatamente um `DarkSoulsII.exe` no prefixo da conta |
+| `memprobe` | Uma consulta real de `locate`: `data.state`, `data.reason`, `data.latencyMs`; `warning` acima de 1500 ms |
+| `receipt` | `DS2_Harness.json` é do mesmo boot que `DS2_Nav.txt` e todos os hooks instalaram |
+| `config_drift` | O que o boot aberto recebeu (`configured` do recibo) contra o `Injector.config` atual: `autoRematch`, `forceZone`, `removeFog`, `seamless`, `timer` |
+| `api_identity` | A API lista a conta; no mundo sem registro é `problem` (offline ou outra conta) |
+| `extra_game_processes` | Nenhum `DarkSoulsII.exe` fora dos prefixos das instâncias |
+| `pad` | O pad está no ar; jogo aberto sem pad é `warning` |
+| `wine_orphans` | `xalia.exe`/`winedevice.exe` de prefixos sem jogo |
+| `x11_clients` | Conexões ao X11 em `/proc/net/unix`; `warning` a partir de 200 (o Xorg recusa acima de 256) |
+
+`config_drift` é a armadilha de `up`, que reescreve `Injector.config` com as
+próprias flags: o arquivo muda, o jogo aberto continua com a config do
+lançamento. `doctor` não é exclusivo e roda ao lado de um controlador; com o
+jogo aberto ele escreve um pedido de MemProbe de leitura, como `observe`.
+
 ## Observação e identidade
 
 ```bash

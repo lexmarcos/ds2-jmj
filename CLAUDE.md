@@ -40,7 +40,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 
 | command | what it does |
 | --- | --- |
-| `doctor` | reports everything missing from the environment |
+| `doctor` | exercises the chain of proof — executable, a real MemProbe round trip, hook receipt against `Injector.config`, accounts against the API — as `ok`/`warning`/`problem`/`skipped` checks |
 | `status` | inventory of server, ports, processes and logs; not a gameplay assertion |
 | `observe --instance both --json` | fresh per-instance state, pose, Steam identity, API record, hook receipts and unknowns |
 | `scenario validate <file\|world-ready> --json` | validates the entire scenario without executing steps |
