@@ -33,15 +33,21 @@
 // `FUN_140a75800` is slot +0x108 of `DLNRD::SteamSessionLight` (vftable
 // `0x1411b1058`), the session's poll, run by the session manager's thread. The
 // members are the vector at +0x68..+0x70, each a `SteamSessionMemberLight` with
-// its CSteamID at +0xc8; the game looks the sender of a packet up there. The
-// detour lets the poll run, then reads this channel and, on the host, speaks.
+// its CSteamID at +0xc8; the game looks the sender of a packet up there. Which
+// of them is the host the game decides itself when it adds a member
+// (`FUN_140a72740`): +0xad is set when the member is the lobby's owner, and the
+// debug log calls it "Host". The detour lets the poll run, then reads this
+// channel and, on the host, speaks.
 //
-// The world owner (role 0) announces the map, type and id of its record to
-// every other member every two seconds, and at once when they change. A guest
-// keeps the last announcement that came from a member of its session. The
-// network thread never reads the game's world: the game's thread publishes
-// the local role and record once a frame (DS2_DeathInterceptHook), and the
-// death hook asks for the host's bonfire when a guest dies.
+// The host, when it is also the owner of the world it stands in (role 0),
+// announces the map, type and id of its record to every other member every two
+// seconds, and at once when they change. A guest keeps the last announcement
+// that came from the host of its session. Role 0 alone is not enough: a guest
+// on its way in still owns its own world for a few seconds, and announced its
+// own bonfire five times before arriving (14/09). The network thread never
+// reads the game's world: the game's thread publishes the local role and record
+// once a frame (DS2_DeathInterceptHook), and the death hook asks for the host's
+// bonfire when a guest dies.
 //
 // `DS2_Channel.req`: `status` writes what the channel has seen to
 // `DS2_Channel.log`.
@@ -69,6 +75,6 @@ namespace DS2_CoopChannel
     void PublishLocal(uint8_t Role, uint32_t Map, int32_t Type, uint32_t Id);
 
     // The bonfire the host of this session last announced: false unless it
-    // came from someone who is a member of the session now, in the last 30 s.
+    // came in the last 30 s from someone who is the host of a session now.
     bool HostBonfire(Bonfire& Out);
 }

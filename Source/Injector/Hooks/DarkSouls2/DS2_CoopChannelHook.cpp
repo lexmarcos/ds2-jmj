@@ -45,6 +45,9 @@ namespace
     constexpr size_t kMembersEnd = 0x70;
     constexpr size_t kMemberVftable = 0x11b35e8;       // SteamSessionMemberLight
     constexpr size_t kMemberSteamId = 0xc8;
+    // Set when the member is added (FUN_140a72740): its id equals
+    // GetLobbyOwner of the session's lobby. The game logs it as "Host".
+    constexpr size_t kMemberIsHost = 0xad;
     constexpr size_t kMaxMembers = 16;
     constexpr size_t kMaxSessions = 4;
 
@@ -113,6 +116,7 @@ namespace
     {
         uintptr_t Session = 0;
         uint64_t Ids[kMaxMembers] = {};
+        bool Host[kMaxMembers] = {};
         size_t Count = 0;
         ULONGLONG Tick = 0;
     };
@@ -245,7 +249,7 @@ namespace
         return Self;
     }
 
-    size_t ReadMembers(uintptr_t Session, uint64_t Ids[kMaxMembers])
+    size_t ReadMembers(uintptr_t Session, uint64_t Ids[kMaxMembers], bool Host[kMaxMembers])
     {
         uintptr_t Begin = 0, End = 0;
         if (!ReadPointer(Session + kMembersBegin, Begin) ||
@@ -260,17 +264,20 @@ namespace
         {
             uintptr_t Member = 0, Vftable = 0;
             uint64_t Id = 0;
+            uint8_t IsHost = 0;
             if (ReadPointer(At, Member) && ReadPointer(Member, Vftable) && Vftable == s_base + kMemberVftable &&
-                ReadBytes(Member + kMemberSteamId, &Id, sizeof(Id)) && Id != 0)
+                ReadBytes(Member + kMemberSteamId, &Id, sizeof(Id)) && Id != 0 &&
+                ReadBytes(Member + kMemberIsHost, &IsHost, 1))
             {
+                Host[Count] = IsHost != 0;
                 Ids[Count++] = Id;
             }
         }
         return Count;
     }
 
-    // Under s_net_mutex.
-    bool IsMemberLocked(uint64_t Id, ULONGLONG Now)
+    // Under s_net_mutex: the host of a session seen in the last few seconds.
+    bool IsHostLocked(uint64_t Id, ULONGLONG Now)
     {
         for (const Members& Session : s_sessions)
         {
@@ -280,7 +287,7 @@ namespace
             }
             for (size_t i = 0; i < Session.Count; ++i)
             {
-                if (Session.Ids[i] == Id)
+                if (Session.Ids[i] == Id && Session.Host[i])
                 {
                     return true;
                 }
@@ -314,17 +321,17 @@ namespace
             }
         }
         const bool Changed = Slot->Session != Now.Session || Slot->Count != Now.Count ||
-            memcmp(Slot->Ids, Now.Ids, sizeof(Now.Ids)) != 0;
+            memcmp(Slot->Ids, Now.Ids, sizeof(Now.Ids)) != 0 || memcmp(Slot->Host, Now.Host, sizeof(Now.Host)) != 0;
         *Slot = Now;
         return Changed;
     }
 
-    std::string DescribeIds(const uint64_t* Ids, size_t Count)
+    std::string DescribeMembers(const Members& Session)
     {
         std::string Out;
-        for (size_t i = 0; i < Count; ++i)
+        for (size_t i = 0; i < Session.Count; ++i)
         {
-            Out += StringFormat(" %016llx", (unsigned long long)Ids[i]);
+            Out += StringFormat(" %016llx%s", (unsigned long long)Session.Ids[i], Session.Host[i] ? " (host)" : "");
         }
         return Out.empty() ? " nenhum" : Out;
     }
@@ -359,12 +366,12 @@ namespace
             return;
         }
 
-        bool Member = false, Changed = false;
+        bool Host = false, Changed = false;
         {
             std::scoped_lock Lock(s_net_mutex);
             const ULONGLONG Now = GetTickCount64();
-            Member = IsMemberLocked(From, Now);
-            if (Member)
+            Host = IsHostLocked(From, Now);
+            if (Host)
             {
                 Changed = !s_heard.Valid || s_heard.From != From || s_heard.Last.Map != Said.Map ||
                     s_heard.Last.Type != Said.Type || s_heard.Last.Id != Said.Id;
@@ -375,9 +382,9 @@ namespace
             }
         }
 
-        if (!Member)
+        if (!Host)
         {
-            Refuse("de fora da sessao", From, Size);
+            Refuse("nao e o host de uma sessao", From, Size);
         }
         else if (Changed)
         {
@@ -425,18 +432,26 @@ namespace
             return;
         }
 
+        // Only the session's host speaks for the world. A guest on its way in
+        // is still the owner of its own world for a few seconds (measured
+        // 14/09: five announcements of its own bonfire before it arrived).
         uint64_t Others[kMaxMembers] = {};
         size_t Count = 0;
+        bool SelfIsHost = false;
         uint64_t Hash = 1469598103934665603ull;
         for (size_t i = 0; i < Now.Count; ++i)
         {
-            if (Now.Ids[i] != Self)
+            if (Now.Ids[i] == Self)
+            {
+                SelfIsHost = Now.Host[i];
+            }
+            else
             {
                 Others[Count++] = Now.Ids[i];
                 Hash = (Hash ^ Now.Ids[i]) * 1099511628211ull;
             }
         }
-        if (Count == 0)
+        if (!SelfIsHost || Count == 0)
         {
             return;
         }
@@ -531,13 +546,13 @@ namespace
 
         Members Now;
         Now.Session = Session;
-        Now.Count = ReadMembers(Session, Now.Ids);
+        Now.Count = ReadMembers(Session, Now.Ids, Now.Host);
         Now.Tick = GetTickCount64();
         const uint64_t Self = SelfId();
         if (Remember(Now))
         {
             Append(StringFormat("%s  sessao %p: %zu membros:%s (eu %016llx)\n",
-                Clock().c_str(), (void*)Session, Now.Count, DescribeIds(Now.Ids, Now.Count).c_str(),
+                Clock().c_str(), (void*)Session, Now.Count, DescribeMembers(Now).c_str(),
                 (unsigned long long)Self));
         }
 
@@ -580,7 +595,7 @@ namespace
             if (Session.Session != 0)
             {
                 Text += StringFormat("    sessao %p vista ha %llu ms: %zu membros:%s\n", (void*)Session.Session,
-                    (unsigned long long)(Now - Session.Tick), Session.Count, DescribeIds(Session.Ids, Session.Count).c_str());
+                    (unsigned long long)(Now - Session.Tick), Session.Count, DescribeMembers(Session).c_str());
             }
         }
         Text += Mine.Tick == 0
@@ -645,7 +660,7 @@ bool DS2_CoopChannel::HostBonfire(Bonfire& Out)
 #ifdef _WIN32
     std::scoped_lock Lock(s_net_mutex);
     const ULONGLONG Now = GetTickCount64();
-    if (!s_heard.Valid || Now - s_heard.Tick > kHostFreshMs || !IsMemberLocked(s_heard.From, Now))
+    if (!s_heard.Valid || Now - s_heard.Tick > kHostFreshMs || !IsHostLocked(s_heard.From, Now))
     {
         return false;
     }
