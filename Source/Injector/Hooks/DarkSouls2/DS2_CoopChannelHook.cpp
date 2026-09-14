@@ -127,15 +127,20 @@ namespace
     Members s_sessions[kMaxSessions];
     Heard s_heard;
 
-    // What was last announced.
+    // What was last announced, per session: two sessions polled in turn
+    // must not look like one whose members keep changing.
+    struct Sent
+    {
+        uintptr_t Session = 0;
+        uint32_t Map = 0;
+        int32_t Type = 0;
+        uint32_t Id = 0;
+        uint64_t Members = 0;
+        bool Failed = false;
+        ULONGLONG Tick = 0;
+    };
     std::mutex s_announce_mutex;
-    uintptr_t s_sent_session = 0;
-    uint32_t s_sent_map = 0;
-    int32_t s_sent_type = 0;
-    uint32_t s_sent_id = 0;
-    uint64_t s_sent_members = 0;
-    bool s_sent_failed = false;
-    ULONGLONG s_last_send = 0;
+    Sent s_sent_state[kMaxSessions];
     uint32_t s_sequence = 0;
 
     std::atomic<uint64_t> s_polls{ 0 };
@@ -437,9 +442,30 @@ namespace
         }
 
         std::scoped_lock Lock(s_announce_mutex);
-        const bool Changed = Now.Session != s_sent_session || Mine.Map != s_sent_map ||
-            Mine.Type != s_sent_type || Mine.Id != s_sent_id || Hash != s_sent_members;
-        if (!Changed && Tick - s_last_send < kAnnounceEveryMs)
+        Sent* Last = nullptr;
+        for (Sent& Entry : s_sent_state)
+        {
+            if (Entry.Session == Now.Session)
+            {
+                Last = &Entry;
+                break;
+            }
+        }
+        if (Last == nullptr)
+        {
+            Last = &s_sent_state[0];
+            for (Sent& Entry : s_sent_state)
+            {
+                if (Entry.Tick < Last->Tick)
+                {
+                    Last = &Entry;
+                }
+            }
+            *Last = Sent();
+        }
+        const bool Changed = Last->Session != Now.Session || Mine.Map != Last->Map ||
+            Mine.Type != Last->Type || Mine.Id != Last->Id || Hash != Last->Members;
+        if (!Changed && Tick - Last->Tick < kAnnounceEveryMs)
         {
             return;
         }
@@ -472,19 +498,19 @@ namespace
         }
 
         const bool FailedNow = !Failed.empty();
-        if (Changed || FailedNow != s_sent_failed)
+        if (Changed || FailedNow != Last->Failed)
         {
-            Append(StringFormat("%s  fogueira anunciada: mapa %08x tipo %d id %08x (seq %u) para %zu de %zu membros%s%s\n",
-                Clock().c_str(), Mine.Map, Mine.Type, Mine.Id, Said.Sequence, Delivered, Count,
+            Append(StringFormat("%s  fogueira anunciada na sessao %p: mapa %08x tipo %d id %08x (seq %u) para %zu de %zu membros%s%s\n",
+                Clock().c_str(), (void*)Now.Session, Mine.Map, Mine.Type, Mine.Id, Said.Sequence, Delivered, Count,
                 FailedNow ? "; falhou para" : "", Failed.c_str()));
         }
-        s_sent_failed = FailedNow;
-        s_last_send = Tick;
-        s_sent_session = Now.Session;
-        s_sent_map = Mine.Map;
-        s_sent_type = Mine.Type;
-        s_sent_id = Mine.Id;
-        s_sent_members = Hash;
+        Last->Session = Now.Session;
+        Last->Map = Mine.Map;
+        Last->Type = Mine.Type;
+        Last->Id = Mine.Id;
+        Last->Members = Hash;
+        Last->Failed = FailedNow;
+        Last->Tick = Tick;
     }
 
     void Pump(uintptr_t Session)
