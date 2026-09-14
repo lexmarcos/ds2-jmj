@@ -245,13 +245,55 @@ namespace
     // (slot +0x38) starts the job on the first frame the local character has
     // HP 0 and bit 0x4000 of +0x4c8 - the frame this hook never lets happen -
     // through FUN_14026c0b0, or FUN_14026c1b0 for a death of kind 3 (turned to
-    // stone). Both check FUN_14026bc50 themselves; the job sends
-    // RequestCreateBloodstain with the ghost recorder's last seconds.
+    // stone). Both check FUN_14026bc50 themselves; the job runs five seconds
+    // later (FUN_14026bd10) and sends RequestCreateBloodstain only when
+    // FUN_14019f520 finds, in the ghost recorder's last 16 frames, one marked
+    // 0x1000 - a frame recorded with the character dead. Measured on 13/09:
+    // called from here, the job runs and sends nothing, because no such frame
+    // was ever recorded. Off by default until that frame is understood.
     constexpr size_t kOnlineStainOffset = 0x26c0b0;
     constexpr uint8_t kOnlineStainBytes[] = { 0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xf9, 0xe8, 0x92, 0xfb, 0xff, 0xff };
     constexpr size_t kOnlineStatueOffset = 0x26c1b0;
     constexpr uint8_t kOnlineStatueBytes[] = { 0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xf9, 0xe8, 0x92, 0xfa, 0xff, 0xff };
     constexpr int8_t kDeathKindStone = 3;
+
+    // "YOU DIED", the way EventResult shows it (FUN_1401909c0). The death's
+    // param row, id role + type * 100 in the bonfire record's table
+    // (FUN_14044ed10, type*100 + 99 when the role has none), holds an FE type
+    // in its first byte, and the ten ints at 0x1410c3580 turn it into a banner
+    // for FUN_1405012e0(*(ctx+0x22e0), id). Read live on 13/09: row 100 (the
+    // owner of the world) and row 199 (a white phantom) both say FE 1, banner
+    // 3. Banner 3 also hides the HUD (+0x46c of *(frontend+0xd8)) and nothing
+    // but a load puts it back: FUN_1404fffb0 sets +0x468, which the HUD's
+    // update (FUN_140507360) takes as "show everything again". The hook calls
+    // it once FUN_140500b10 says the front end is no longer busy.
+    constexpr size_t kParamRowOffset = 0x44ed10;
+    constexpr uint8_t kParamRowBytes[] = { 0x48, 0x8b, 0x81, 0x50, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc0 };
+    constexpr size_t kBannerOffset = 0x5012e0;
+    constexpr uint8_t kBannerBytes[] = { 0x48, 0x8b, 0x89, 0xd8, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9 };
+    constexpr size_t kFrontEndBusyOffset = 0x500b10;
+    constexpr uint8_t kFrontEndBusyBytes[] = { 0x48, 0x8b, 0x89, 0xd8, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x75, 0x03 };
+    constexpr size_t kHudResetOffset = 0x4fffb0;
+    constexpr uint8_t kHudResetBytes[] = { 0xc7, 0x81, 0x1c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x89, 0xd8 };
+    constexpr size_t kFeTableOffset = 0x10c3580;       // int32[10]
+    constexpr uint32_t kFeTypes = 10;
+    constexpr int32_t kBannerNeedsCheck = 9;           // FUN_1401909c0 may swap it; not used by deaths
+    constexpr size_t kFrontEndHud = 0xd8;
+    constexpr size_t kHudHidden = 0x46c;               // int
+    constexpr int kDeathEvent = 1;                     // FUN_140191df0, the local player's death
+    constexpr int kDeathEventGuestKind3 = 0x1b;        // the same, for a role whose guest kind is 3
+    constexpr uint32_t kBannerMinFrames = 30;
+    constexpr uint32_t kBannerGiveUpFrames = 60 * 30;
+
+    // The other machine's copy of a player. Measured on 13/09 with Chico
+    // summoned into Samuel's world: Chico's death was refused on his machine
+    // and he stood at the bonfire, but the HP 0 had already gone out, and
+    // Samuel's copy of him took it through its own controller - state 0 -> 2,
+    // "Phantom Chico has been vanquished", RequestNotifyKillEnemy - and was
+    // never seen again. A player's death belongs to the machine that plays
+    // the character; the copy's is refused here the same way.
+    constexpr size_t kPlayerCtrlVftable = 0x10e4bb8;   // PlayerCtrl, local and remote alike
+    constexpr size_t kChrType = 0x54;                  // byte, indexes the 5-byte table at 0x1410bfff0
 
     // Parts of the bill that can be switched off from DS2_Death.req, so a
     // session test can take one out without a build.
@@ -263,6 +305,8 @@ namespace
         FeatureRing = 1 << 3,
         FeatureOnlineStain = 1 << 4,
         FeatureEstus = 1 << 5,
+        FeatureBanner = 1 << 6,
+        FeatureRemote = 1 << 7,
     };
     struct FeatureName
     {
@@ -276,6 +320,8 @@ namespace
         { "anel", FeatureRing },
         { "mancha_online", FeatureOnlineStain },
         { "estus", FeatureEstus },
+        { "banner", FeatureBanner },
+        { "copias", FeatureRemote },
     };
 
     enum Mode : int
@@ -299,6 +345,8 @@ namespace
     using Action_p = void(*)(void* Object);
     using Global_p = void(*)();
     using ContextCheck_p = uint64_t(*)(void* Context);
+    using ParamRow_p = uintptr_t(*)(void* Record, uint32_t Id);
+    using Banner_p = void(*)(void* FrontEnd, uint32_t Banner);
 
     RecordSouls_p s_record_souls = nullptr;
     SpawnBloodstain_p s_spawn_bloodstain = nullptr;
@@ -316,6 +364,10 @@ namespace
     Action_p s_menu_close = nullptr;
     Action_p s_online_stain = nullptr;
     Action_p s_online_statue = nullptr;
+    ParamRow_p s_param_row = nullptr;
+    Banner_p s_banner = nullptr;
+    Check_p s_front_end_busy = nullptr;
+    Action_p s_hud_reset = nullptr;
 
     using Update_p = void(*)(void* Ctrl, float Delta);
     using Replica_p = void(*)(void* Ctrl);
@@ -337,7 +389,8 @@ namespace
     std::atomic<uint64_t> s_recovery_failed{ 0 };
     std::atomic<uint64_t> s_respawns{ 0 };
     std::atomic<uint64_t> s_remote_transitions{ 0 };
-    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureOnlineStain | FeatureEstus };
+    std::atomic<uint64_t> s_remote_refused{ 0 };
+    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureRemote };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
@@ -354,6 +407,19 @@ namespace
         const char* Why = "";
     };
     Recovery s_recovery;
+
+    // Waiting for the banner to end, to give the HUD back.
+    struct BannerWait
+    {
+        bool Active = false;
+        uint32_t Frames = 0;
+        uint32_t Banner = 0;
+    };
+    BannerWait s_banner_wait;
+
+    // Consecutive refusals for other players' copies, to keep the log short.
+    uint64_t s_remote_streak = 0;
+    ULONGLONG s_remote_last_ms = 0;
 
     struct Watched
     {
@@ -720,9 +786,41 @@ namespace
         }
     }
 
+    bool CallParamRow(uintptr_t Record, uint32_t Id, uintptr_t& Row)
+    {
+        __try
+        {
+            Row = s_param_row((void*)Record, Id);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallBanner(uintptr_t FrontEnd, uint32_t Banner)
+    {
+        __try
+        {
+            s_banner((void*)FrontEnd, Banner);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     bool Enabled(uint32_t Bit)
     {
         return (s_features.load() & Bit) != 0;
+    }
+
+    uintptr_t FrontEnd()
+    {
+        uintptr_t Context = 0, Object = 0;
+        return ReadPointer(s_base + kContextOffset, Context) && ReadPointer(Context + kFrontEnd, Object) ? Object : 0;
     }
 
     uintptr_t BloodstainManager()
@@ -1041,6 +1139,119 @@ namespace
             Bloodstain.c_str(), Online.c_str(), Estus.c_str()));
     }
 
+    std::string DescribeParams(const uint8_t* Data);
+
+    // The banner the death sequence would have shown for this role.
+    void ShowDeathBanner(uint8_t* Chr)
+    {
+        uintptr_t Context = 0, Record = 0, Roles = 0, Row = 0;
+        uint8_t Role = 0, GuestKind = 0, FeType = 0xff;
+        const uintptr_t Front = FrontEnd();
+        if (!ReadPointer(s_base + kContextOffset, Context) || !ReadPointer(Context + kBonfireRecord, Record) || Front == 0)
+        {
+            Append(StringFormat("%s  banner: sem registro ou front end\n", Clock().c_str()));
+            return;
+        }
+        if (ReadPointer((uintptr_t)Chr + kChrRoles, Roles))
+        {
+            ReadBytes(Roles + kRole, &Role, 1);
+        }
+        ReadBytes(s_base + kRoleTableOffset + (Role < kRoleRows ? Role : 0) * kRoleRowSize + kRoleGuestKind, &GuestKind, 1);
+
+        const int Type = GuestKind == 3 ? kDeathEventGuestKind3 : kDeathEvent;
+        uint32_t Id = (uint32_t)((int8_t)Role + Type * 100);
+        if (!CallParamRow(Record, Id, Row) || Row == 0)
+        {
+            Id = (uint32_t)(Type * 100 + 99);
+            CallParamRow(Record, Id, Row);
+        }
+        int32_t Banner = -1;
+        if (Row != 0 && ReadBytes(Row, &FeType, 1) && FeType < kFeTypes)
+        {
+            ReadBytes(s_base + kFeTableOffset + FeType * sizeof(int32_t), &Banner, sizeof(Banner));
+        }
+        if (Banner < 0 || Banner == kBannerNeedsCheck)
+        {
+            Append(StringFormat("%s  banner: linha %u tipo FE %u, nenhum banner (%d)\n", Clock().c_str(), Id, FeType, Banner));
+            return;
+        }
+
+        const bool Shown = CallBanner(Front, (uint32_t)Banner);
+        s_banner_wait.Active = Shown;
+        s_banner_wait.Frames = 0;
+        s_banner_wait.Banner = (uint32_t)Banner;
+        Append(StringFormat("%s  banner: linha %u tipo FE %u -> banner %d %s\n", Clock().c_str(), Id, FeType, Banner,
+            Shown ? "mostrado" : "FALHOU"));
+    }
+
+    // Once the front end is done, the HUD the banner hid comes back.
+    void ContinueBanner()
+    {
+        ++s_banner_wait.Frames;
+        if (s_banner_wait.Frames < kBannerMinFrames)
+        {
+            return;
+        }
+        const uintptr_t Front = FrontEnd();
+        if (Front == 0)
+        {
+            s_banner_wait.Active = false;
+            return;
+        }
+        bool Busy = false;
+        const bool GiveUp = s_banner_wait.Frames >= kBannerGiveUpFrames;
+        if (!GiveUp && CallCheck(s_front_end_busy, Front, Busy) && Busy)
+        {
+            return;
+        }
+
+        uintptr_t Hud = 0;
+        int32_t Hidden = 0;
+        const bool HaveHud = ReadPointer(Front + kFrontEndHud, Hud) && ReadBytes(Hud + kHudHidden, &Hidden, sizeof(Hidden));
+        const bool Reset = HaveHud && Hidden != 0 && CallAction(s_hud_reset, Front);
+        s_banner_wait.Active = false;
+        Append(StringFormat("%s  banner %u acabou em %u quadros%s: HUD %s\n", Clock().c_str(), s_banner_wait.Banner,
+            s_banner_wait.Frames, GiveUp ? " (desisti de esperar)" : "",
+            !HaveHud ? "ilegivel" : (Hidden == 0 ? "ja visivel" : (Reset ? "devolvido" : "FALHOU"))));
+    }
+
+    // Somebody else's character, with its death pending on this machine.
+    void RefuseRemoteDeath(void* Ctrl, uint8_t* Chr, uint8_t* Data)
+    {
+        const int32_t Hp = *(const int32_t*)(Chr + kHp);
+        const int32_t Max = *(const int32_t*)(Chr + kHpMax);
+        const std::string Params = DescribeParams(Data);
+
+        Data[kPending] = 0;
+        if (Hp < 1 && Max > 0)
+        {
+            // The owner's next update brings the real value.
+            *(int32_t*)(Chr + kHp) = Max;
+        }
+        *(uint64_t*)(Data + kStateBits) &= ~kDyingBits;
+
+        const uint64_t Count = ++s_remote_refused;
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_remote_last_ms > 1000)
+        {
+            s_remote_streak = 0;
+        }
+        s_remote_last_ms = Now;
+        const uint64_t InStreak = ++s_remote_streak;
+        if (InStreak <= 10 || InStreak % 300 == 0)
+        {
+            uintptr_t Roles = 0;
+            uint8_t Role = 0xff;
+            if (ReadPointer((uintptr_t)Chr + kChrRoles, Roles))
+            {
+                ReadBytes(Roles + kRole, &Role, 1);
+            }
+            Append(StringFormat("%s  morte da copia RECUSADA #%llu (seguida %llu) controlador %p personagem %p tipo %u papel %u hp=%d -> %d %s\n",
+                Clock().c_str(), (unsigned long long)Count, (unsigned long long)InStreak, Ctrl, Chr, Chr[kChrType], Role, Hp,
+                *(const int32_t*)(Chr + kHp), Params.c_str()));
+        }
+    }
+
     // A fall that was refused still leaves the character in the air, in a
     // death volume, with the fall camera. Out of the air first; the flags only
     // once the fall controller agrees the character is down, or the next frame
@@ -1174,8 +1385,10 @@ namespace
         {
             ReadBytes(Data + kPending, &Pending, 1);
         }
-        Append(StringFormat("%s  outro controlador %p personagem %p (vftable +0x%zx, papel %u) estado %u -> %u hp=%d +0x759=%u\n",
-            Clock().c_str(), Ctrl, Character, Vftable != 0 ? (size_t)(Vftable - s_base) : 0, Role, Before, After, Hp, Pending));
+        uint8_t Type = 0xff;
+        ReadBytes((uintptr_t)Character + kChrType, &Type, 1);
+        Append(StringFormat("%s  outro controlador %p personagem %p (vftable +0x%zx, tipo %u, papel %u) estado %u -> %u hp=%d +0x759=%u\n",
+            Clock().c_str(), Ctrl, Character, Vftable != 0 ? (size_t)(Vftable - s_base) : 0, Type, Role, Before, After, Hp, Pending));
     }
 
     void UpdateHook(void* Ctrl, float Delta)
@@ -1184,6 +1397,20 @@ namespace
         void* Character = *(void**)(Bytes + kCtrlCharacter);
         if (Character == nullptr || Character != LocalCharacter())
         {
+            // Another player's copy, with a death pending: the same three
+            // tests as for the local player, and only for PlayerCtrl.
+            const int RemoteMode = s_mode.load();
+            if (Character != nullptr && (RemoteMode == Cancel || RemoteMode == Respawn) && Enabled(FeatureRemote) &&
+                Bytes[kCtrlState] == 0 && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable)
+            {
+                uint8_t* RemoteData = *(uint8_t**)((uint8_t*)Character + kCharacterData);
+                if (RemoteData != nullptr && *(const int32_t*)(RemoteData + kDeferred) == 0 && RemoteData[kPending] != 0)
+                {
+                    RefuseRemoteDeath(Ctrl, (uint8_t*)Character, RemoteData);
+                    return;
+                }
+            }
+
             const uint8_t StateBefore = Bytes[kCtrlState];
             s_original_update(Ctrl, Delta);
             const uint8_t StateAfter = Bytes[kCtrlState];
@@ -1203,6 +1430,7 @@ namespace
             s_local_ctrl = Ctrl;
             s_local_state = Before;
             s_recovery.Active = false;
+            s_banner_wait.Active = false;
             Append(StringFormat("%s  controlador do jogador local %p, personagem %p, estado %u\n",
                 Clock().c_str(), Ctrl, Character, Before));
         }
@@ -1210,6 +1438,10 @@ namespace
         if (s_recovery.Active && Data != nullptr)
         {
             ContinueRecovery(Chr, Data);
+        }
+        if (s_banner_wait.Active)
+        {
+            ContinueBanner();
         }
 
         // The same three tests the controller makes, in its order. The HP
@@ -1238,6 +1470,10 @@ namespace
                 if (Mode == Respawn && NewDeath)
                 {
                     ApplyDeathCosts(Chr, Data);
+                    if (Enabled(FeatureBanner))
+                    {
+                        ShowDeathBanner(Chr);
+                    }
                 }
 
                 // Never leave the byte set: with it cleared and the HP back,
@@ -1430,14 +1666,14 @@ namespace
             {
                 Features += StringFormat(" %s=%d", Entry.Name, Enabled(Entry.Bit) ? 1 : 0);
             }
-            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu renascimentos=%llu recuperacoes=%llu recuperacoes_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu outros_controladores=%llu;%s ===\n",
+            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu renascimentos=%llu recuperacoes=%llu recuperacoes_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu outros_controladores=%llu copias_recusadas=%llu;%s ===\n",
                 Clock().c_str(), Mode == Respawn ? "renascer" : (Mode == Cancel ? "cancelar" : "observar"),
                 (unsigned long long)s_seen.load(), (unsigned long long)s_cancelled.load(),
                 (unsigned long long)s_respawns.load(),
                 (unsigned long long)s_recovered.load(), (unsigned long long)s_recovery_failed.load(),
                 (unsigned long long)s_unexplained.load(), (unsigned long long)s_instant.load(),
                 (unsigned long long)s_replica_calls.load(), (unsigned long long)s_remote_transitions.load(),
-                Features.c_str()));
+                (unsigned long long)s_remote_refused.load(), Features.c_str()));
         }
         else if (!Verb.empty())
         {
@@ -1496,6 +1732,10 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
         { kMenuCloseOffset, kMenuCloseBytes, sizeof(kMenuCloseBytes), "fechar menu" },
         { kOnlineStainOffset, kOnlineStainBytes, sizeof(kOnlineStainBytes), "mancha online" },
         { kOnlineStatueOffset, kOnlineStatueBytes, sizeof(kOnlineStatueBytes), "mancha online de estatua" },
+        { kParamRowOffset, kParamRowBytes, sizeof(kParamRowBytes), "linha do param da morte" },
+        { kBannerOffset, kBannerBytes, sizeof(kBannerBytes), "banner" },
+        { kFrontEndBusyOffset, kFrontEndBusyBytes, sizeof(kFrontEndBusyBytes), "front end ocupado" },
+        { kHudResetOffset, kHudResetBytes, sizeof(kHudResetBytes), "devolver o HUD" },
     };
     for (const auto& Check : Checks)
     {
@@ -1529,6 +1769,10 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_menu_close = (Action_p)(s_base + kMenuCloseOffset);
     s_online_stain = (Action_p)(s_base + kOnlineStainOffset);
     s_online_statue = (Action_p)(s_base + kOnlineStatueOffset);
+    s_param_row = (ParamRow_p)(s_base + kParamRowOffset);
+    s_banner = (Banner_p)(s_base + kBannerOffset);
+    s_front_end_busy = (Check_p)(s_base + kFrontEndBusyOffset);
+    s_hud_reset = (Action_p)(s_base + kHudResetOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
