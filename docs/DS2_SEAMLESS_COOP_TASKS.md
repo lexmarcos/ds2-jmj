@@ -124,11 +124,14 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ## M2 — respawn dentro da sessão
 
-**Não está fechado.** O critério foi observado em 14/09 nos casos medidos — a
-morte do host e a do convidado, por HP e por queda, com a fogueira do host no
-mapa carregado, inclusive quando o registro do convidado aponta para outra
-(passos 6 e 7) —, mas falta a fogueira fora do mapa carregado (passo 8). O
-critério, definido pelo dono do projeto em 13/09:
+**Os oito passos estão feitos (14/09).** O critério foi observado em todos os
+casos medidos, com dois jogadores: a morte do host e a do convidado, por HP e
+por queda, com a fogueira no mapa carregado, inclusive quando o registro do
+convidado aponta para outra (passos 6 e 7), e por HP com a fogueira em outro
+mapa, nas duas direções entre Heide e Majula (passo 8). O que não foi medido —
+queda com a fogueira em outro mapa, outros pares de mapas, três jogadores — está
+em [DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md). O critério, definido pelo dono do
+projeto em 13/09:
 
 > morre → respawna → continua na **mesma** sessão, e o host continua jogando
 > normalmente. Vale para a morte de **qualquer** um dos dois, host ou fantasma.
@@ -222,14 +225,24 @@ sem sessão, e não custam desconexão ilegal:
    no registro do host, a sessão ficou em `0x10`/7 e, na saída, o Chico voltou
    para casa na própria `0x7ba2`. Detalhes em DS2_SEAMLESS_COOP.md, "A fogueira
    do host".
-8. **Fogueira fora do mapa carregado.** Não começado. A procura só enxerga a
-   lista `*(*(ctx+0x70)+0x58)`, as fogueiras do mapa carregado, e sem a
-   fogueira ali o renascer cai na última posição no chão: o personagem paga a
-   morte e fica onde morreu. Acontece sempre que alguém morre num mapa depois de
-   descansar em outro. Primeira medição: se a lista inclui as fogueiras de um
-   mapa vizinho carregado junto, perto de uma fronteira. Fogueira de um mapa que
-   não está carregado exige warp, e warp exige religar a presença dos dois lados
-   depois da recarga — a abordagem das tentativas 8 e 9 — ou cair no contorno.
+8. **Fogueira fora do mapa carregado.** — **feito em 14/09**, na forma que o
+   dono do projeto escolheu: a última fogueira, com carregamento. Todo
+   carregamento do jogo passa por warp, mas o carregamento por partes, a cada
+   quadro, não. `DS2_BackreadHook` força o dono do mapa da fogueira
+   (`MapAreaCtrlOwner+0x1e9`) com as partes e entrega ao streamer
+   (`FUN_1403dc8e0`) a célula de navegação da fogueira no lugar da do jogador,
+   que é de onde sai a busca das partes; sem a célula, o mapa chega sem chão. O
+   renascer segura o personagem na última posição no chão, espera o estado 5
+   (500 ms), leva-o à fogueira e solta quando o streamer o vê pisando no mapa
+   novo. Em sessão, o mapa sob a cópia do outro jogador fica carregado com as
+   partes em volta dela; na primeira sessão, antes disso, o jogo do Chico fechou
+   logo depois de renascer, e a causa não foi lida. A direção inversa achou um
+   defeito do teleporte: ele não movia a posição de onde o controlador de queda
+   mede o pouso, e um renascer 24,5 m abaixo da morte cobrou duas mortes. Medido
+   sozinho e em sessão, nas duas direções entre Heide e Majula: um custo por
+   morte, sem warp, a sessão em `0x10`/7 mais de 60 s depois de cada morte, o
+   outro jogador ainda na tela de cada um, e saída legal. Detalhes em
+   DS2_SEAMLESS_COOP.md, "A fogueira de outro mapa".
 
 ---
 

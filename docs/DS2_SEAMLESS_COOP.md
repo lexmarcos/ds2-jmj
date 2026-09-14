@@ -1680,3 +1680,178 @@ de modo que "para baixo" muda de sentido a cada passo. O que funcionou foi
 medir o deslocamento de um toque curto no analógico, converter a direção do
 mundo para a da tela e dar o último passo *em direção* à fogueira: o prompt
 apareceu a 0,16 m do ponto de nascimento.
+
+## A fogueira de outro mapa (passo 8, 14/09)
+
+Até o passo 7 o renascer procurava a fogueira na lista das fogueiras
+carregadas, e sem ela deixava o personagem na última posição no chão: pagava a
+morte e ficava onde morreu. Acontece sempre que alguém morre num mapa depois de
+descansar em outro. O dono do projeto escolheu manter o desenho ao pé da letra
+— a última fogueira, com carregamento — em vez de renascer na fogueira acesa
+mais próxima.
+
+Todo carregamento que o jogo faz passa pelo warp, e o warp desmonta a presença
+do outro jogador. Mas andar de uma área para outra não passa por warp: o jogo
+carrega por partes, a cada quadro, e é essa via que o passo 8 usa.
+
+### Como o jogo carrega mapas
+
+| peça | onde |
+| --- | --- |
+| a lista de fogueiras | os `MapObjBonfireComponent` instanciados: `FUN_1401cb310` insere, `FUN_1401caee0` tira. Uma fogueira só está ali com a parte do mapa dela carregada |
+| a tabela de fogueiras | 77 entradas de `MapObjectBonfireParam` em `EventBonfireManager+0x20` (contagem em `+0x28`, 0x18 bytes: id, acesa no mundo próprio em `+2`, no do host em `+3`, a linha do param em `+8`). Sem posição |
+| um dono por mapa | 38 `MapAreaCtrlOwner` (vftable `0x1410e87f0`), criados a cada carga para todos os mapas (`FUN_1403dc0a0`): `+8` mapa, `+0xc` índice, sete máscaras de partes de 128 bits a partir de `+0x10`, `+0x1e8` estado (5 é carregado), `+0x1e9` forçar, `+0x1ea` querer. Atualização `FUN_1403cc3f0`, máquina de estados `FUN_1403cc450` |
+| o streamer | `*(*(ctx+0x38)+8)`: donos em `+0x38` (contagem `+0x1b6`), a parte sob o jogador em `+0x28` e o índice do mapa dela em `+0x30` (os dois gravados por `FUN_1403dc8e0`), o mundo de células em `+0x18` |
+| quais partes | uma busca em grafo de células de navegação a partir da célula onde o jogador está (`FUN_1403dadd0` guarda posição e célula, `FUN_1403da960` busca). Cada parte alcançada soma o conjunto de partes que traz consigo, `*(*(parte+0x30)+0x70)` (128 bits), à máscara do mapa dela |
+| a parte sob um personagem | `FUN_140312ba0`: o contato físico `*(chr+0x100)+0x10`, cujo handle em `+0xe0` tem o tipo no nibble baixo (7 colisão do mapa, 1 objeto), o índice do mapa nos bits 4..9 e o da colisão do bit 10 em diante; é uma parte quando o tipo da entidade (`+0xa2`) é 2 |
+| a célula de uma posição | `*(ctx+0xbc0)+0x10` é o gerenciador de navegação; `FUN_140badb90` acha o mapa de navegação pela chave `(índice & 0x3f) << 24 \| 0xffffff`, e `FUN_140babf90` a célula mais próxima em 10 unidades. Lê a posição com SSE alinhado |
+
+E os mapas **não** estão num espaço só: a primeira fogueira de Heide
+(`0x7ba7`, 6,186 / -18,517 / 209,053) fica a 226 m da de Majula (`0x122a`,
+10,526 / 5,916 / -16,255), dentro do mar de Majula. O jogo tem um deslocamento
+do mundo para algumas transições (`FUN_1401c3fe0` pede em `ctx+0x2530`,
+`FUN_1401c3b40` move jogador e câmera), que este passo não usa.
+
+### O que não deu chão
+
+Samuel sozinho, parado em Heide, tentando pôr Majula carregado ao lado:
+
+| tentativa | resultado |
+| --- | --- |
+| override do próprio streamer (`+0x1f0` índice, `+0x1d0` máscara) em Majula | zera os outros mapas: Heide descarregou sob o personagem e **o jogo fechou** |
+| o mesmo override em Heide | nada quebrou: carregar todas as partes não é o problema |
+| `+0x1e9` em Majula, por escrita | estado 5 em meio segundo, os personagens de Majula criados, `0x122a` na lista a 226,7 m — e nenhum chão: levado até lá, o personagem caiu |
+| um gancho forçando e somando `+0x10`/`+0x40`, depois todas as máscaras menos `+0x70` | caiu; nenhum corpo rígido novo (197 antes e depois) |
+| o pedido de posição do próprio jogo (`*(chr+0xc8)`, bit 0 de `+0xfc`) | caiu igual |
+
+O chão não vinha porque a busca de partes parte da célula do jogador, e um
+personagem no ar não tem célula.
+
+### O que deu chão: o foco
+
+`DS2_BackreadHook` desvia duas funções. Na atualização de cada dono
+(`FUN_1403cc3f0`) liga o byte de forçar e soma as partes pedidas. No streamer
+(`FUN_1403dc8e0`) entrega, no lugar da célula do jogador, a célula de uma
+posição do mapa pedido. O jogo então carrega o chão em volta dessa posição como
+se o jogador tivesse andado até lá. A primeira versão achou a célula -2 — uma
+exceção dentro de `FUN_140babf90`, que lê a posição com SSE alinhado; com o
+vetor alinhado em 16 bytes, célula `0x0C000128`, e o Samuel foi da fogueira de
+Majula à de Heide de pé, sem morte e sem warp. Solto o foco, Majula descarregou
+e o servidor viu Heide.
+
+`DS2_Backread.req` expõe as mesmas peças para medição
+([DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)).
+
+### O renascer em outro mapa
+
+Quando a fogueira alvo — a do registro, ou a anunciada pelo host a um
+convidado — não está na lista e o mapa dela é conhecido, o renascer
+(`DS2_DeathInterceptHook`, chave `outro_mapa`):
+
+1. pede o mapa com todas as partes e deixa o personagem na última posição no
+   chão;
+2. a cada 10 quadros confere: com o mapa no estado 5 e a fogueira na lista,
+   foca a fogueira e leva o personagem;
+3. solta foco e mapa quando o streamer diz que o personagem pisa no mapa novo.
+   Se ele estiver pisando noutro mapa, manda de novo a cada 90 quadros e desiste
+   em 600.
+
+Nas medidas abaixo o mapa chegou ao estado 5 em 500 ms, sempre em 40 quadros, e
+o personagem pisou no mapa novo de 5 a 10 quadros depois. O reenvio do passo 3
+nunca disparou.
+
+Numa sessão, o mapa onde está a cópia de outro jogador também fica carregado
+nesta máquina, até 5 s depois de a cópia deixar de pisar nele. Na primeira
+sessão, sem isso (build `3392846c`), o jogo do Chico **fechou** no segundo em
+que o renascer dele em Majula soltou o mapa (11:40:50,835; a telemetria parou
+em 11:40:50 e a Steam viu a saída às 11:40:51), com a cópia do Samuel parada
+em Heide — uma desconexão ilegal, curada com os saves de `pre-passo6`. A causa
+exata não foi lida: `DS2_CrashHook` foi escrito nessa hora, um handler
+vetorizado que anota em `DS2_Crash.log` as violações de acesso com a instrução
+na imagem do jogo, e com a manutenção nenhum jogo fechou nem anotou nada nas
+quatro mortes em sessão que vieram depois.
+
+### A queda que o teleporte fazia
+
+A primeira morte na direção inversa — Samuel sozinho em Majula, registro em
+Heide — cobrou **duas** mortes. O mapa carregou, o personagem foi para a
+fogueira, e um quarto de segundo depois:
+
+```text
+12:29:27.754  morte CANCELADA #2 (seguida 2) queda hp=-182 -> 732 ... causa=60 +0x4c0=0000000000000200
+```
+
+Hollow de 3 para 5, mortes de 55 para 57, e a mancha da primeira morte trocada
+por uma segunda. O controlador de queda (`FUN_140372620`, em
+`*(*(chr+0xe0)+0xb0)`) guarda em `+0x20` a posição onde viu o personagem no
+chão — reescrita a cada quadro no chão ou subindo — e mede o pouso a partir
+dela: `FUN_140372560` é `*(queda+0x24)` menos a altura atual, e
+`FUN_140372c00` transforma a altura em dano. O teleporte não mexia ali. Da
+última posição no chão em Majula (y 6,006) à fogueira de Heide (y -18,517),
+bastou um quadro no ar antes de pousar em Heide para o pouso contar como uma
+queda de 24,5 m. O próprio jogo resolve isso no pedido de posição: com o bit 0
+de `*(chr+0xc8)+0xfc`, `FUN_140372620` copia a posição pedida para `+0x20`. O
+teleporte agora faz o mesmo.
+
+Na direção de ida (Heide para Majula) a fogueira fica 24 m **acima** da morte,
+e a mesma falta não aparecia. Pelo mecanismo, qualquer renascer numa fogueira
+bem abaixo do lugar da morte, com um quadro no ar antes do pouso, caía na mesma
+conta desde o passo 5; no mesmo mapa isso não foi medido.
+
+A segunda morte só foi cobrada porque o renascer já tinha terminado:
+`renascer concluido em 1 quadros` saiu **no mesmo quadro** do teleporte, lendo
+"no chão" do controlador de queda, que ainda não tinha rodado desde a mudança.
+Nesse quadro o renascer não pergunta mais; enquanto ele está ativo, uma morte
+que chega é a mesma morte, e não se paga de novo.
+
+### O mapa do outro jogador, inteiro e depois só em volta
+
+A primeira versão mantinha o mapa da cópia **inteiro** (forçado, todas as
+partes). Achei que isso poria as pedras do mar de Majula sobre a primeira
+fogueira de Heide: numa volta manual Majula → Heide soltando o foco cedo, o
+Samuel pousou numa pedra de Majula naquele ponto. Medido depois, sozinho, com o
+pedido `keep` fazendo o papel da cópia: Majula inteiro no estado 5, uma morte
+em Majula renasceu em Heide pisando em Heide (contato `0xc7`, mapa 12), sem
+geometria de Majula na tela. O que pôs a pedra sob o Samuel na volta manual não
+foi medido; Majula inteiro, sozinho, não põe.
+
+Mesmo assim, ficou só o que o jogo carregaria para um jogador parado onde a
+cópia está: o mapa forçado e o conjunto da parte sob a cópia
+(`*(*(parte+0x30)+0x70)`). Na fogueira de Majula esse conjunto é o bit 37; na
+de Heide, o bit 1. Sem parte (no ar, num objeto), vale o que já estava, ou
+todas as partes. E soltar um mapa pedido para o renascer não tira mais o byte
+de forçar de um mapa que outro jogador segura (`solto, mas segue mantido por
+outro jogador`), o que antes acontecia por um quadro.
+
+### O resultado
+
+Sozinho, Samuel, sem warp em nenhum caso:
+
+| build | teste | log | conferido |
+| --- | --- | --- | --- |
+| `3392846c` | morte em Heide, registro em Majula | `o mapa 0a040000 carregou em 40 quadros; levando para a fogueira 0000122a`, solto em 6 quadros | 0,7 s do HP zerado a de pé em Majula; estável 15 s; servidor em "Majula" |
+| `36a6cc62` | morte em Majula, registro em Heide | Heide em 40 quadros, solto em 5 quadros, e a segunda morte por queda acima | o defeito da queda |
+| `7eaa79f1` | a mesma | um `custos da morte` (hollow 3→4, mortes 55→56), sem `queda`; `concluido` 17 ms depois do teleporte; solto em 10 quadros em (6,221, -18,532, 207,326), contato `0xc7` | HP 732/732 depois |
+| `7eaa79f1` | a mesma, com `keep 1 600000` (Majula inteiro) | um custo; solto em 6 quadros, contato `0xc7` | Majula e Heide no estado 5; nada de Majula sobre a fogueira |
+| `7eaa79f1` | `keep 1 600000` com o conjunto da fogueira | — | Majula forçado, estado 5, máscara só com o bit 37 |
+
+Em sessão, Chico invocado no mundo do Samuel por marca branca, os dois em
+`respawn`, efígie queimada pelo Inventário nos dois antes da marca:
+
+| build | teste | log | conferido |
+| --- | --- | --- | --- |
+| `3392846c` | Chico morre em Heide, fogueira do host em Majula | Majula em 40 quadros, solto em 6 | **o jogo do Chico fechou** em seguida; `LeaveGuestPlayer` do Samuel às 11:40:51 |
+| `1f0c387b` | a mesma | `a fogueira do host (mapa 0a040000 id 0000122a) nao esta no mapa carregado`, Majula em 40 quadros, solto em 6, `mapa de indice 1 mantido` | o Chico na fogueira de Majula; o Samuel em Heide ainda com a barra dele; 96 s depois host `0x10`, convidado 7, sem exceção nem `Leave` |
+| `1f0c387b` | Samuel morre em Heide, registro em Majula | Majula em 40 quadros, solto em 6, Heide solto 5 s depois | o Samuel em Majula ao lado do Chico; 62 s depois `0x10`/7 |
+| `8c278604` | Samuel morre em Majula, registro em Heide, Majula mantido para o Chico | um custo (hollow 0→1, máximo 915→869, mortes 55→56); Heide em 40 quadros, solto em 6, contato `0xc7`; na máquina do Chico, `morte da copia RECUSADA` | o Samuel na fogueira de Heide com a barra do Chico; o Chico em Majula com a do Samuel; 69 s depois `0x10`/7, sem `Leave`, `Death` ou `KillEnemy`, canal no anúncio 174 |
+| `8c278604` | Chico morre em Majula, fogueira do host em Heide | custo de convidado (sem almas, hollow isento, mortes 69→70); Heide em 40 quadros, solto em 10, contato `0xc7`; na máquina dele, `mapa 0a1f0000 solto, mas segue mantido por outro jogador` | os dois lado a lado na fogueira de Heide, cada um vendo o outro; 74 s depois `0x10`/7, só Heide carregado nas duas máquinas |
+
+As duas sessões terminaram pelo caminho legal (Chico em `observe`, `copias off`
+no Samuel, HP zerado): `RequestNotifyDeath`, `LeaveSession` e
+`LeaveGuestPlayer` às 12:06:36/48/49 e às 13:38:40/52/53, e o Chico em casa na
+própria `0x7ba7`. Nenhuma linha em `DS2_Crash.log` nas duas máquinas. Saves
+devolvidos a `pre-passo6`.
+
+Depois dos renasceres do Chico em outro mapa o HP ficou em 853 de 854, tanto
+às 12:02 (fogueira acima da morte) quanto às 13:36 (abaixo). Não é a queda, e
+não foi investigado.

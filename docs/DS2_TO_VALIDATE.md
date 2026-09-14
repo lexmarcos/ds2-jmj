@@ -333,8 +333,48 @@ aberto:
   para a própria fogueira.
 - **Um jogador sem o mod na sessão** recebe os anúncios no canal 7 e nunca os
   lê; ficam na fila da Steam (24 bytes a cada 2 s). Não medido.
-- **A fogueira do host fora do mapa carregado** é o passo 8: o convidado cai na
-  do próprio registro, se estiver no mapa, ou na última posição no chão.
+- **A fogueira do host fora do mapa carregado** passou a ser carregada no passo
+  8 (abaixo).
+
+### A fogueira de outro mapa (passo 8)
+
+Medido em 14/09 com dois jogadores, entre Heide e Majula, nas duas direções,
+sozinho e em sessão ([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A fogueira
+de outro mapa"). Em aberto:
+
+- **Morte por queda com a fogueira em outro mapa.** O caminho é o mesmo do HP
+  (o renascer segura o personagem na última posição no chão enquanto o mapa
+  chega), mas só mortes por HP foram medidas nessa condição.
+- **Outros pares de mapas.** Só Heide ↔ Majula. Um mapa que use o deslocamento
+  do mundo (`ctx+0x2530`) ao entrar não foi exercitado, e um que demore mais de
+  1800 quadros (30 s) para chegar ao estado 5 desiste e deixa o personagem na
+  última posição no chão, já cobrado.
+- **Pisar no mapa errado.** Numa volta manual Majula → Heide com o foco solto
+  cedo, o Samuel pousou numa pedra de Majula na fogueira de Heide. O renascer
+  manda de novo para a fogueira a cada 90 quadros quando isso acontece, mas nos
+  nove renasceres em outro mapa medidos o personagem pisou no mapa certo em até
+  10 quadros, e o reenvio nunca rodou. Majula inteiro, sozinho, não pôs a pedra
+  ali.
+- **A manutenção do mapa do outro jogador.** Por que o jogo do Chico fechou na
+  primeira sessão não foi lido — o `DS2_Crash.log` veio depois. A manutenção
+  inteira passou numa sessão (duas mortes), e a por partes, a que está no build,
+  noutra (duas mortes). Uma cópia que chega a um mapa em cima de um objeto
+  (tipo 1) mantém todas as partes até pisar numa parte. São 8 mapas mantidos no
+  máximo, por índice.
+- **Memória.** Nem a manutenção inteira nem a por partes teve o custo medido.
+- **Andar de volta entre mapas com um fantasma.** A névoa de fantasma entre
+  áreas continua lá (`--remove-fog` é o experimento); o passo 8 só leva de um
+  mapa a outro no renascer.
+- **Três jogadores ou mais**: dois mapas mantidos para duas cópias, e um
+  convidado renascendo no mapa de um terceiro. Não testável com duas contas.
+- **Durante uma luta de chefe, ou com a névoa do chefe fechada**, a fogueira de
+  outro mapa não foi tentada.
+- **O HP do Chico** ficou em 853 de 854 depois de cada renascer em outro mapa,
+  com a fogueira acima e abaixo da morte. Não investigado.
+- **Teleporte e controlador de queda no mesmo mapa.** O teleporte agora move a
+  posição de onde a queda é medida (`*(*(chr+0xe0)+0xb0)+0x20`); antes disso, um
+  renascer numa fogueira bem abaixo da morte no mesmo mapa podia contar como
+  queda. Nenhum caso assim foi medido, nem antes nem depois.
 
 ## O login que resolve o hostname oficial, depois de um reboot
 

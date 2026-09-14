@@ -312,6 +312,67 @@ virtual `+0x148` do jogo devolve.
 Fora do `status`, o log escreve uma linha quando os membros mudam, quando o
 anúncio muda (host) e quando o anúncio recebido muda (convidado).
 
+## O carregamento por partes: `DS2_Backread.req`
+
+`DS2_BackreadHook` (passo 8, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A
+fogueira de outro mapa") carrega um mapa ao lado do atual sem warp, e aceita um
+comando por linha:
+
+```
+load <mapa hex> [<máscara hex> x4]   força o mapa com essas partes (todas, por padrão); um mapa por vez
+focus <mapa hex> <x> <y> <z>         o streamer busca as partes a partir da célula dessa posição
+unfocus                              volta à célula do jogador
+clear                                solta o mapa pedido
+keep <índice> <ms> [<máscara hex> x4]  o que a cópia de outro jogador faz: força o mapa desse índice por um tempo
+status                               os mapas carregados ou forçados: estado, byte de forçar e as sete máscaras
+```
+
+As respostas vão para `DS2_Backread.log`, e o renascer escreve ali também:
+
+```text
+13:31:43.984  === pedido: mapa 0a040000 partes ffffffffffffffffffffffffffffffff ===
+13:31:44.490  mapa 0a040000: estado 4 -> 5, 504 ms depois do pedido
+13:31:44.988  foco no mapa 0a040000 em (10.526, 5.916, -16.255): celula 19137027 (tentativa 1)
+13:33:03.727  mapa de indice 1 mantido: um jogador esta nele, partes 00000000000000200000000000000000
+13:33:08.011  mapa 0a040000 solto, mas segue mantido por outro jogador
+13:33:08.712  mapa 0a1f0000 nao e mais de ninguem; solto
+```
+
+Os mapas medidos: Majula é `0a040000`, índice 1; Heide é `0a1f0000`, índice
+12. Uma célula -2 no foco é uma exceção dentro da busca do jogo; -1 é sem mapa
+de navegação ainda, ou sem célula a 10 unidades do ponto. Enquanto não houver
+célula, o foco tenta de novo a cada 15 quadros e o streamer segue com a do
+jogador.
+
+**Levar um personagem a outro mapa sem warp**, na ordem que funcionou:
+
+1. `load <mapa>` e esperar `estado 4 -> 5`;
+2. `focus <mapa> x y z` no ponto de chegada, e esperar a linha da célula;
+3. teleportar para o ponto (a receita de "Teleporte sem warp" em
+   DS2_SEAMLESS_COOP.md), um pouco acima do chão;
+4. `unfocus` e `clear` só depois de o personagem estar de pé lá. Soltar antes
+   deixou o Samuel numa pedra de Majula no ponto da fogueira de Heide.
+
+O byte de forçar e as máscaras são memória viva de objetos refeitos a cada
+carga: um warp apaga tudo, e o pedido vale só até lá.
+
+## Onde o jogo quebra: `DS2_Crash.log`
+
+`DS2_CrashHook` fica sempre ligado no DS2. Um handler vetorizado anota uma
+violação de acesso, instrução ilegal, instrução privilegiada ou estouro de
+pilha **com a instrução dentro da imagem do jogo**: o offset, o endereço lido
+ou escrito, os registradores e até 24 endereços de retorno do jogo achados nas
+256 palavras de cima da pilha. Depois deixa a exceção seguir. Escreve sem heap,
+no máximo 32 por boot, e cada boot abre com
+
+```text
+=== ds2os: vigia de excecoes no jogo ===
+```
+
+Um log só com essa linha, num jogo que fechou, quer dizer que a falta não foi
+numa instrução do jogo — ou que o processo morreu sem exceção. As leituras
+protegidas dos hooks nunca aparecem ali: a instrução delas é da DLL.
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
