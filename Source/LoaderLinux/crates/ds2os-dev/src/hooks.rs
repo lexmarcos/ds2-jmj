@@ -65,12 +65,7 @@ fn parse_session(appended: &str) -> Result<Option<(u32, i32)>, String> {
 #[serde(rename_all = "camelCase")]
 pub struct Backread { pub owners: u32, pub requested: String, pub focus: String, pub forced: Vec<String> }
 
-/// ```text
-/// 13:30:30.100  === pedido: sem foco ===
-/// 13:30:30.100  === pedido: soltar ===
-/// 13:30:30.101  === backread: 2 mapas; pedido 00000000 mascara ...; foco 00000000 ===
-///     [1] mapa 0a1f0000 estado 2 forcado 1 quer 1: +10=...
-/// ```
+/// `unfocus`, `clear`, then the status block (`backread::parse_status_at`).
 fn parse_backread(appended: &str) -> Result<Option<Backread>, String> {
     let lines = hook_request::lines(appended);
     let Some(found) = in_order(&lines, &[
@@ -78,23 +73,11 @@ fn parse_backread(appended: &str) -> Result<Option<Backread>, String> {
         &|l| l == "=== pedido: soltar ===",
         &|l| l.starts_with("=== backread: "),
     ]) else { return Ok(None) };
-    let header = found[2];
-    let malformed = || format!("malformed_answer: {header:?}");
-    let words: Vec<&str> = header.split_whitespace().collect();
-    let after = |key: &str| words.iter().position(|w| *w == key).and_then(|k| words.get(k + 1)).map(|w| w.trim_end_matches(';'));
-    let owners = words.get(2).and_then(|w| w.parse().ok()).ok_or_else(malformed)?;
-    let requested = after("pedido").ok_or_else(malformed)?.to_owned();
-    let focus = after("foco").ok_or_else(malformed)?.to_owned();
-    // The owner lines come in the same append as the header.
-    let start = lines.iter().position(|l| *l == header).unwrap_or(0) + 1;
-    let forced = lines[start..].iter().map(|l| l.trim_start()).take_while(|l| l.starts_with('['))
-        .filter_map(|l| {
-            let w: Vec<&str> = l.split_whitespace().collect();
-            let map = w.iter().position(|x| *x == "mapa").and_then(|k| w.get(k + 1))?;
-            let forced = w.iter().position(|x| *x == "forcado").and_then(|k| w.get(k + 1))?;
-            (*forced != "0").then(|| (*map).to_owned())
-        }).collect();
-    Ok(Some(Backread { owners, requested, focus, forced }))
+    let at = lines.iter().position(|l| *l == found[2]).unwrap_or(0);
+    let status = crate::backread::parse_status_at(&lines, at)?;
+    let focus = status.focus.clone().ok_or_else(|| format!("malformed_answer: {:?}", found[2]))?;
+    let forced = status.maps.iter().filter(|o| o.forced != 0).map(|o| o.map.clone()).collect();
+    Ok(Some(Backread { owners: status.owners, requested: status.requested, focus, forced }))
 }
 
 /// `=== limpo ===` then `=== 0 armados, 3 ja alcancados ===`. `wpclear` writes

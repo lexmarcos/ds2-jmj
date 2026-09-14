@@ -513,6 +513,76 @@ poll dentro do prazo dá `inconclusive`, nunca `passed`. Poll com outro número
 no fim do prazo dá `failed` (`signs_remain`). O comando é só leitura e roda ao
 lado de um controlador.
 
+## Mover o personagem: `teleport`, `bonfires`, `backread` e `goto-map`
+
+```bash
+ds2os-dev bonfires --instance 1 --json
+ds2os-dev teleport --instance 1 --to-bonfire 0x7ba2 --json
+ds2os-dev teleport --instance 1 --to 6.186,-18.517,209.053 --json
+ds2os-dev goto-map --instance 1 --map 0a040000 --to 10.53,5.92,-16.25 --json
+ds2os-dev backread --instance 1 load|focus <mapa> x y z|unfocus|clear|keep <i> <ms>|status --json
+```
+
+`bonfires` lê, numa só ida e volta, o registro da última fogueira e os nós da
+lista do mapa carregado: id, mapa e ponto de nascimento (translação menos
+1,1 × eixo Z, como o renascer faz). Os nós são pedidos como caminhos a partir
+do contexto (`70,58,8`, `70,58,8,60`, …, até 16), e os que passam do fim da
+lista voltam `cadeia nao resolveu`.
+
+`teleport` escreve o que o `TeleportLocal` do hook de morte escreve:
+`chr+0x90` e `+0xa0`, `motion+0x50`, a física (`+0x80`, velocidades `+0x60` e
+`+0x70` zeradas, `+0x1c0`), o corpo Havok (`+0x250`, `+0x260`, `+0x1b0`,
+`+0x1c0`, `+0x1a0`, 5 cm acima dos pés) e, por último, o chão do controlador de
+queda (`*(chr+0xe0)+0xb0` `+0x20`). Sem essa última escrita, uma queda de
+24,5 m depois do teleporte já matou o personagem. São 13 escritas:
+
+1. Uma ida e volta lê os cinco objetos e confere as vtables do personagem
+   (`0x1410e4bb8`) e do corpo (`0x141126578`). Divergência dá
+   `vtable_mismatch`, e nada é escrito.
+2. Outra ida e volta faz as 13 escritas, **cada uma com os bytes que a leitura
+   achou**. O injector recusa a escrita se eles mudaram (endereço
+   reaproveitado, ou personagem andando), e uma recusa dá `teleport_refused`.
+   Com o personagem parado, os 13 alvos foram medidos idênticos entre duas
+   leituras.
+3. Passa com 13/13, o personagem **assentado** a menos de 1,5 m na horizontal
+   e 1 m na vertical do alvo depois de 3 s (`not_arrived` fora disso) e nenhuma
+   linha `death_cost`, `death_cancelled` ou `death_seen` no `DS2_Death.log`
+   nesses 3 s (`died_after_teleport`).
+
+O raio é esse porque a física empurra o personagem para fora do que ele foi
+posto dentro, e o nascimento de uma fogueira fica dentro da fogueira. Medido
+em 14/09: Catedral de Heide a 0,84 m, fogueira `0x7ba7` a 0,82 m, 12 m abaixo
+e sem dano de queda.
+
+`--to-bonfire` só aceita fogueira da lista carregada
+(`bonfire_not_loaded`: use `goto-map`).
+
+`backread` fala com o `DS2_Backread.req` e sempre devolve o status junto. Um
+eco só diz que o pedido foi lido, então `goto-map` espera o efeito:
+
+1. `load <mapa>` até o status do hook listar o mapa em `estado 5` (no log,
+   `estado 4 -> 5`; ~505 ms medidos). Se ele já estava carregado, fica
+   `alreadyLoaded`.
+2. `focus <mapa> x y z` até `foco no mapa X em (...): celula N` com N diferente
+   de -1 e -2.
+3. `teleport` (sem somar nada a y).
+4. O contato físico sob o personagem (`*(*(chr+0x100)+0x10)+0xe0`: tipo no
+   nibble baixo, 7 colisão e 1 objeto de mapa, índice do mapa nos bits 4..9)
+   igual ao `[i]` do mapa no status, em duas leituras seguidas. Sem isso em
+   10 s dá `inconclusive`, e mapa e foco ficam pedidos.
+5. `unfocus` + `clear`. Depois de 4 s, o contato ainda precisa estar no mapa
+   (`left_map`).
+
+A posição não serve de prova porque mapas compartilham coordenadas: a primeira
+fogueira de Heide fica onde estão as pedras do mar de Majula. Medido em 14/09,
+Heide → Majula: contato `0x3c17` (índice 1), e Majula → Heide: `0xc7`
+(índice 12), os mesmos valores do renascer do hook.
+
+`where` mostra, em `pose.live`, os pés do personagem publicados pelo
+`DS2_NavHook` (ver abaixo), e em `data.navLag` as instâncias cuja pose publicada
+está a mais de 1 m deles. Depois do teleporte para a Catedral, a pose antiga
+ficou 68 m atrás, e só o `live` estava certo.
+
 ## A linha do tempo: `timeline`
 
 ```bash
@@ -634,6 +704,9 @@ para não mudar os cenários que já existem.
 | `wait` | Os campos de `assert`, mais `seconds` |
 | `observe` | Nenhum |
 | `screenshot` | Nenhum; falha se a captura solicitada falhar |
+| `kill` | `instance`; recusa o modo `observe` do hook de morte |
+| `teleport` | `instance`, `x`, `y`, `z`; ver "Mover o personagem" |
+| `goto_map` | `instance`, `map` (hex), `x`, `y`, `z`; ver "Mover o personagem" |
 
 Os pointers são relativos à observação da **instância identificada pelo
 número**, não a um índice de array. São aceitos `/state`, `/serverConnected`,
@@ -722,7 +795,9 @@ uma assertion de estado não depende de um servidor X acessível. Use uma etapa
 Para usar `bootId` e os recibos, compile o **injector Windows**, instale a DLL
 nova nas duas pastas e relance os jogos. O recibo `DS2_Harness.json` contém
 resultados de instalação e configuração daquele boot; a última coluna de
-`DS2_Nav.txt` identifica o mesmo boot. DLLs anteriores ainda atendem MemProbe
+`DS2_Nav.txt` identifica o mesmo boot. A partir do injector de 14/09, a linha do
+Nav ganha três campos depois do boot: `x y z` de `*(ctx+0xd0)+0x90`, os pés do
+personagem local. Leitores que contam campos a partir do começo não mudam. DLLs anteriores ainda atendem MemProbe
 com rótulos únicos e publicam posição, mas `hooks` fica `null`. SHA-256 no
 manifesto identifica o arquivo em disco; não prova que um processo aberto
 antes da cópia carregou esse arquivo.

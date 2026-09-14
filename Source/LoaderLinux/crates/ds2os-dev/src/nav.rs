@@ -41,6 +41,18 @@ pub struct Pose {
     pub tick: u64,
     /// The multiplayer role, the same number the server calls `archetype`.
     pub archetype: u32,
+    /// The feet of the local character, `*(ctx+0xd0)+0x90`: what the game
+    /// moves and a teleport writes. The x, y, z above come from another chain
+    /// and were seen lagging after a teleport. `None` from a DLL that does not
+    /// publish it.
+    pub live: Option<[f32; 3]>,
+}
+
+impl Pose {
+    /// How far the published pose is from the character's own feet.
+    pub fn lag(&self) -> Option<f32> {
+        self.live.map(|[x, y, z]| ((self.x - x).powi(2) + (self.y - y).powi(2) + (self.z - z).powi(2)).sqrt())
+    }
 }
 
 fn state_path(install_dir: &Path) -> PathBuf {
@@ -76,6 +88,12 @@ fn parse_pose(text: &str) -> Option<Pose> {
             .get(7)
             .and_then(|v| v.parse::<u32>().ok())
             ?,
+        // Appended after the boot id (field 8) by newer DLLs.
+        live: match fields.get(9..12) {
+            Some(values) => values.iter().map(|v| v.parse::<f32>().ok().filter(|f| f.is_finite())).collect::<Option<Vec<_>>>()
+                .map(|v| [v[0], v[1], v[2]]),
+            None => None,
+        },
     };
 
     // While an area loads, the chain resolves but everything in it is still

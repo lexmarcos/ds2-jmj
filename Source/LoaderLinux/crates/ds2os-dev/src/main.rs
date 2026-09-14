@@ -22,6 +22,8 @@ mod output;
 mod observe;
 mod scenario;
 mod session;
+mod backread;
+mod teleport;
 mod timeline;
 mod api;
 mod drive;
@@ -248,6 +250,44 @@ enum Command {
         #[arg(long, default_value = "both")]
         instance: String,
     },
+    /// Moves the local character, writing every copy of its position with the bytes it read
+    ///
+    /// Passes only with all 13 writes accepted, the character within 0.3 m of
+    /// the target and no death in DS2_Death.log for 3 s. The character must be
+    /// standing still: a changed byte refuses the write.
+    Teleport {
+        #[arg(long)]
+        instance: u8,
+        /// x,y,z
+        #[arg(long, allow_hyphen_values = true, conflicts_with = "to_bonfire")]
+        to: Option<String>,
+        /// A bonfire of the loaded map, by its id in hex (see `bonfires`)
+        #[arg(long)]
+        to_bonfire: Option<String>,
+    },
+    /// The last bonfire record and the bonfires of the loaded map, with their spawn points
+    Bonfires {
+        #[arg(long)]
+        instance: u8,
+    },
+    /// The backread hook: another map loaded beside this one, and the streamer's focus
+    Backread {
+        #[arg(long)]
+        instance: u8,
+        #[command(subcommand)]
+        action: BackreadAction,
+    },
+    /// Moves a character onto another map without a warp: load, focus, teleport, confirm the ground, release
+    GotoMap {
+        #[arg(long)]
+        instance: u8,
+        /// The map id in hex, as the hook prints it (0a040000 is Majula)
+        #[arg(long)]
+        map: String,
+        /// x,y,z on that map
+        #[arg(long, allow_hyphen_values = true)]
+        to: String,
+    },
     /// Walks a character to a place, without anyone watching the screen
     ///
     /// The target is either a coordinate pair (`--to x,z`) or another
@@ -320,6 +360,21 @@ enum Command {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum BackreadAction {
+    /// Loads a map beside the current one
+    Load { map: String },
+    /// Points the streamer at a position on that map
+    #[command(allow_negative_numbers = true)]
+    Focus { map: String, x: f32, y: f32, z: f32 },
+    Unfocus,
+    /// Lets go of the requested map
+    Clear,
+    /// Keeps the map at this owner index for a while, as another player standing there would
+    Keep { index: i32, ms: u32 },
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -666,6 +721,7 @@ fn main() {
     let exclusive = !reads_only && !matches!(&cli.command,
         Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session { action: None } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } | Command::Timeline { .. } |
+        Command::Bonfires { .. } | Command::Backread { action: BackreadAction::Status, .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
@@ -748,6 +804,20 @@ fn run(command: Command) -> Result<(), String> {
             )
         }
         Command::Where { instance } => where_is(&environment, &instance),
+        Command::Teleport { instance, to, to_bonfire } => teleport::command(&environment, instance, to, to_bonfire),
+        Command::Bonfires { instance } => teleport::bonfires_command(&environment, instance),
+        Command::GotoMap { instance, map, to } => backread::goto_map_command(&environment, instance, &map, &to),
+        Command::Backread { instance, action } => {
+            let order = match action {
+                BackreadAction::Load { map } => backread::Order::Load(backread::parse_map(&map)?),
+                BackreadAction::Focus { map, x, y, z } => backread::Order::Focus(backread::parse_map(&map)?, [x, y, z]),
+                BackreadAction::Unfocus => backread::Order::Unfocus,
+                BackreadAction::Clear => backread::Order::Clear,
+                BackreadAction::Keep { index, ms } => backread::Order::Keep(index, ms),
+                BackreadAction::Status => backread::Order::Status,
+            };
+            backread::command(&environment, instance, order)
+        }
         Command::Timeline { last, since, run, instance, kind, all, limit } =>
             timeline::command(&environment, last, since, run, timeline::Filter { instance, kinds: kind, all }, limit),
         Command::Probe { instance, timeout_ms, lines } => probe_command(&environment, instance, &lines, timeout_ms),
@@ -1391,8 +1461,19 @@ fn probe_command(environment: &Environment, instance: u8, lines: &[String], time
 /// way to get the number that `goto --to` wants.
 fn where_is(environment: &Environment, instance: &str) -> Result<(), String> {
     let observation = observe::collect(environment, &accounts(instance)?);
-    output::data(serde_json::json!(observation));
-    for item in &observation.instances { println!("conta {}: {:?}", item.instance, item.pose); }
+    let lagging: Vec<serde_json::Value> = observation.instances.iter().filter_map(|item| {
+        let lag = item.pose.as_ref()?.lag()?;
+        (lag > 1.0).then(|| serde_json::json!({"instance": item.instance, "lagMeters": lag}))
+    }).collect();
+    let mut data = serde_json::json!(observation);
+    data["navLag"] = serde_json::json!(lagging);
+    output::data(data);
+    for item in &observation.instances {
+        println!("conta {}: {:?}", item.instance, item.pose);
+        if let Some(lag) = item.pose.as_ref().and_then(|p| p.lag()).filter(|l| *l > 1.0) {
+            println!("  telemetria de navegação atrasada: a pose publicada está a {lag:.2} m dos pés do personagem");
+        }
+    }
     if observation.instances.iter().any(|i| i.pose.is_none()) {
         output::outcome("inconclusive");
         return Err("position_unavailable: uma ou mais instâncias não têm posição recente".into());

@@ -66,6 +66,10 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `kill --instance N` | zeroes HP with expected bytes and passes only on the hook's death lines |
 | `probe --instance N "<kind> <name> <args>"...` | raw MemProbe lines in one request, every reply parsed; lengths are decimal |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
+| `teleport --instance N --to x,y,z \| --to-bonfire <id>` | 13 writes with expected bytes after both vtables check; passes on the character settled within 1.5 m and no death for 3 s |
+| `bonfires --instance N` | the bonfire record and the loaded map's bonfires with their spawn points |
+| `goto-map --instance N --map <hex> --to x,y,z` | another map without a warp: load (estado 5), focus (a real cell), teleport, the physics contact on that map, release |
+| `backread --instance N load\|focus\|unfocus\|clear\|keep\|status` | the backread hook's orders, each confirmed by its echo, status included |
 | `game options` | the line to paste into Steam's launch options |
 | `game watch` | asks the injector to watch the area address for a few seconds |
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |

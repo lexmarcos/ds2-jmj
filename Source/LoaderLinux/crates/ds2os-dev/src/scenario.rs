@@ -57,6 +57,10 @@ enum Step {
     Screenshot,
     /// Kills the local character; the death hook must not be in observe mode.
     Kill { instance: u8 },
+    /// Teleports the local character within its loaded map (see `teleport`).
+    Teleport { instance: u8, x: f32, y: f32, z: f32 },
+    /// Moves the local character onto another map (see `goto-map`).
+    GotoMap { instance: u8, map: String, x: f32, y: f32, z: f32 },
 }
 fn default_radius() -> f32 { 2.0 }
 impl Step {
@@ -64,7 +68,8 @@ impl Step {
         match self {
             Self::Launch { instance } | Self::Enter { instance, .. } | Self::Leave { instance } |
             Self::Input { instance, .. } | Self::Goto { instance, .. } | Self::Assert { instance, .. } |
-            Self::Wait { instance, .. } | Self::Kill { instance } => Some(*instance),
+            Self::Wait { instance, .. } | Self::Kill { instance } | Self::Teleport { instance, .. } |
+            Self::GotoMap { instance, .. } => Some(*instance),
             _ => None,
         }
     }
@@ -117,6 +122,10 @@ fn validate(scenario: &Scenario) -> Result<(), String> {
             Step::Goto { x, z, radius, .. } if !x.is_finite() || !z.is_finite() || !radius.is_finite() || *radius <= 0.0 => {
                 return Err("invalid_target: coordenadas finitas e raio positivo".into());
             }
+            Step::Teleport { x, y, z, .. } | Step::GotoMap { x, y, z, .. } if ![x, y, z].iter().all(|v| v.is_finite()) => {
+                return Err("invalid_target: coordenadas finitas".into());
+            }
+            Step::GotoMap { map, .. } => { crate::backread::parse_map(map)?; }
             _ => {},
         }
         if matches!(step, Step::Input { command, .. } if ["quit", "ping", "neutral"].contains(&command.as_str())) {
@@ -255,6 +264,10 @@ fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline) 
         Step::Screenshot => crate::shot_into(env, Some(output::dir().join("screenshots"))),
         Step::Kill { instance } => crate::death::kill(env, *instance, false, deadline.remaining()?.min(Duration::from_secs(15)))
             .map(|data| output::event("kill", data)),
+        Step::Teleport { instance, x, y, z } => crate::teleport::teleport(env, *instance, [*x, *y, *z])
+            .map(|data| output::event("teleport", data)),
+        Step::GotoMap { instance, map, x, y, z } => crate::backread::goto_map(env, *instance, map, [*x, *y, *z])
+            .map(|data| output::event("goto_map", data)),
     }
 }
 

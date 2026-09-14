@@ -159,6 +159,16 @@ which does nothing harmful when the lost `start` lets `press a` through. Not yet
 state, the prompt toggle left on the bonfire, or timing; `leave` does not
 check that its first press opened the menu.
 
+### `teleport` and `goto-map` from the harness
+
+Measured 14/09 with Samuel alone: the cathedral bonfire and back (12 m
+down, no fall damage), and Heide → Majula → Heide with `goto-map`, the
+contact on each map as the respawn measured it. Not yet exercised: a write
+refused because the character moved (only a unit test with a fake reply),
+the overlap landing on a Majula rock (it did not happen in either direction
+this time), a teleport of the guest inside a session, and any map pair other
+than Heide and Majula.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway
