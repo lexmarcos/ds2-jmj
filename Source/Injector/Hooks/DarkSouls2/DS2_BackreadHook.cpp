@@ -99,7 +99,7 @@ namespace
     std::atomic<uint32_t> s_focus_map{ 0 };
     std::atomic<uint32_t> s_focus_generation{ 0 };
     std::mutex s_focus_mutex;
-    float s_focus_position[4] = {};
+    alignas(16) float s_focus_position[4] = {};
     // Touched only from the game's thread.
     uint32_t s_focus_seen_generation = 0;
     int32_t s_focus_cell = -1;
@@ -318,7 +318,9 @@ namespace
         const uint32_t Map = s_focus_map.load();
         if (Map != 0)
         {
-            float Focus[4] = {};
+            // The nav search reads the position with aligned SSE: measured
+            // 14/09, an unaligned vec4 faulted inside FUN_140babf90.
+            alignas(16) float Focus[4] = {};
             const uint32_t Generation = s_focus_generation.load();
             {
                 std::scoped_lock Lock(s_focus_mutex);
