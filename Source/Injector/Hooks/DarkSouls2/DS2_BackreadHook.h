@@ -41,8 +41,13 @@
 // (`FUN_1403cc3f0`), after the streamer has written the natural masks, it sets
 // the force byte and ORs a parts mask in, and lets go when asked.
 //
+// A forced map also needs its ground: the parts come from a graph search
+// over nav cells from the cell the player stands in, and a player in the air
+// has none. A focus tells the streamer (`FUN_1403dc8e0`) to search from the
+// cell of a position in the forced map instead.
+//
 // `DS2_Backread.req`: `load <map hex> [<mask hex> x4]` (every part by
-// default), `clear`, `status`.
+// default), `focus <map hex> <x> <y> <z>`, `unfocus`, `clear`, `status`.
 class DS2_BackreadHook : public Hook
 {
 public:
@@ -57,6 +62,12 @@ namespace DS2_Backread
     // until Release. One map at a time; a new request replaces the old one.
     void Request(uint32_t MapId, const uint32_t Mask[4]);
     void Release();
+
+    // Tell the streamer the player stands at this position of that map, so
+    // the parts around it load the way they would if the player had walked
+    // there. Needs the map's nav in (Request first). Until Unfocus.
+    void Focus(uint32_t MapId, const float Position[3]);
+    void Unfocus();
 
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.

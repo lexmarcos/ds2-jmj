@@ -56,6 +56,29 @@ namespace
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
+    // FUN_1403dc8e0, `void(streamer, vec4* position, int cell, MapEntity* part,
+    // bool)`: once a frame, from FUN_1403be060, the player's position, the nav
+    // cell it stands in and the part under its feet. The parts to load are a
+    // graph search from that cell (FUN_1403dadd0, FUN_1403da960), so a player
+    // in the air - no cell - never brings in the ground of the place it was
+    // moved to. Measured 14/09: forced and teleported to, a map with every
+    // mask set still let the player fall, and no rigid body was created for
+    // it (197 before and after).
+    constexpr size_t kStreamerUpdateOffset = 0x3dc8e0;
+    constexpr uint8_t kStreamerUpdateBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0x44, 0x24, 0x50 };
+    // The cell of a position, the way FUN_1403dadd0 finds it: the nav map of
+    // the map index (FUN_140badb90, key `(index & 0x3f) << 24 | 0xffffff`),
+    // then the nearest cell within 10 units (FUN_140babf90).
+    constexpr size_t kNavFindMapOffset = 0xbadb90;
+    constexpr uint8_t kNavFindMapBytes[] = { 0x4c, 0x63, 0x51, 0x68, 0x44, 0x8b, 0xca, 0x45, 0x33, 0xc0 };
+    constexpr size_t kNavFindCellOffset = 0xbabf90;
+    constexpr uint8_t kNavFindCellBytes[] = { 0x48, 0x8b, 0xc4, 0x56, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x29, 0x70, 0xd8 };
+    constexpr size_t kContextNav = 0xbc0;              // *(ctx+0xbc0)+0x10
+    constexpr size_t kNavManager = 0x10;
+    constexpr size_t kOwnerIndex = 0x0c;
+    constexpr float kNavSearchRadius = 10.0f;
+    constexpr int32_t kNavSearchLimit = 0x40;
+
     constexpr size_t kContextOffset = 0x16148f0;
     constexpr size_t kMapManager = 0x38;               // ctx+0x38
     constexpr size_t kStreamer = 0x08;
@@ -65,6 +88,22 @@ namespace
 
     using OwnerUpdate_p = void(*)(void* Owner, void* Arg);
     OwnerUpdate_p s_original_update = nullptr;
+    using StreamerUpdate_p = void(*)(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag);
+    StreamerUpdate_p s_original_streamer = nullptr;
+    using NavFindMap_p = uintptr_t(*)(void* Manager, uint32_t Key);
+    using NavFindCell_p = int32_t(*)(void* NavMap, const float* Position, float Radius, int32_t Limit, float* Distance);
+    NavFindMap_p s_nav_find_map = nullptr;
+    NavFindCell_p s_nav_find_cell = nullptr;
+
+    // Where the streamer is told the player is, while a focus is on.
+    std::atomic<uint32_t> s_focus_map{ 0 };
+    std::atomic<uint32_t> s_focus_generation{ 0 };
+    std::mutex s_focus_mutex;
+    float s_focus_position[4] = {};
+    // Touched only from the game's thread.
+    uint32_t s_focus_seen_generation = 0;
+    int32_t s_focus_cell = -1;
+    uint32_t s_focus_tries = 0;
 
     uintptr_t s_base = 0;
 
@@ -223,6 +262,92 @@ namespace
         return Found;
     }
 
+    uintptr_t CallNavFindMap(uintptr_t Manager, uint32_t Key)
+    {
+        __try
+        {
+            return s_nav_find_map((void*)Manager, Key);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    int32_t CallNavFindCell(uintptr_t NavMap, const float* Position)
+    {
+        __try
+        {
+            return s_nav_find_cell((void*)NavMap, Position, kNavSearchRadius, kNavSearchLimit, nullptr);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return -2;
+        }
+    }
+
+    // Game's thread: the nav cell of the focus, once its map's nav is in.
+    int32_t ResolveFocusCell(uint32_t Map, const float* Position)
+    {
+        uintptr_t Owners[kMaxOwners] = {};
+        const int Count = ReadOwners(Owners);
+        int32_t Index = -1;
+        for (int i = 0; i < Count; ++i)
+        {
+            uint32_t Id = 0;
+            if (ReadBytes(Owners[i] + kOwnerMap, &Id, sizeof(Id)) && Id == Map)
+            {
+                ReadBytes(Owners[i] + kOwnerIndex, &Index, sizeof(Index));
+                break;
+            }
+        }
+        uintptr_t Context = 0, NavRoot = 0, Manager = 0;
+        if (Index < 0 ||
+            !ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kContextNav, NavRoot) ||
+            !ReadPointer(NavRoot + kNavManager, Manager))
+        {
+            return -1;
+        }
+        const uintptr_t NavMap = CallNavFindMap(Manager, ((uint32_t)Index & 0x3f) << 24 | 0xffffff);
+        return NavMap == 0 ? -1 : CallNavFindCell(NavMap, Position);
+    }
+
+    void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
+    {
+        const uint32_t Map = s_focus_map.load();
+        if (Map != 0)
+        {
+            float Focus[4] = {};
+            const uint32_t Generation = s_focus_generation.load();
+            {
+                std::scoped_lock Lock(s_focus_mutex);
+                memcpy(Focus, s_focus_position, sizeof(Focus));
+            }
+            if (Generation != s_focus_seen_generation)
+            {
+                s_focus_seen_generation = Generation;
+                s_focus_cell = -1;
+                s_focus_tries = 0;
+            }
+            if (s_focus_cell < 0 && (s_focus_tries++ % 15) == 0)
+            {
+                s_focus_cell = ResolveFocusCell(Map, Focus);
+                if (s_focus_cell >= 0 || s_focus_tries == 1)
+                {
+                    Append(StringFormat("%s  foco no mapa %08x em (%.3f, %.3f, %.3f): celula %d (tentativa %u)\n",
+                        Clock().c_str(), Map, Focus[0], Focus[1], Focus[2], s_focus_cell, s_focus_tries));
+                }
+            }
+            if (s_focus_cell >= 0)
+            {
+                s_original_streamer(Streamer, Focus, s_focus_cell, Part, Flag);
+                return;
+            }
+        }
+        s_original_streamer(Streamer, Position, Cell, Part, Flag);
+    }
+
     void WriteStatus()
     {
         uintptr_t Owners[kMaxOwners] = {};
@@ -232,8 +357,8 @@ namespace
         {
             Asked[i] = s_mask[i].load();
         }
-        std::string Text = StringFormat("%s  === backread: %d mapas; pedido %08x mascara %s ===\n",
-            Clock().c_str(), Count, s_map.load(), DescribeMask(Asked).c_str());
+        std::string Text = StringFormat("%s  === backread: %d mapas; pedido %08x mascara %s; foco %08x ===\n",
+            Clock().c_str(), Count, s_map.load(), DescribeMask(Asked).c_str(), s_focus_map.load());
         for (int i = 0; i < Count; ++i)
         {
             uint32_t Map = 0, Masks[7][4] = {};
@@ -277,6 +402,21 @@ namespace
             const uint32_t Map = (uint32_t)strtoul(MapText.c_str(), nullptr, 16);
             DS2_Backread::Request(Map, Mask);
             Append(StringFormat("%s  === pedido: mapa %08x partes %s ===\n", Clock().c_str(), Map, DescribeMask(Mask).c_str()));
+        }
+        else if (Verb == "focus")
+        {
+            std::string MapText;
+            float Position[3] = {};
+            Parts >> MapText >> Position[0] >> Position[1] >> Position[2];
+            const uint32_t Map = (uint32_t)strtoul(MapText.c_str(), nullptr, 16);
+            DS2_Backread::Focus(Map, Position);
+            Append(StringFormat("%s  === pedido: foco no mapa %08x em (%.3f, %.3f, %.3f) ===\n", Clock().c_str(), Map,
+                Position[0], Position[1], Position[2]));
+        }
+        else if (Verb == "unfocus")
+        {
+            DS2_Backread::Unfocus();
+            Append(StringFormat("%s  === pedido: sem foco ===\n", Clock().c_str()));
         }
         else if (Verb == "clear")
         {
@@ -344,6 +484,28 @@ void DS2_Backread::Release()
 #endif
 }
 
+void DS2_Backread::Focus(uint32_t MapId, const float Position[3])
+{
+#ifdef _WIN32
+    {
+        std::scoped_lock Lock(s_focus_mutex);
+        s_focus_position[0] = Position[0];
+        s_focus_position[1] = Position[1];
+        s_focus_position[2] = Position[2];
+        s_focus_position[3] = 1.0f;
+    }
+    s_focus_generation.fetch_add(1);
+    s_focus_map.store(MapId);
+#endif
+}
+
+void DS2_Backread::Unfocus()
+{
+#ifdef _WIN32
+    s_focus_map.store(0);
+#endif
+}
+
 bool DS2_Backread::Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4])
 {
 #ifdef _WIN32
@@ -367,7 +529,10 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_base = (uintptr_t)injector.GetBaseAddress();
 
     if (!BytesMatch(s_base + kOwnerUpdateOffset, kOwnerUpdateBytes, sizeof(kOwnerUpdateBytes)) ||
-        !BytesMatch(s_base + kOwnerStatesOffset, kOwnerStatesBytes, sizeof(kOwnerStatesBytes)))
+        !BytesMatch(s_base + kOwnerStatesOffset, kOwnerStatesBytes, sizeof(kOwnerStatesBytes)) ||
+        !BytesMatch(s_base + kStreamerUpdateOffset, kStreamerUpdateBytes, sizeof(kStreamerUpdateBytes)) ||
+        !BytesMatch(s_base + kNavFindMapOffset, kNavFindMapBytes, sizeof(kNavFindMapBytes)) ||
+        !BytesMatch(s_base + kNavFindCellOffset, kNavFindCellBytes, sizeof(kNavFindCellBytes)))
     {
         Error("[DS2_BackreadHook] a atualizacao do dono do mapa nao e a esperada; recusando");
         return false;
@@ -376,10 +541,14 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_log_path = injector.GetDllPath() / "DS2_Backread.log";
     s_request_path = injector.GetDllPath() / "DS2_Backread.req";
     s_original_update = (OwnerUpdate_p)(s_base + kOwnerUpdateOffset);
+    s_original_streamer = (StreamerUpdate_p)(s_base + kStreamerUpdateOffset);
+    s_nav_find_map = (NavFindMap_p)(s_base + kNavFindMapOffset);
+    s_nav_find_cell = (NavFindCell_p)(s_base + kNavFindCellOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_update, OwnerUpdateHook);
+    DetourAttach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_BackreadHook] nao consegui instalar o detour");
@@ -409,6 +578,7 @@ void DS2_BackreadHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_update, OwnerUpdateHook);
+        DetourDetach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
         DetourTransactionCommit();
         s_original_update = nullptr;
     }

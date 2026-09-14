@@ -138,6 +138,9 @@ namespace
     constexpr uint32_t kLoadPollFrames = 10;
     constexpr uint32_t kLoadGiveUpFrames = 1800;       // 30 s at 60 frames a second
     constexpr uint32_t kSettleGiveUpFrames = 600;
+    // Once there, the ground of that map still has to come in, and the fall
+    // controller re-teleports every 30 frames until the character lands.
+    constexpr uint32_t kOtherMapGiveUpFrames = 900;
     constexpr uint8_t kMapLoaded = 5;                  // MapAreaCtrlOwner+0x1e8
     constexpr size_t kMapManager = 0x38;               // ctx+0x38
     constexpr size_t kMapStreamer = 0x08;
@@ -1468,6 +1471,9 @@ namespace
         const bool Loaded = DS2_Backread::Query(s_recovery.LoadMap, State, Mask) && State == kMapLoaded;
         if (Loaded && FindBonfireSpawn(s_recovery.LoadMap, s_recovery.LoadId, Spawn))
         {
+            // Its ground comes from the nav cell of where the player stands;
+            // in the air there is none, so the streamer is told the bonfire's.
+            DS2_Backread::Focus(s_recovery.LoadMap, Spawn);
             memcpy(s_recovery.Target, Spawn, sizeof(Spawn));
             s_recovery.Where = "fogueira em outro mapa";
             s_recovery.Loading = false;
@@ -1484,6 +1490,7 @@ namespace
 
         if (s_recovery.LoadFrames >= kLoadGiveUpFrames)
         {
+            DS2_Backread::Unfocus();
             DS2_Backread::Release();
             s_recovery.Loading = false;
             s_recovery.Frames = 0;
@@ -1503,6 +1510,7 @@ namespace
         {
             return;
         }
+        DS2_Backread::Unfocus();
         DS2_Backread::Release();
         s_settle.Active = false;
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
@@ -1522,7 +1530,8 @@ namespace
         const bool Down = Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
         if (!Down)
         {
-            if (s_recovery.Frames >= kRecoveryGiveUpFrames && !s_recovery.Loading)
+            const uint32_t GiveUp = s_settle.Active ? kOtherMapGiveUpFrames : kRecoveryGiveUpFrames;
+            if (s_recovery.Frames >= GiveUp && !s_recovery.Loading)
             {
                 ++s_recovery_failed;
                 s_recovery.Active = false;
@@ -1664,6 +1673,7 @@ namespace
             s_local_state = Before;
             if (s_recovery.Loading || s_settle.Active)
             {
+                DS2_Backread::Unfocus();
                 DS2_Backread::Release();
             }
             s_recovery = Recovery();
