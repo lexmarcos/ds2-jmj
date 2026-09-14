@@ -113,6 +113,9 @@ pub struct Instance {
     pub server_connected: Option<bool>,
     pub p2p_session_verified: Option<bool>,
     pub hooks: Option<Value>,
+    /// Only when asked for: it costs another MemProbe round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<crate::memory::Character>,
     pub problems: Vec<String>,
 }
 
@@ -132,6 +135,12 @@ pub fn collect(env: &Environment, accounts: &[u8]) -> Observation {
 }
 
 pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::control::Deadline) -> Observation {
+    collect_with(env, accounts, deadline, false)
+}
+
+/// `character` adds the local character read from memory, for instances
+/// confirmed in the world.
+pub fn collect_with(env: &Environment, accounts: &[u8], deadline: crate::control::Deadline, character: bool) -> Observation {
     let started = Instant::now();
     let server_players = env.server.as_ref().ok_or_else(|| "servidor não encontrado".to_string())
         .and_then(|s| api::players_until(s, api::web_port(&s.config), deadline.remaining()?.min(Duration::from_secs(10))));
@@ -143,7 +152,7 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
         let mut item = Instance { instance: account, observed_at_ms: crate::output::now_ms(), processes: pids.clone(),
             steam_id: id.clone().ok(), identity_source: "harness_config", state: Where::Unknown,
             state_reason: Reason::InstanceStopped, pose: None, pose_age_ms: None, boot_id: None, player: None,
-            server_connected: None, p2p_session_verified: None, hooks: None, problems: Vec::new() };
+            server_connected: None, p2p_session_verified: None, hooks: None, character: None, problems: Vec::new() };
         if let Err(e) = &id { item.problems.push(e.clone()); }
         if let (Ok(id), Ok(players)) = (&id, &server_players) {
             match player_for(players, id) {
@@ -178,6 +187,12 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
                         item.hooks = hooks(&install.game_dir);
                         if item.state == Where::World { item.pose = nav::read(&install.game_dir); }
                         item.pose_age_ms = age_ms(&install.game_dir.join("DS2_Nav.txt"));
+                        if character && item.state == Where::World {
+                            match deadline.remaining().and_then(|left| crate::memory::read(install, left.min(Duration::from_secs(3)))) {
+                                Ok(read) => item.character = Some(read),
+                                Err(e) => item.problems.push(format!("character_unread: {e}")),
+                            }
+                        }
                     } else {
                         // An unknown keeps the probe's own reason; a known state
                         // without fresh telemetry is not believed.
@@ -194,8 +209,8 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
         server_error: server_players.err(), server_observed_at_ms, instances }
 }
 
-pub fn command(env: &Environment, accounts: &[u8]) -> Result<(), String> {
-    let observation = collect(env, accounts);
+pub fn command(env: &Environment, accounts: &[u8], character: bool) -> Result<(), String> {
+    let observation = collect_with(env, accounts, crate::control::Deadline::after(Duration::from_secs(20)), character);
     crate::output::data(json!(observation));
     for i in &observation.instances { println!("conta {}: {} ({}), personagem {}, posição {:?}", i.instance, i.state, i.state_reason,
         i.player.as_ref().map(|p| p.name.as_str()).unwrap_or("desconhecido"), i.pose); }

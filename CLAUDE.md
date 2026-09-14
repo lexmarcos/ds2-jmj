@@ -56,6 +56,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `players --json` | API records; unsupported souls/death/session counters are `null` |
 | `watch` | warp events, area changes, disconnects and API availability; not a general death oracle |
 | `where` | where each character is standing, from the game's own memory |
+| `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
+| `probe --instance N "<kind> <name> <args>"...` | raw MemProbe lines in one request, every reply parsed; lengths are decimal |
 | `goto --instance N --to x,z` / `--to-instance M` | walks a character there, unattended |
 | `game options` | the line to paste into Steam's launch options |
 | `game watch` | asks the injector to watch the area address for a few seconds |

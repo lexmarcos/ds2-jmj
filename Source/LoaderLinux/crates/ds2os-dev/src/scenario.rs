@@ -51,6 +51,8 @@ fn evaluate(observation: &Value, instance: u8, pointer: &str, expected: &Value) 
     let item = observation.get("instances").and_then(Value::as_array)
         .and_then(|items| items.iter().find(|i| i["instance"] == instance));
     let Some(item) = item else { return Verdict::Inconclusive; };
+    // A character read outside a confirmed world proves nothing.
+    if pointer.starts_with("/character/") && item["state"] != "world" { return Verdict::Inconclusive; }
     // Do not let a stale API record prove character, area or connection.
     if (pointer.starts_with("/player/") || pointer == "/serverConnected")
         && (item["state"] != "world" || observation.get("serverError").is_some_and(|v| !v.is_null())) {
@@ -79,7 +81,9 @@ fn validate(scenario: &Scenario) -> Result<(), String> {
             Step::Assert { pointer, equals, .. } | Step::Wait { pointer, equals, .. } => {
                 assertions += 1;
                 if equals.is_null() || equals == "unknown" || !(matches!(pointer.as_str(), "/state" | "/serverConnected" | "/player/name" |
-                    "/player/location" | "/pose/archetype" | "/p2pSessionVerified") || pointer.starts_with("/hooks/hooks/")) {
+                    "/player/location" | "/pose/archetype" | "/p2pSessionVerified" | "/character/hp" | "/character/hpMax" |
+                    "/character/souls" | "/character/deaths" | "/character/hollow" | "/character/hollowState" | "/character/role" |
+                    "/character/bonfire/id" | "/character/bonfire/map") || pointer.starts_with("/hooks/hooks/")) {
                     return Err(format!("invalid_assertion: {pointer}; valor desconhecido não pode aprovar teste"));
                 }
             }
@@ -228,7 +232,7 @@ fn assertion(env: &Environment, instance: u8, pointer: &str, equals: &Value, wai
     let observation_deadline = Deadline::after(window);
     loop {
         deadline.remaining()?;
-        let observation = json!(observe::collect_until(env, &[instance], observation_deadline));
+        let observation = json!(observe::collect_with(env, &[instance], observation_deadline, pointer.starts_with("/character/")));
         let verdict = evaluate(&observation, instance, pointer, equals);
         output::event("assertion", json!({"instance": instance, "pointer": pointer, "expected": equals,
             "verdict": format!("{verdict:?}").to_lowercase(), "observation": observation}));
@@ -257,6 +261,19 @@ mod tests {
         assert_eq!(evaluate(&value, 1, "/state", &json!("world")), Verdict::Passed);
         assert_eq!(evaluate(&value, 2, "/state", &json!("world")), Verdict::Failed);
     }
+    #[test]
+    fn a_character_outside_a_confirmed_world_is_not_evidence() {
+        let value = json!({"instances":[{"instance":1,"state":"loading", "character":{"hp":0}}, {"instance":2,"state":"world", "character":{"hp":0}}]});
+        assert_eq!(evaluate(&value, 1, "/character/hp", &json!(0)), Verdict::Inconclusive);
+        assert_eq!(evaluate(&value, 2, "/character/hp", &json!(0)), Verdict::Passed);
+        assert_eq!(evaluate(&value, 2, "/character/hollow", &json!(0)), Verdict::Inconclusive);
+        let mut scenario = builtin();
+        scenario["steps"] = json!([{"action":"assert","instance":1,"pointer":"/character/hollow","equals":0}]);
+        assert!(validate(&serde_json::from_value(scenario.clone()).unwrap()).is_ok());
+        scenario["steps"] = json!([{"action":"assert","instance":1,"pointer":"/character/address","equals":"0x1"}]);
+        assert!(validate(&serde_json::from_value(scenario).unwrap()).is_err());
+    }
+
     #[test]
     fn stale_server_presence_is_not_connection_evidence() {
         let value = json!({"serverError":"timeout", "instances":[{"instance":1,"state":"world", "serverConnected":true}]});

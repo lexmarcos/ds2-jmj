@@ -14,6 +14,7 @@ macro_rules! println {
 }
 mod control;
 mod doctor;
+mod memory;
 mod output;
 mod observe;
 mod scenario;
@@ -59,6 +60,15 @@ struct Cli {
 enum Command {
     /// Fresh state, identity and sources for each requested instance
     Observe {
+        #[arg(long, default_value = "both")]
+        instance: String,
+        /// Also read the local character from memory (one more MemProbe round trip)
+        #[arg(long)]
+        character: bool,
+    },
+    /// The local character, from the game's memory: HP, souls, hollowing, deaths, role, bonfire
+    Character {
+        /// 1, 2, or both
         #[arg(long, default_value = "both")]
         instance: String,
     },
@@ -486,7 +496,7 @@ fn main() {
     // Read-only observation and the pad daemon do not monopolize the control lock.
     let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
     let exclusive = !reads_only && !matches!(&cli.command,
-        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Players |
+        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
@@ -530,7 +540,8 @@ fn run(command: Command) -> Result<(), String> {
     let cursors = output::log_cursors(&environment);
     let result = (|| { match command {
         Command::Doctor => doctor(&environment),
-        Command::Observe { instance } => observe::command(&environment, &accounts(&instance)?),
+        Command::Observe { instance, character } => observe::command(&environment, &accounts(&instance)?, character),
+        Command::Character { instance } => character_command(&environment, &accounts(&instance)?),
         Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
         Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),
         Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless } => {
@@ -1046,6 +1057,32 @@ fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, 
         .iter()
         .find(|i| i.account == account)
         .ok_or_else(|| format!("conta {account} não encontrada"))
+}
+
+fn character_command(environment: &Environment, accounts: &[u8]) -> Result<(), String> {
+    let mut instances = Vec::new();
+    let mut failures = Vec::new();
+    for &account in accounts {
+        let result = install_for(environment, account).and_then(|install| {
+            if observe::processes(environment, account).is_empty() {
+                return Err(format!("instance_stopped: conta {account} sem processo do jogo"));
+            }
+            memory::read(install, std::time::Duration::from_secs(5))
+        });
+        match &result {
+            Ok(c) => println!("conta {account}: hp {}/{} almas {} hollow {} (estado {}) mortes {} papel {} pos ({:.2}, {:.2}, {:.2}) fogueira {}",
+                c.hp, c.hp_max, c.souls, c.hollow, c.hollow_state, c.deaths, c.role, c.position[0], c.position[1], c.position[2],
+                c.bonfire.as_ref().map(|b| format!("{:08x}/{:08x}", b.map, b.id)).unwrap_or_else(|| "?".into())),
+            Err(e) => { println!("conta {account}: {e}"); failures.push(format!("conta {account}: {e}")); }
+        }
+        instances.push(serde_json::json!({"instance": account, "character": result.as_ref().ok(), "error": result.as_ref().err()}));
+    }
+    output::data(serde_json::json!({"instances": instances}));
+    match failures.as_slice() {
+        [] => Ok(()),
+        [only] if accounts.len() == 1 => Err(only.split_once(": ").map(|(_, e)| e.to_owned()).unwrap_or_else(|| only.clone())),
+        _ => Err(format!("partial_failure: {}", failures.join("; "))),
+    }
 }
 
 fn probe_command(environment: &Environment, instance: u8, lines: &[String], timeout_ms: u64) -> Result<(), String> {

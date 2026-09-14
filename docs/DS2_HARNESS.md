@@ -290,6 +290,34 @@ Sem resposta completa, o erro é o motivo do `locate` (`request_not_consumed`,
 um controlador; uma linha `poke*` toma o `control.lock`. Todo pedido fica no
 `events.jsonl` como evento `probe`, com as linhas enviadas e as respostas.
 
+## O personagem: `character`
+
+```bash
+ds2os-dev character --instance both --json
+ds2os-dev observe --instance 1 --character --json
+```
+
+Lê o personagem local num pedido só de MemProbe (quatro cadeias) e devolve, por
+instância, `character` com `address` (o objeto do personagem, que muda a cada
+carregamento), `hp`, `hpMax` (depois do hollowing), `souls`, `deaths`, `hollow`
+(0 a 32), `hollowState` (0 humano, 1 hollow), `role` (0 dono do mundo, 1
+fantasma branco), `position` e `bonfire` (`map` e `id` do registro para onde a
+morte manda; `null` quando o registro não resolve). Os endereços são os que o
+`DS2_DeathInterceptHook` lê e escreve e os medidos em
+`docs/DS2_SEAMLESS_COOP.md`, só para o executável 1.03.
+
+No título ou carregando não há personagem: o erro é `no_character`. Um objeto
+com HP fora de `0..=hpMax` ou posição não finita é `implausible_character`, não
+um personagem com zeros.
+
+`observe` só lê o personagem com `--character`, porque custa mais uma ida e
+volta; um problema de leitura aparece como `character_unread: <motivo>`.
+Cenários aceitam `/character/hp`, `/character/hpMax`, `/character/souls`,
+`/character/deaths`, `/character/hollow`, `/character/hollowState`,
+`/character/role`, `/character/bonfire/id` e `/character/bonfire/map`; a
+observação dessas assertions já inclui o personagem, e fora de `state: world`
+elas são inconclusivas.
+
 ## Cenários
 
 ```bash
@@ -340,8 +368,8 @@ não declaradas, valores inválidos e cenários sem assertions são recusados.
 
 Os pointers são relativos à observação da **instância identificada pelo
 número**, não a um índice de array. São aceitos `/state`, `/serverConnected`,
-`/player/name`, `/player/location`, `/pose/archetype`, `/p2pSessionVerified` e
-`/hooks/hooks/<nome exato do hook>`. Consulte `observe` para os nomes dos hooks.
+`/player/name`, `/player/location`, `/pose/archetype`, `/p2pSessionVerified`,
+os `/character/*` listados acima e `/hooks/hooks/<nome exato do hook>`. Consulte `observe` para os nomes dos hooks.
 `equals` usa igualdade JSON; campo ausente ou `null` é inconclusivo. Esperar
 `null` ou `unknown` não é uma assertion válida. Divergência conhecida é falha.
 `wait` repete até atingir o valor ou vencer seu prazo.
