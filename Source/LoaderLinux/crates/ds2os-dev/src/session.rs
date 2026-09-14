@@ -439,8 +439,10 @@ pub fn end(env: &Environment, timeout: Duration) -> Result<Value, String> {
     if server_lines.is_empty() {
         notes.push("server_census_silent: LogFirstMessageOfEachType só registra a primeira mensagem de cada tipo por conexão".to_owned());
     }
+    let restore_errors: Vec<&String> = [restored_host.as_ref().err(), restored_guest.as_ref().err()].into_iter().flatten().collect();
     let mut data = json!({"host": host, "guest": guest, "before": {"hostCopias": host_copies, "guestMode": guest_mode},
-        "restored": {"hostCopias": restored_host.as_ref().err(), "guestMode": restored_guest.as_ref().err()},
+        "restored": {"hostCopias": restored_host.is_ok(), "guestMode": restored_guest.is_ok()},
+        "restoreErrors": restore_errors,
         "serverLines": server_lines, "notes": notes});
     match attempt {
         Ok((kill, ms)) => {

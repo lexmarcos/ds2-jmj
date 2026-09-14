@@ -137,6 +137,17 @@ which hid a sign being created and removed repeatedly and cost a wrong
 diagnosis. Anyone reading that log should know it is a census, not a
 trace.
 
+### `game leave` from a bonfire, right after a session
+
+Twice (T3 and 14/09 20:4x), `game leave --instance 1` failed with
+`leave_failed` on Samuel standing at the Majula bonfire just after the
+session ended. The screen the second time showed the bonfire's **Item box**:
+the walk's first `press start` was lost, `press a` rested at the bonfire and
+the rest of the walk navigated its menu. Two `press b` and a retry
+recovered it. Not yet known whether the lost press is the post-session
+state, the prompt toggle left on the bonfire, or timing; `leave` does not
+check that its first press opened the menu.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway

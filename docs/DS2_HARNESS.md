@@ -437,7 +437,8 @@ receita medida em 14/09:
    padrão 60 (`session_still_live` ao vencer). Não depende do controlador do
    host, que continua em `0x10` por minutos.
 4. Devolve `copias` e o modo aos valores de antes, mesmo em falha, cada um
-   confirmado pelo eco (`restore_failed` se não voltar).
+   confirmado pelo eco. `data.restored` tem um booleano por ajuste, e os
+   erros ficam em `data.restoreErrors` (`restore_failed` se não voltar).
 
 O convidado paga uma morte de verdade: almas no chão e hollow. Queime uma
 efígie antes da próxima marca. `data.serverLines` traz as linhas
@@ -500,8 +501,12 @@ escreve **depois** de o comando começar e passa quando a mais recente mostra
 `N signs cached`. Esse número é o cache inteiro, não o de um jogador.
 `data.byPlayer` guarda o último poll de cada um.
 
-A linha só existe com `DS2_StickySigns` ligado. O servidor limita a uma por
-jogador a cada 10 s, e na prática aparece a cada ~30 s por jogador. Nenhum
+A linha só existe com `DS2_StickySigns` ligado. O padrão do servidor é
+desligado, e o `Saved/default/config.json` local está ligado. Com ele
+desligado, o comando é sempre `inconclusive`. O servidor limita a uma por
+jogador a cada 10 s. Na prática aparece a cada ~60 s por jogador (medido em
+14/09), então o prazo padrão é 90 s, e menos que 60 s pode perder o único poll
+de quem ficou. Nenhum
 poll dentro do prazo dá `inconclusive`, nunca `passed`. Poll com outro número
 no fim do prazo dá `failed` (`signs_remain`). O comando é só leitura e roda ao
 lado de um controlador.
@@ -547,7 +552,8 @@ não declaradas, valores inválidos e cenários sem assertions são recusados.
 nas instâncias declaradas que estiverem abertas antes do primeiro passo. Sem
 `baseline`, roda de novo depois do último passo, porque com `baseline` os
 jogos são fechados na limpeza. Instância parada é pulada, já que volta limpa
-ao iniciar. Cada reset gera o evento `scenario_hooks_reset`. O padrão é `keep`
+ao iniciar. Por isso, junto com `baseline`, que exige os jogos parados, o
+`reset` não faz nada. Cada reset gera o evento `scenario_hooks_reset`. O padrão é `keep`
 para não mudar os cenários que já existem.
 
 | `action` | Campos adicionais |

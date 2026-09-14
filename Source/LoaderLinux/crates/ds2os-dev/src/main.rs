@@ -463,7 +463,8 @@ enum ServerAction {
     Wait {
         #[arg(long)]
         signs: u64,
-        #[arg(long, default_value_t = 60)]
+        /// Each player polls about once a minute, so less than that can miss the only poll
+        #[arg(long, default_value_t = 90)]
         seconds: u64,
     },
 }
