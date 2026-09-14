@@ -310,9 +310,31 @@ aberto:
   de chefe, por exemplo). Medido fora de luta.
 - **Fogueira fora do mapa carregado**: a volta para "a última posição no chão"
   num renascer por HP deixaria o personagem onde morreu, pagando a morte.
-- **O convidado usa o registro da própria fogueira.** Nos testes os dois tinham
-  a mesma (`0x7ba7`). Com fogueiras diferentes, o fantasma volta para a dele se
-  estiver no mapa do host, ou fica onde morreu. É o passo 7.
+- ~~**O convidado usa o registro da própria fogueira.**~~ Resolvido no passo 7
+  (abaixo).
+
+### A fogueira do host (passo 7)
+
+Medido em 14/09 com dois jogadores em Heide, as duas fogueiras no mesmo mapa
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A fogueira do host"). Em
+aberto:
+
+- **Três jogadores ou mais.** O host é quem o jogo marca (`+0xad` do membro), e
+  um convidado entrando não anuncia mais nada; com duas contas não dá para ver
+  um segundo convidado recebendo o anúncio, nem um terceiro entrando.
+- **O registro do host mudando durante a sessão** (acender ou descansar numa
+  fogueira com um fantasma presente, se o jogo deixar): o anúncio sai na hora
+  em que o registro muda, mas isso não foi exercitado.
+- **Registro de tipo 1 ou 2** (ponto de evento, "player start" do mapa): a
+  procura é por id de fogueira, e esses caem na fogueira do próprio registro.
+  Só o tipo 0 foi visto.
+- **O host numa tela de carregamento.** Sem quadros, o host para de anunciar em
+  2 s e o último anúncio vale por 30 s; um convidado que morra depois disso vai
+  para a própria fogueira.
+- **Um jogador sem o mod na sessão** recebe os anúncios no canal 7 e nunca os
+  lê; ficam na fila da Steam (24 bytes a cada 2 s). Não medido.
+- **A fogueira do host fora do mapa carregado** é o passo 8: o convidado cai na
+  do próprio registro, se estiver no mapa, ou na última posição no chão.
 
 ## O login que resolve o hostname oficial, depois de um reboot
 

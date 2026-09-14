@@ -1571,3 +1571,112 @@ Escreva o modo nos dois `DS2_Death.req` antes de mexer em qualquer personagem.
 **Um breakpoint armado no meio de uma instrução derruba o jogo** quando o fluxo
 chega nele: o `0xCC` corta a instrução. `bp` precisa do início exato de uma
 instrução; confira no objdump antes de armar.
+
+## A fogueira do host (passo 7, 14/09)
+
+Até o passo 6 o convidado renascia na fogueira do **próprio** registro, e só
+deu certo porque o Samuel e o Chico tinham a mesma (`0x7ba7`). O registro de um
+convidado é o do mundo dele, e o jogo não grava outro enquanto ele está no
+mundo do host: `FUN_1401caf50` (acender) e `FUN_1401cb950` (sentar) só gravam
+quando quem interagiu é o personagem local **e** o slot `+0x58` do contexto diz
+que ele não está no mundo de outro. O registro do host existe só na máquina do
+host.
+
+### Um canal P2P, e não o servidor
+
+A lista de tarefas previa um canal "provavelmente pelo servidor". Não precisou:
+a sessão entre os dois já é P2P da Steam, e o jogo usa **um canal só** dela. Das
+oito chamadas a `SteamNetworking()` no binário, as seis que levam canal passam
+0 — `FUN_140a75800` pergunta e `FUN_140a73de0` lê, `FUN_140a7a410` e
+`FUN_140a76d90` enviam —, e as outras duas aceitam e fecham a sessão com um
+usuário. Um pacote em outro canal viaja pela mesma sessão P2P e fica esperando
+na outra máquina, sem que o jogo o toque, até alguém ler aquele canal. O
+servidor não participa e nada muda na VPS.
+
+| peça | onde |
+| --- | --- |
+| o poll da sessão | `FUN_140a75800`, slot `+0x108` de `DLNRD::SteamSessionLight` (vftable `0x1411b1058`), na thread do gerenciador de sessões; cerca de 107 chamadas por segundo em sessão (74 224 em 11,5 min) |
+| os membros | vetor em `+0x68..+0x70`; cada um é um `SteamSessionMemberLight` (vftable `0x1411b35e8`) com o CSteamID em `+0xc8`, onde o jogo procura o remetente de um pacote. O próprio jogador está na lista |
+| quem é o host | `+0xad` do membro, ligado por `FUN_140a72740` ao acrescentá-lo quando o id dele é o `GetLobbyOwner` do lobby (`+0x3f0` da sessão); o log de depuração do jogo chama de "Host". Lido ao vivo: 1 para o Samuel e 0 para o Chico, nas duas máquinas |
+| aceitar pacotes de alguém | `FUN_140a735f0` (`P2PSessionRequest_t`) só aceita quem está no lobby da sessão |
+| enviar e ler | `ISteamNetworking` slots `+0x00`, `+0x08`, `+0x10`, com os mesmos argumentos que o jogo passa; o próprio SteamID sai de `ISteamUser` slot `+0x10`, por ponteiro |
+| fora de sessão | varredura solo em 14/09: nenhum objeto com a vftable de `SteamSessionLight` |
+
+### O que o mod faz
+
+`DS2_CoopChannelHook` desvia o poll: deixa o jogo rodar e depois lê o canal 7.
+Se o jogador local é o host da sessão e o dono do mundo em que está (papel 0),
+anuncia `{mapa, tipo, id}` do registro dele para cada outro membro, a cada 2 s
+e na hora em que muda. O anúncio tem 24 bytes (`JMJC`, versão, tipo, papel de
+quem envia) e só é guardado se vier do host de uma sessão vista nos últimos
+5 s. A thread de rede não lê o mundo do jogo: o `DS2_DeathInterceptHook`
+publica o papel e o registro a cada quadro, na thread do jogo. `DS2_Channel.req`
+com `status` escreve o que o canal viu em `DS2_Channel.log`.
+
+Na morte de quem não é dono do mundo, o renascer procura a fogueira anunciada
+no mapa carregado; sem anúncio de menos de 30 s, ou com a fogueira do host fora
+do mapa, cai na do próprio registro e, sem ela, na última posição no chão. A
+procura agora confere o mapa além do id: `*(*(obj+0x28)+8)`, o mesmo campo que
+`FUN_1401caf50` grava no registro (`FUN_1403ba320`), `0x0a1f0000` nas três
+fogueiras de Heide, lido em 14/09. O registro do convidado **não** é tocado —
+gravar ali a fogueira do host a levaria para o save dele — e a chave
+`fogueira_do_host` do `DS2_Death.req` desliga a escolha sem build.
+
+### O resultado
+
+Encenação: o Chico descansou sozinho na fogueira "Tower of Flame" (`0x7ba2`,
+69 m ao norte da de Heide) e foi levado de volta à fogueira do Samuel; o
+registro dele ficou em `0x7ba2`, o do Samuel em `0x7ba7`. Os dois humanos,
+marca branca, sessão formada (`RequestNotifyJoinGuestPlayer` às 01:48:08,
+`RequestNotifyJoinSession` às 01:48:10), os dois em `respawn`. Build
+`d3cd29e5`.
+
+| teste | quem | log do hook | conferido |
+| --- | --- | --- | --- |
+| HP zerado na Tower of Flame | Chico | `levando para fogueira do host (6.186, -18.517, 209.053) mapa=0a1f0000 tipo=0 id=00007ba7; papel 1, anunciada por 011000010afd1a3a ha 1050 ms` | de (13.08, 276.66) para (6.27, 209.91); na tela do Samuel, o Chico na fogueira dele |
+| HP zerado ao lado do Samuel, `fogueira_do_host off` | Chico | `levando para fogueira do registro (13.056, -6.167, 276.660) ... id=00007ba2` | o controle: sem o anúncio, 69 m para a própria |
+| HP zerado na Tower of Flame, chave de volta | Chico | `fogueira do host ... id=00007ba7 ... ha 1064 ms` | ao lado do Samuel de novo |
+| queda no mar | Chico | `morte CANCELADA #4 queda ... causa=90`, `fogueira do host ... ha 1778 ms`, `renascer concluido em 1 quadros ... camera de queda desligada` | na fogueira do Samuel |
+| HP zerado na Tower of Flame | Samuel | `levando para fogueira do registro ... id=00007ba7`, sem nota de host; hollow 0→1, máximo 915→869, mortes 55→56, mancha trocada | de volta à própria fogueira; na tela do Chico, o Samuel lá |
+| 60 s depois da última morte | — | — | host `0x10`, convidado 7; nenhum `RequestNotifyDeath`, `KillEnemy` ou `Leave` no servidor |
+| canal | — | host: 347 enviados, 0 falhas; convidado: 346 recebidos, 0 recusados | um anúncio a cada 2 s durante 11 minutos |
+| saída | Chico em `observe`, `copias off` no Samuel | — | o primeiro `RequestNotifyDeath` da conexão do Chico às 02:00:09, `LeaveSession` e `LeaveGuestPlayer` às 02:00:21/22; o Chico voltou para casa na **própria** fogueira, `0x7ba2` |
+
+A última linha é a outra metade da prova: o registro do convidado continuou
+sendo dele.
+
+### O convidado que ainda está entrando
+
+O mesmo teste mostrou um erro do primeiro build. Nos 10 segundos entre o lobby
+se formar e ele chegar ao mundo do Samuel, o Chico ainda era dono do próprio
+mundo (papel 0) e anunciou a **própria** fogueira cinco vezes — e o Samuel
+aceitou. Com dois jogadores não teve efeito, porque o host não usa anúncio; com
+três, um convidado já dentro iria para a fogueira de quem está entrando. Papel 0
+não identifica o host da sessão. O que identifica é a marca que o jogo põe no
+membro (`+0xad`), e o build `4862d723` só anuncia e só aceita com ela.
+
+Conferido numa segunda sessão com esse build, a mesma encenação (saves com o
+Chico ainda em `0x7ba2`):
+
+- os dois logs listam `011000010afd1a3a (host) 0110000140d6d6d1`;
+- o Chico **não anunciou nada** na entrada (`enviados=0`), e o Samuel não
+  recebeu nada (`recebidos=0`); o Chico recebeu 22 anúncios do Samuel em 40 s,
+  nenhum recusado;
+- HP do Chico zerado na Tower of Flame: `levando para fogueira do host ...
+  id=00007ba7 ...; papel 1, anunciada por 011000010afd1a3a ha 753 ms`, e na
+  tela do Samuel o Chico na fogueira;
+- 60 s depois, host `0x10` e convidado 7; saída pelo caminho legal
+  (`RequestNotifyDeath` às 02:12:41, `LeaveSession` e `LeaveGuestPlayer` às
+  02:12:53/54), e o Chico em casa na `0x7ba2`.
+
+Saves devolvidos a `pre-passo6` depois das duas sessões.
+
+### Uma armadilha de encenação
+
+**O teleporte não gira o personagem, e a fogueira só oferece "Rest" a quem está
+virado para ela.** Posto no ponto exato de nascimento da Tower of Flame, o
+Chico não recebeu prompt nenhum; e andar com o analógico mexe a câmera junto,
+de modo que "para baixo" muda de sentido a cada passo. O que funcionou foi
+medir o deslocamento de um toque curto no analógico, converter a direção do
+mundo para a da tela e dar o último passo *em direção* à fogueira: o prompt
+apareceu a 0,16 m do ponto de nascimento.

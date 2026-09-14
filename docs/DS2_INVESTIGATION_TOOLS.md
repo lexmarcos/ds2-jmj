@@ -46,9 +46,13 @@ pokeabs/pokemod/pokechain <label> <where> [<offsets>] <hex bytes> [<expected>]
 scan  <label> <hex value> <width 1|2|4|8> [max hits]
 ```
 
-Two things learned the hard way:
+Three things learned the hard way:
 
 - **Lengths are decimal.** `1024`, not `400`.
+- **A scan finds its own needle.** Every scan answers with one hit in the
+  probe's own memory, where the value it was asked for is kept (`0x9c5fb08`,
+  `0x9d5fb08`, `0x9fffb08`... - low, and the same for any value in one boot).
+  A vftable that is not in the process still returns that one hit.
 - **Always pass the expected bytes on a poke.** Addresses a scan reported go
   stale, and writing to one that has been reused killed the game twice. With an
   expectation the write is refused instead. It also caught a wrong instruction
@@ -281,6 +285,33 @@ saiu, enquanto o servidor e a tela já mostravam o destino. A posição viva é 
 translação do `PlayerCtrl` (`ctx+0xd0`, campo `+0x90`), que é o que o getter
 virtual `+0x148` do jogo devolve.
 
+## O canal do co-op: `DS2_Channel.req`
+
+`DS2_CoopChannelHook` (passo 7, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md),
+"A fogueira do host") responde `status` em `DS2_Channel.log`:
+
+```text
+=== canal 7: polls=4657 estranhos=0 enviados=22 falhas=0 recebidos=0 recusados=0 eu=011000010afd1a3a ===
+    sessao 00007FFFFE5BFA00 vista ha 3 ms: 2 membros: 011000010afd1a3a (host) 0110000140d6d6d1
+    local ha 7 ms: papel 0, registro mapa 0a1f0000 tipo 0 id 00007ba7
+    do host: nada recebido
+```
+
+- `polls` conta as chamadas ao poll da sessão; parado em sessão quer dizer que
+  o jogo não está consultando a sessão. `estranhos` é o detour chamado com um
+  objeto que não é `SteamSessionLight`.
+- `enviados`/`falhas` são os `SendP2PPacket` do host; `recebidos`/`recusados`,
+  os pacotes lidos no canal 7. Um host só envia, um convidado só recebe.
+- `sessao` lista os membros como o jogo os guarda, com `(host)` onde a marca
+  `+0xad` está ligada. Fora de sessão não há objeto e a linha some.
+- `local` é o que a thread do jogo publicou no último quadro; "ha" acima de 2 s
+  quer dizer carregamento, e o host para de anunciar.
+- `do host` é o último anúncio guardado; o renascer só o usa com menos de 30 s
+  e vindo de quem ainda é host.
+
+Fora do `status`, o log escreve uma linha quando os membros mudam, quando o
+anúncio muda (host) e quando o anúncio recebido muda (convidado).
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
@@ -341,4 +372,10 @@ descriptors, and `vt.py <address>` finds the vtable a function sits in.
   Quit Game, A, then **left** to YES. The confirm defaults to NO.
 - Loading a save reliably leaves the character at the bonfire with a working
   prompt, which is often faster than walking back to one.
+- **A teleport keeps the character's facing, and a bonfire only offers "Rest"
+  to someone facing it.** Standing on the exact spawn point after a teleport
+  gave no prompt. The stick moves the camera too, so "down" changes meaning
+  between presses: measure what a short press did to the position, convert the
+  world direction to a stick direction, and take the last step *toward* the
+  bonfire. The prompt came up 0.16 m from the spawn point.
 - On the character list, **X is Delete**. Only ever press A there.

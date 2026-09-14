@@ -124,10 +124,11 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ## M2 — respawn dentro da sessão
 
-**Não está fechado.** O critério foi observado em 14/09 no caso medido — os
-dois jogadores no mesmo mapa, com a mesma fogueira no registro (passo 6) —, mas
-faltam a fogueira do convidado no mundo do host (passo 7) e a fogueira fora do
-mapa carregado. O critério, definido pelo dono do projeto em 13/09:
+**Não está fechado.** O critério foi observado em 14/09 nos casos medidos — a
+morte do host e a do convidado, por HP e por queda, com a fogueira do host no
+mapa carregado, inclusive quando o registro do convidado aponta para outra
+(passos 6 e 7) —, mas falta a fogueira fora do mapa carregado (passo 8). O
+critério, definido pelo dono do projeto em 13/09:
 
 > morre → respawna → continua na **mesma** sessão, e o host continua jogando
 > normalmente. Vale para a morte de **qualquer** um dos dois, host ou fantasma.
@@ -208,14 +209,27 @@ sem sessão, e não custam desconexão ilegal:
    lá ("Phantom Chico has been vanquished"); o hook agora recusa também a morte
    pendente da cópia de um jogador. "YOU DIED" aparece e o HUD volta. Detalhes
    em DS2_SEAMLESS_COOP.md, "Com sessão".
-7. **Fogueira compartilhada.** O convidado não grava a própria fogueira no mundo
-   do host (`FUN_1401caf50` só grava para o jogador local, e com uma condição
-   que parece ser "não estou no mundo de outro" — inferência). O triplo
-   `{mapa, tipo, id}` precisa de um canal do mod, provavelmente pelo servidor.
-
-**Limite conhecido:** isto só vale para fogueira no mapa carregado. Fogueira em
-outro mapa exige warp, e warp exige religar a presença dos dois lados depois da
-recarga — que é a abordagem das tentativas 8 e 9 — ou cair no contorno.
+7. **Fogueira compartilhada.** — **feito em 14/09.** O jogo não grava fogueira
+   para quem está no mundo de outro (`FUN_1401caf50` e `FUN_1401cb950` só gravam
+   para o personagem local quando o slot `+0x58` do contexto diz que ele não
+   está no mundo de outro). O canal não precisou do servidor: o jogo só usa o
+   canal 0 da sessão P2P da Steam, e `DS2_CoopChannelHook` usa o 7. O host da
+   sessão (a marca `+0xad` que o jogo põe no membro dono do lobby) anuncia
+   `{mapa, tipo, id}` a cada 2 s, e a morte de um convidado renasce na fogueira
+   anunciada. Medido com o registro do Chico em `0x7ba2` e o do Samuel em
+   `0x7ba7`: HP zerado a 69 m e queda no mar levaram o Chico à fogueira do
+   Samuel, com a chave desligada ele foi para a própria, a morte do host seguiu
+   no registro do host, a sessão ficou em `0x10`/7 e, na saída, o Chico voltou
+   para casa na própria `0x7ba2`. Detalhes em DS2_SEAMLESS_COOP.md, "A fogueira
+   do host".
+8. **Fogueira fora do mapa carregado.** Não começado. A procura só enxerga a
+   lista `*(*(ctx+0x70)+0x58)`, as fogueiras do mapa carregado, e sem a
+   fogueira ali o renascer cai na última posição no chão: o personagem paga a
+   morte e fica onde morreu. Acontece sempre que alguém morre num mapa depois de
+   descansar em outro. Primeira medição: se a lista inclui as fogueiras de um
+   mapa vizinho carregado junto, perto de uma fronteira. Fogueira de um mapa que
+   não está carregado exige warp, e warp exige religar a presença dos dois lados
+   depois da recarga — a abordagem das tentativas 8 e 9 — ou cair no contorno.
 
 ---
 
