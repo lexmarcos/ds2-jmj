@@ -9,6 +9,7 @@
 
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -129,6 +130,20 @@ namespace
     // Frames to wait for the fall controller to say the character is down.
     constexpr uint32_t kRecoveryRetryFrames = 30;
     constexpr uint32_t kRecoveryGiveUpFrames = 300;
+
+    // A bonfire in a map that is not loaded (step 8). The map is brought in
+    // beside the current one without a warp (DS2_BackreadHook), the character
+    // waits where it stands, and goes once the bonfire is in the list and its
+    // map is loaded; the map is let go once the character stands on it.
+    constexpr uint32_t kLoadPollFrames = 10;
+    constexpr uint32_t kLoadGiveUpFrames = 1800;       // 30 s at 60 frames a second
+    constexpr uint32_t kSettleGiveUpFrames = 600;
+    constexpr uint8_t kMapLoaded = 5;                  // MapAreaCtrlOwner+0x1e8
+    constexpr size_t kMapManager = 0x38;               // ctx+0x38
+    constexpr size_t kMapStreamer = 0x08;
+    constexpr size_t kStreamerPart = 0x28;             // the part the player was last on (FUN_1403dc8e0)
+    constexpr size_t kPartOwner = 0x28;                // MapEntity -> MapAreaCtrlOwner
+    constexpr size_t kOwnerMap = 0x08;
 
     // What a death costs, applied with the game's own functions (step 5, all
     // measured on 13/09 against a death the game carried out itself).
@@ -315,6 +330,7 @@ namespace
         FeatureBanner = 1 << 6,
         FeatureRemote = 1 << 7,
         FeatureHostBonfire = 1 << 8,
+        FeatureOtherMap = 1 << 9,
     };
     struct FeatureName
     {
@@ -331,6 +347,7 @@ namespace
         { "banner", FeatureBanner },
         { "copias", FeatureRemote },
         { "fogueira_do_host", FeatureHostBonfire },
+        { "outro_mapa", FeatureOtherMap },
     };
 
     enum Mode : int
@@ -399,7 +416,7 @@ namespace
     std::atomic<uint64_t> s_respawns{ 0 };
     std::atomic<uint64_t> s_remote_transitions{ 0 };
     std::atomic<uint64_t> s_remote_refused{ 0 };
-    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureBanner | FeatureRemote | FeatureHostBonfire };
+    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureBanner | FeatureRemote | FeatureHostBonfire | FeatureOtherMap };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
@@ -414,8 +431,23 @@ namespace
         float Target[3] = {};
         const char* Where = "";
         const char* Why = "";
+        // Waiting for the bonfire's map to come in.
+        bool Loading = false;
+        uint32_t LoadMap = 0;
+        uint32_t LoadId = 0;
+        uint32_t LoadFrames = 0;
     };
     Recovery s_recovery;
+
+    // After the jump to another map: holding that map until the character
+    // stands on it, then letting go.
+    struct Settle
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint32_t Frames = 0;
+    };
+    Settle s_settle;
 
     // Waiting for the banner to end, to give the HUD back.
     struct BannerWait
@@ -553,6 +585,22 @@ namespace
         Type = Fields[1];
         Id = (uint32_t)Fields[2];
         return true;
+    }
+
+    // The map of the part the player last stood on, as the streamer keeps it.
+    uint32_t CurrentMap()
+    {
+        uintptr_t Context = 0, Manager = 0, Streamer = 0, Part = 0, Owner = 0;
+        uint32_t Map = 0;
+        if (ReadPointer(s_base + kContextOffset, Context) &&
+            ReadPointer(Context + kMapManager, Manager) &&
+            ReadPointer(Manager + kMapStreamer, Streamer) &&
+            ReadPointer(Streamer + kStreamerPart, Part) &&
+            ReadPointer(Part + kPartOwner, Owner))
+        {
+            ReadBytes(Owner + kOwnerMap, &Map, sizeof(Map));
+        }
+        return Map;
     }
 
     uint8_t RoleOf(uint8_t* Chr)
@@ -1346,12 +1394,35 @@ namespace
 
         if (Next.Where[0] == '\0')
         {
-            if (HaveRecord && FindBonfireSpawn(Map, Id, Next.Target))
+            // A guest whose host announced a bonfire that is not loaded waits
+            // for that bonfire's map; everyone else tries its own record first.
+            DS2_CoopChannel::Bonfire Said;
+            const bool FromHost = Role != kWorldOwnerRole && Enabled(FeatureHostBonfire) &&
+                DS2_CoopChannel::HostBonfire(Said) && Said.Map != 0;
+            const bool LoadHost = FromHost && Enabled(FeatureOtherMap);
+
+            if (!LoadHost && HaveRecord && FindBonfireSpawn(Map, Id, Next.Target))
             {
                 Next.Where = "fogueira do registro";
             }
             else
             {
+                uint32_t Wanted = 0;
+                if (LoadHost)
+                {
+                    Wanted = Said.Map;
+                    Map = Said.Map;
+                    Type = Said.Type;
+                    Id = Said.Id;
+                }
+                else if (Enabled(FeatureOtherMap) && HaveRecord)
+                {
+                    Wanted = Map;
+                }
+                uint8_t OwnerState = 0;
+                uint32_t OwnerMask[4] = {};
+                const bool Known = Wanted != 0 && Wanted != CurrentMap() && DS2_Backread::Query(Wanted, OwnerState, OwnerMask);
+
                 const uintptr_t Fall = FallController(Chr);
                 if (Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
                 {
@@ -1361,6 +1432,16 @@ namespace
                     return;
                 }
                 Next.Where = "ultima posicao no chao";
+                if (Known)
+                {
+                    const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+                    DS2_Backread::Request(Wanted, Every);
+                    Next.Loading = true;
+                    Next.LoadMap = Wanted;
+                    Next.LoadId = Id;
+                    Next.Where = "ultima posicao no chao, esperando o mapa da fogueira";
+                    s_settle.Active = false;
+                }
             }
         }
 
@@ -1371,8 +1452,69 @@ namespace
             Map, Type, Id, Moved ? "teleportado" : "TELEPORTE FALHOU", Host.c_str()));
     }
 
+    // The bonfire's map is coming in. Once it is loaded and the bonfire is in
+    // the list, the character goes there; the map stays held until it stands.
+    void ContinueLoading(uint8_t* Chr)
+    {
+        ++s_recovery.LoadFrames;
+        if (s_recovery.LoadFrames % kLoadPollFrames != 0)
+        {
+            return;
+        }
+
+        uint8_t State = 0;
+        uint32_t Mask[4] = {};
+        float Spawn[3] = {};
+        const bool Loaded = DS2_Backread::Query(s_recovery.LoadMap, State, Mask) && State == kMapLoaded;
+        if (Loaded && FindBonfireSpawn(s_recovery.LoadMap, s_recovery.LoadId, Spawn))
+        {
+            memcpy(s_recovery.Target, Spawn, sizeof(Spawn));
+            s_recovery.Where = "fogueira em outro mapa";
+            s_recovery.Loading = false;
+            s_recovery.Frames = 0;
+            s_settle.Active = true;
+            s_settle.Map = s_recovery.LoadMap;
+            s_settle.Frames = 0;
+            const bool Moved = TeleportLocal(Chr, s_recovery.Target);
+            Append(StringFormat("%s  %s: o mapa %08x carregou em %u quadros; levando para a fogueira %08x (%.3f, %.3f, %.3f) %s\n",
+                Clock().c_str(), s_recovery.Why, s_recovery.LoadMap, s_recovery.LoadFrames, s_recovery.LoadId,
+                Spawn[0], Spawn[1], Spawn[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
+            return;
+        }
+
+        if (s_recovery.LoadFrames >= kLoadGiveUpFrames)
+        {
+            DS2_Backread::Release();
+            s_recovery.Loading = false;
+            s_recovery.Frames = 0;
+            Append(StringFormat("%s  %s: %u quadros e o mapa %08x nao trouxe a fogueira %08x (estado %u); fica na ultima posicao no chao\n",
+                Clock().c_str(), s_recovery.Why, s_recovery.LoadFrames, s_recovery.LoadMap, s_recovery.LoadId, State));
+        }
+    }
+
+    // Holding the map the character jumped to until the streamer has it under
+    // the character's feet, so letting go unloads only the map left behind.
+    void ContinueSettle()
+    {
+        ++s_settle.Frames;
+        const uint32_t Current = CurrentMap();
+        const bool Arrived = Current == s_settle.Map;
+        if (!Arrived && s_settle.Frames < kSettleGiveUpFrames)
+        {
+            return;
+        }
+        DS2_Backread::Release();
+        s_settle.Active = false;
+        Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
+            Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str()));
+    }
+
     void ContinueRecovery(uint8_t* Chr, uint8_t* Data)
     {
+        if (s_recovery.Loading)
+        {
+            ContinueLoading(Chr);
+        }
         ++s_recovery.Frames;
 
         const uintptr_t Fall = FallController(Chr);
@@ -1380,7 +1522,7 @@ namespace
         const bool Down = Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
         if (!Down)
         {
-            if (s_recovery.Frames >= kRecoveryGiveUpFrames)
+            if (s_recovery.Frames >= kRecoveryGiveUpFrames && !s_recovery.Loading)
             {
                 ++s_recovery_failed;
                 s_recovery.Active = false;
@@ -1391,6 +1533,11 @@ namespace
             {
                 TeleportLocal(Chr, s_recovery.Target);
             }
+            return;
+        }
+
+        if (s_recovery.Loading)
+        {
             return;
         }
 
@@ -1515,7 +1662,12 @@ namespace
         {
             s_local_ctrl = Ctrl;
             s_local_state = Before;
-            s_recovery.Active = false;
+            if (s_recovery.Loading || s_settle.Active)
+            {
+                DS2_Backread::Release();
+            }
+            s_recovery = Recovery();
+            s_settle.Active = false;
             s_banner_wait.Active = false;
             Append(StringFormat("%s  controlador do jogador local %p, personagem %p, estado %u\n",
                 Clock().c_str(), Ctrl, Character, Before));
@@ -1528,6 +1680,10 @@ namespace
         if (s_banner_wait.Active)
         {
             ContinueBanner();
+        }
+        if (s_settle.Active)
+        {
+            ContinueSettle();
         }
 
         // The same three tests the controller makes, in its order. The HP
