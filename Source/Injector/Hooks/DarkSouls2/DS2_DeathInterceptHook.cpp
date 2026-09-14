@@ -193,6 +193,91 @@ namespace
     constexpr size_t kSignSets[] = { 0x18, 0x20 };
     constexpr uint32_t kSoulsBloodstainType = 10;
 
+    // Who pays, in a session (step 6, read on 13/09). The death sequence is
+    // EventResult slot +0x20 (FUN_14018f830), built from a param row picked by
+    // the role; for a death of type 1 its step FUN_14018fbc0 moves the souls
+    // only when a session manager and NetSvrManager exist and FUN_14018fd70
+    // agrees: the bonfire record's +0x1b9 is clear, and either the role is not
+    // a guest's or its role param says +0x2e == 1. The role is the byte at
+    // *(chr+0xb0)+0x3c, and a 16-byte table per role says, in its second byte,
+    // what kind of guest it is (0 the owner of the world, 1 for the white
+    // phantom roles 1 and 3).
+    constexpr size_t kChrRoles = 0xb0;
+    constexpr size_t kRole = 0x3c;
+    constexpr size_t kRoleTableOffset = 0x10c0050;
+    constexpr size_t kRoleRows = 0x14;
+    constexpr size_t kRoleRowSize = 0x10;
+    constexpr size_t kRoleGuestKind = 0x01;
+    constexpr size_t kSessionManager = 0x22f0;         // ctx+0x22f0
+    constexpr size_t kRecordNoSouls = 0x1b9;           // *(ctx+0x70), byte
+    constexpr size_t kRoleParamOffset = 0x16f540;      // param row*(role)
+    constexpr uint8_t kRoleParamBytes[] = { 0x48, 0x8b, 0x05, 0xa9, 0x53, 0x4a, 0x01, 0x8b, 0xd1, 0x48, 0x8b, 0x48, 0x18 };
+    constexpr size_t kRoleParamGuestPays = 0x2e;       // byte, 1: this guest loses its souls
+    // FUN_14026b0d0 puts the bloodstain in the world only when the context's
+    // slot +0x58 says no; nothing is removed unless it will.
+    constexpr size_t kContextNoBloodstain = 0x58;
+
+    // The rest of FUN_14037dcc0, the function that hollows. Its first check
+    // is not in the decompiler's view: `call 0x14016f7d0` is a jump into
+    // obfuscated code, `bool(chr)`, nonzero meaning no hollowing. Its second,
+    // `call 0x140203be0`, the same kind of jump, picks the branch for the
+    // player of this machine: FUN_140203ad0 adds the death to PlayerParam
+    // +0x104+role*8 and +0x1a4, FUN_1401ac240 breaks the protection ring that
+    // was worn (it unequips the four item ids and hands back the broken one),
+    // and a menu of ctx+0x22e0 that was open is closed. The other branch is
+    // for somebody else's character dying in this world.
+    constexpr size_t kHollowExemptOffset = 0x16f7d0;
+    constexpr uint8_t kHollowExemptBytes[] = { 0xe9, 0x2e, 0x53, 0xea, 0xff };
+    constexpr size_t kLocalBranchOffset = 0x203be0;
+    constexpr uint8_t kLocalBranchBytes[] = { 0xe9, 0x7b, 0x56, 0x36, 0x00 };
+    constexpr size_t kDeathCounterOffset = 0x203ad0;
+    constexpr uint8_t kDeathCounterBytes[] = { 0x48, 0x85, 0xc9, 0x74, 0x17, 0x48, 0x8b, 0x81, 0xb0, 0x00, 0x00, 0x00 };
+    constexpr size_t kRingBreakOffset = 0x1ac240;
+    constexpr uint8_t kRingBreakBytes[] = { 0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0xe8, 0xb5, 0xf3, 0xff, 0xff };
+    constexpr size_t kMenuOpenOffset = 0x500900;
+    constexpr uint8_t kMenuOpenBytes[] = { 0x48, 0x8b, 0x89, 0x10, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc9 };
+    constexpr size_t kMenuCloseOffset = 0x4fecd0;
+    constexpr uint8_t kMenuCloseBytes[] = { 0x48, 0x8b, 0x81, 0x10, 0x01, 0x00, 0x00, 0x48, 0x85, 0xc0 };
+    constexpr size_t kFrontEnd = 0x22e0;               // ctx+0x22e0
+    constexpr size_t kParamDeaths = 0x1a4;             // PlayerParam, int
+
+    // The bloodstain other players see. NetSvrBloodstainManager's own update
+    // (slot +0x38) starts the job on the first frame the local character has
+    // HP 0 and bit 0x4000 of +0x4c8 - the frame this hook never lets happen -
+    // through FUN_14026c0b0, or FUN_14026c1b0 for a death of kind 3 (turned to
+    // stone). Both check FUN_14026bc50 themselves; the job sends
+    // RequestCreateBloodstain with the ghost recorder's last seconds.
+    constexpr size_t kOnlineStainOffset = 0x26c0b0;
+    constexpr uint8_t kOnlineStainBytes[] = { 0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xf9, 0xe8, 0x92, 0xfb, 0xff, 0xff };
+    constexpr size_t kOnlineStatueOffset = 0x26c1b0;
+    constexpr uint8_t kOnlineStatueBytes[] = { 0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xf9, 0xe8, 0x92, 0xfa, 0xff, 0xff };
+    constexpr int8_t kDeathKindStone = 3;
+
+    // Parts of the bill that can be switched off from DS2_Death.req, so a
+    // session test can take one out without a build.
+    enum Feature : uint32_t
+    {
+        FeatureSouls = 1 << 0,
+        FeatureHollow = 1 << 1,
+        FeatureCounter = 1 << 2,
+        FeatureRing = 1 << 3,
+        FeatureOnlineStain = 1 << 4,
+        FeatureEstus = 1 << 5,
+    };
+    struct FeatureName
+    {
+        const char* Name;
+        uint32_t Bit;
+    };
+    constexpr FeatureName kFeatures[] = {
+        { "almas", FeatureSouls },
+        { "hollow", FeatureHollow },
+        { "contador", FeatureCounter },
+        { "anel", FeatureRing },
+        { "mancha_online", FeatureOnlineStain },
+        { "estus", FeatureEstus },
+    };
+
     enum Mode : int
     {
         Observe = 0,
@@ -210,6 +295,11 @@ namespace
     using SetEntry_p = uint32_t*(*)(void* Set, uint32_t Index);
     using RemoveSign_p = void(*)(void* Interface, uint32_t* Entry);
 
+    using RoleParam_p = uintptr_t(*)(int Role);
+    using Action_p = void(*)(void* Object);
+    using Global_p = void(*)();
+    using ContextCheck_p = uint64_t(*)(void* Context);
+
     RecordSouls_p s_record_souls = nullptr;
     SpawnBloodstain_p s_spawn_bloodstain = nullptr;
     Hollow_p s_hollow = nullptr;
@@ -217,6 +307,15 @@ namespace
     Check_p s_no_penalty = nullptr;
     Check_p s_not_a_player = nullptr;
     RefillEstus_p s_refill_estus = nullptr;
+    RoleParam_p s_role_param = nullptr;
+    Check_p s_hollow_exempt = nullptr;
+    Check_p s_local_branch = nullptr;
+    Action_p s_death_counter = nullptr;
+    Global_p s_ring_break = nullptr;
+    Check_p s_menu_open = nullptr;
+    Action_p s_menu_close = nullptr;
+    Action_p s_online_stain = nullptr;
+    Action_p s_online_statue = nullptr;
 
     using Update_p = void(*)(void* Ctrl, float Delta);
     using Replica_p = void(*)(void* Ctrl);
@@ -237,6 +336,8 @@ namespace
     std::atomic<uint64_t> s_recovered{ 0 };
     std::atomic<uint64_t> s_recovery_failed{ 0 };
     std::atomic<uint64_t> s_respawns{ 0 };
+    std::atomic<uint64_t> s_remote_transitions{ 0 };
+    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureOnlineStain | FeatureEstus };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
@@ -566,6 +667,64 @@ namespace
         }
     }
 
+    bool CallRoleParam(int Role, uintptr_t& Row)
+    {
+        __try
+        {
+            Row = s_role_param(Role);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallAction(Action_p Action, uintptr_t Object)
+    {
+        __try
+        {
+            Action((void*)Object);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallGlobal(Global_p Action)
+    {
+        __try
+        {
+            Action();
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool CallContextCheck(uintptr_t Context, size_t Slot, bool& Result)
+    {
+        __try
+        {
+            const uintptr_t Vftable = *(const uintptr_t*)Context;
+            Result = ((*(ContextCheck_p*)(Vftable + Slot))((void*)Context) & 0xff) != 0;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool Enabled(uint32_t Bit)
+    {
+        return (s_features.load() & Bit) != 0;
+    }
+
     uintptr_t BloodstainManager()
     {
         uintptr_t Global = 0, Net = 0, Manager = 0, Vftable = 0;
@@ -663,61 +822,113 @@ namespace
     }
 
     // Everything a death costs except the reload, in the order the game pays
-    // it: souls into the bloodstain record while the character still stands
-    // where it died (the record takes the last safe position), hollowing, the
-    // bloodstain put in the world, and the Estus the respawn refills.
+    // it and behind the game's own gates for who pays what: souls into the
+    // bloodstain record while the character still stands where it died (the
+    // record takes the last safe position), hollowing, the counters and the
+    // ring of the player of this machine, the bloodstain put in the world and
+    // the one other players see, and the Estus the respawn refills.
     void ApplyDeathCosts(uint8_t* Chr, uint8_t* Data)
     {
         const uintptr_t Player = (uintptr_t)Chr;
-        uintptr_t Param = 0;
+        uintptr_t Param = 0, Context = 0, Roles = 0;
         const bool HaveParam = ReadPointer(Player + kPlayerParam, Param);
+        const bool HaveContext = ReadPointer(s_base + kContextOffset, Context);
+
+        uint8_t Role = 0, GuestKind = 0;
+        if (ReadPointer(Player + kChrRoles, Roles))
+        {
+            ReadBytes(Roles + kRole, &Role, 1);
+        }
+        ReadBytes(s_base + kRoleTableOffset + (Role < kRoleRows ? Role : 0) * kRoleRowSize + kRoleGuestKind, &GuestKind, 1);
 
         uint32_t SoulsBefore = 0;
         uint8_t HollowBefore = 0;
+        int32_t DeathsBefore = 0;
         if (HaveParam)
         {
             ReadBytes(Param + kParamSouls, &SoulsBefore, sizeof(SoulsBefore));
             ReadBytes(Param + kParamHollow, &HollowBefore, 1);
+            ReadBytes(Param + kParamDeaths, &DeathsBefore, sizeof(DeathsBefore));
         }
 
-        // Souls first.
-        std::string Souls = "sem gerenciador de manchas";
+        // Souls, if FUN_14018fbc0 and FUN_14018fd70 would move them.
+        std::string Souls;
+        bool Recorded = false;
         const uintptr_t Manager = BloodstainManager();
-        if (Manager != 0)
+        uintptr_t Session = 0, Record = 0;
+        if (!Enabled(FeatureSouls))
         {
-            uint8_t Done = 1;
+            Souls = "desligado";
+        }
+        else if (Manager == 0)
+        {
+            Souls = "sem gerenciador de manchas";
+        }
+        else if (!HaveContext || !ReadPointer(Context + kSessionManager, Session))
+        {
+            Souls = "sem gerenciador de sessao; o jogo nao cobra";
+        }
+        else if (!ReadPointer(Context + kBonfireRecord, Record))
+        {
+            Souls = "sem registro da fogueira";
+        }
+        else
+        {
+            uint8_t NoSouls = 1, GuestPays = 0, Done = 1;
+            uintptr_t RoleRow = 0;
+            ReadBytes(Record + kRecordNoSouls, &NoSouls, 1);
+            const bool GuestChecked = GuestKind == 0 ||
+                (CallRoleParam(Role, RoleRow) && RoleRow != 0 && ReadBytes(RoleRow + kRoleParamGuestPays, &GuestPays, 1));
             ReadBytes(Manager + kBloodstainDone, &Done, 1);
-            if (Done != 0)
+            if (NoSouls != 0)
             {
-                Souls = "registro ja marcado nesta carga; almas ficam";
+                Souls = "o registro da fogueira diz sem almas (+0x1b9); ficam";
+            }
+            else if (!GuestChecked || (GuestKind != 0 && GuestPays != 1))
+            {
+                Souls = StringFormat("convidado que nao paga (param do papel %s, +0x2e=%u); ficam",
+                    RoleRow != 0 ? "lido" : "AUSENTE", GuestPays);
+            }
+            else if (Done != 0)
+            {
+                Souls = "registro ja marcado nesta carga; ficam";
             }
             else
             {
                 uint64_t Out = 0;
                 const bool Called = CallRecordSouls(Manager, Out);
+                uint8_t DoneAfter = 0;
+                ReadBytes(Manager + kBloodstainDone, &DoneAfter, 1);
+                Recorded = Called && DoneAfter != 0;
                 Souls = StringFormat("%s: %u almas para a mancha, %u perdidas da anterior",
-                    Called ? "registradas" : "FALHOU", (uint32_t)(Out >> 32), (uint32_t)Out);
+                    !Called ? "FALHOU" : (Recorded ? "registradas" : "recusadas pelo jogo"),
+                    (uint32_t)(Out >> 32), (uint32_t)Out);
             }
         }
 
-        // Hollowing, with the checks FUN_14037dcc0 makes before it.
-        std::string Hollow = "sem PlayerParam";
-        if (HaveParam)
+        // Hollowing, with the five checks FUN_14037dcc0 makes before it.
+        std::string Hollow = "desligado";
+        if (Enabled(FeatureHollow) && !HaveParam)
         {
-            bool Exempt = false, NotPlayer = false;
+            Hollow = "sem PlayerParam";
+        }
+        else if (Enabled(FeatureHollow))
+        {
+            bool Exempt = false, Obscure = false, NotPlayer = false;
             uint64_t StateBits = 0, EffectBits = 0;
             ReadBytes((uintptr_t)Data + kStateBits, &StateBits, sizeof(StateBits));
             ReadBytes((uintptr_t)Data + kEffectBits, &EffectBits, sizeof(EffectBits));
             const bool Checked = CallCheck(s_no_penalty, (uintptr_t)Data, Exempt) &&
+                CallCheck(s_hollow_exempt, Player, Obscure) &&
                 CallCheck(s_not_a_player, Player, NotPlayer);
             if (!Checked)
             {
                 Hollow = "checagens FALHARAM; sem hollow";
             }
-            else if (Exempt || (StateBits & kNoPenaltyBit) != 0 || NotPlayer || (EffectBits & kNoHollowBit) != 0)
+            else if (Exempt || (StateBits & kNoPenaltyBit) != 0 || Obscure || NotPlayer || (EffectBits & kNoHollowBit) != 0)
             {
-                Hollow = StringFormat("isento (penalidade=%d especial=%d bits=%d/%d)",
-                    Exempt ? 1 : 0, NotPlayer ? 1 : 0, (StateBits & kNoPenaltyBit) != 0 ? 1 : 0,
+                Hollow = StringFormat("isento (penalidade=%d ofuscada=%d especial=%d bits=%d/%d)",
+                    Exempt ? 1 : 0, Obscure ? 1 : 0, NotPlayer ? 1 : 0, (StateBits & kNoPenaltyBit) != 0 ? 1 : 0,
                     (EffectBits & kNoHollowBit) != 0 ? 1 : 0);
             }
             else
@@ -735,25 +946,89 @@ namespace
             }
         }
 
-        // The old bloodstain out, the new one in.
-        std::string Bloodstain = "sem BloodstainSetCtrl";
-        const uintptr_t SetCtrl = BloodstainSetCtrl();
-        if (Manager != 0 && SetCtrl != 0)
+        // The branch for the player of this machine.
+        std::string Mine;
+        bool Local = false;
+        if (!CallCheck(s_local_branch, Player, Local))
         {
-            const int Removed = RemoveSoulsBloodstains(SetCtrl);
-            const bool Spawned = CallSpawnBloodstain(Manager);
-            Bloodstain = StringFormat("%d antiga(s) removida(s), nova %s, agora %d no mundo",
-                Removed, Spawned ? "criada" : "FALHOU", CountSoulsBloodstains(SetCtrl));
+            Mine = "checagem FALHOU";
+        }
+        else if (!Local)
+        {
+            Mine = "o jogo diz que nao e o jogador desta maquina; nada";
+        }
+        else
+        {
+            if (Enabled(FeatureCounter) && HaveParam)
+            {
+                const bool Counted = CallAction(s_death_counter, Player);
+                int32_t DeathsAfter = DeathsBefore;
+                ReadBytes(Param + kParamDeaths, &DeathsAfter, sizeof(DeathsAfter));
+                Mine += StringFormat("mortes %d -> %d%s", DeathsBefore, DeathsAfter, Counted ? "" : " (FALHOU)");
+            }
+            else
+            {
+                Mine += "contador desligado";
+            }
+
+            if (Enabled(FeatureRing))
+            {
+                Mine += CallGlobal(s_ring_break) ? ", anel conferido" : ", anel FALHOU";
+            }
+
+            uintptr_t FrontEnd = 0;
+            bool Open = false;
+            if (HaveContext && ReadPointer(Context + kFrontEnd, FrontEnd) &&
+                CallCheck(s_menu_open, FrontEnd, Open) && Open)
+            {
+                Mine += CallAction(s_menu_close, FrontEnd) ? ", menu fechado" : ", menu FALHOU";
+            }
         }
 
-        // Estus, as the respawn at a bonfire refills it.
-        std::string Estus = "sem inventario";
-        uintptr_t Context = 0, Holder = 0, Inventory = 0;
-        if (ReadPointer(s_base + kContextOffset, Context) &&
-            ReadPointer(Context + kInventoryHolder, Holder) &&
-            ReadPointer(Holder + kHolderInventory, Inventory))
+        // The old bloodstain out and the new one in, only for souls that moved
+        // now, and only where FUN_14026b0d0 would put one.
+        std::string Bloodstain = "nenhuma alma registrada; manchas intocadas";
+        if (Recorded)
         {
-            Estus = CallRefillEstus(Inventory) ? "recarregado" : "FALHOU";
+            const uintptr_t SetCtrl = BloodstainSetCtrl();
+            bool Refused = true;
+            if (SetCtrl == 0)
+            {
+                Bloodstain = "sem BloodstainSetCtrl";
+            }
+            else if (!CallContextCheck(Context, kContextNoBloodstain, Refused))
+            {
+                Bloodstain = "checagem do contexto (+0x58) FALHOU";
+            }
+            else if (Refused)
+            {
+                // Still clears the mark, as the reload would.
+                CallSpawnBloodstain(Manager);
+                Bloodstain = "o contexto recusa mancha aqui (+0x58); manchas intocadas";
+            }
+            else
+            {
+                const int Removed = RemoveSoulsBloodstains(SetCtrl);
+                const bool Spawned = CallSpawnBloodstain(Manager);
+                Bloodstain = StringFormat("%d antiga(s) removida(s), nova %s, agora %d no mundo",
+                    Removed, Spawned ? "criada" : "FALHOU", CountSoulsBloodstains(SetCtrl));
+            }
+        }
+
+        std::string Online = "desligado";
+        if (Enabled(FeatureOnlineStain))
+        {
+            const bool Stone = (int8_t)Data[kDeathKind] == kDeathKindStone;
+            Online = Manager == 0 ? "sem gerenciador"
+                : (CallAction(Stone ? s_online_statue : s_online_stain, Manager) ? (Stone ? "pedida (estatua)" : "pedida") : "FALHOU");
+        }
+
+        std::string Estus = "desligado";
+        uintptr_t Holder = 0, Inventory = 0;
+        if (Enabled(FeatureEstus))
+        {
+            Estus = !(HaveContext && ReadPointer(Context + kInventoryHolder, Holder) && ReadPointer(Holder + kHolderInventory, Inventory))
+                ? "sem inventario" : (CallRefillEstus(Inventory) ? "recarregado" : "FALHOU");
         }
 
         uint32_t SoulsAfter = SoulsBefore;
@@ -761,8 +1036,9 @@ namespace
         {
             ReadBytes(Param + kParamSouls, &SoulsAfter, sizeof(SoulsAfter));
         }
-        Append(StringFormat("%s  custos da morte: almas %u -> %u (%s); hollow %s; manchas: %s; estus %s\n",
-            Clock().c_str(), SoulsBefore, SoulsAfter, Souls.c_str(), Hollow.c_str(), Bloodstain.c_str(), Estus.c_str()));
+        Append(StringFormat("%s  custos da morte (papel %u, convidado %u): almas %u -> %u (%s); hollow %s; deste jogador: %s; manchas: %s; mancha online %s; estus %s\n",
+            Clock().c_str(), Role, GuestKind, SoulsBefore, SoulsAfter, Souls.c_str(), Hollow.c_str(), Mine.c_str(),
+            Bloodstain.c_str(), Online.c_str(), Estus.c_str()));
     }
 
     // A fall that was refused still leaves the character in the air, in a
@@ -874,13 +1150,47 @@ namespace
             Hex(P, kParamsLength).c_str());
     }
 
+    // Somebody else's controller moving. In a session this is the question of
+    // step 6: whether the other machine's copy of a player who never died here
+    // dies anyway, from what it receives.
+    void NoteRemoteTransition(void* Ctrl, void* Character, uint8_t Before, uint8_t After)
+    {
+        const uint64_t Count = ++s_remote_transitions;
+        if (Count > 400)
+        {
+            return;
+        }
+        uintptr_t Vftable = 0, Roles = 0;
+        uint8_t Role = 0xff, Pending = 0;
+        int32_t Hp = 0;
+        uintptr_t Data = 0;
+        ReadPointer((uintptr_t)Character, Vftable);
+        if (ReadPointer((uintptr_t)Character + kChrRoles, Roles))
+        {
+            ReadBytes(Roles + kRole, &Role, 1);
+        }
+        ReadBytes((uintptr_t)Character + kHp, &Hp, sizeof(Hp));
+        if (ReadPointer((uintptr_t)Character + kCharacterData, Data))
+        {
+            ReadBytes(Data + kPending, &Pending, 1);
+        }
+        Append(StringFormat("%s  outro controlador %p personagem %p (vftable +0x%zx, papel %u) estado %u -> %u hp=%d +0x759=%u\n",
+            Clock().c_str(), Ctrl, Character, Vftable != 0 ? (size_t)(Vftable - s_base) : 0, Role, Before, After, Hp, Pending));
+    }
+
     void UpdateHook(void* Ctrl, float Delta)
     {
         uint8_t* Bytes = (uint8_t*)Ctrl;
         void* Character = *(void**)(Bytes + kCtrlCharacter);
         if (Character == nullptr || Character != LocalCharacter())
         {
+            const uint8_t StateBefore = Bytes[kCtrlState];
             s_original_update(Ctrl, Delta);
+            const uint8_t StateAfter = Bytes[kCtrlState];
+            if (Character != nullptr && StateAfter != StateBefore)
+            {
+                NoteRemoteTransition(Ctrl, Character, StateBefore, StateAfter);
+            }
             return;
         }
 
@@ -1089,16 +1399,45 @@ namespace
             s_mode.store(Respawn);
             Append(StringFormat("%s  === modo: renascer na fogueira, pagando a morte ===\n", Clock().c_str()));
         }
+        else if (Verb == "feature")
+        {
+            std::string Name, State;
+            Parts >> Name >> State;
+            bool Known = false;
+            for (const auto& Entry : kFeatures)
+            {
+                if (Name == Entry.Name && (State == "on" || State == "off"))
+                {
+                    Known = true;
+                    if (State == "on")
+                    {
+                        s_features.fetch_or(Entry.Bit);
+                    }
+                    else
+                    {
+                        s_features.fetch_and(~Entry.Bit);
+                    }
+                }
+            }
+            Append(StringFormat("%s  === %s: %s ===\n", Clock().c_str(),
+                Known ? "cobranca" : "nao entendi", Line.c_str()));
+        }
         else if (Verb == "status")
         {
             const int Mode = s_mode.load();
-            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu renascimentos=%llu recuperacoes=%llu recuperacoes_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu ===\n",
+            std::string Features;
+            for (const auto& Entry : kFeatures)
+            {
+                Features += StringFormat(" %s=%d", Entry.Name, Enabled(Entry.Bit) ? 1 : 0);
+            }
+            Append(StringFormat("%s  === modo %s: vistas=%llu canceladas=%llu renascimentos=%llu recuperacoes=%llu recuperacoes_falhas=%llu sem_+0x759=%llu instantaneas=%llu chamadas_slot_+0x10=%llu outros_controladores=%llu;%s ===\n",
                 Clock().c_str(), Mode == Respawn ? "renascer" : (Mode == Cancel ? "cancelar" : "observar"),
                 (unsigned long long)s_seen.load(), (unsigned long long)s_cancelled.load(),
                 (unsigned long long)s_respawns.load(),
                 (unsigned long long)s_recovered.load(), (unsigned long long)s_recovery_failed.load(),
                 (unsigned long long)s_unexplained.load(), (unsigned long long)s_instant.load(),
-                (unsigned long long)s_replica_calls.load()));
+                (unsigned long long)s_replica_calls.load(), (unsigned long long)s_remote_transitions.load(),
+                Features.c_str()));
         }
         else if (!Verb.empty())
         {
@@ -1148,6 +1487,15 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
         { kNoPenaltyOffset, kNoPenaltyBytes, sizeof(kNoPenaltyBytes), "morte sem penalidade" },
         { kNotAPlayerOffset, kNotAPlayerBytes, sizeof(kNotAPlayerBytes), "personagem especial" },
         { kRefillEstusOffset, kRefillEstusBytes, sizeof(kRefillEstusBytes), "estus" },
+        { kRoleParamOffset, kRoleParamBytes, sizeof(kRoleParamBytes), "param do papel" },
+        { kHollowExemptOffset, kHollowExemptBytes, sizeof(kHollowExemptBytes), "checagem ofuscada do hollow" },
+        { kLocalBranchOffset, kLocalBranchBytes, sizeof(kLocalBranchBytes), "ramo do jogador desta maquina" },
+        { kDeathCounterOffset, kDeathCounterBytes, sizeof(kDeathCounterBytes), "contador de mortes" },
+        { kRingBreakOffset, kRingBreakBytes, sizeof(kRingBreakBytes), "anel de protecao" },
+        { kMenuOpenOffset, kMenuOpenBytes, sizeof(kMenuOpenBytes), "menu aberto" },
+        { kMenuCloseOffset, kMenuCloseBytes, sizeof(kMenuCloseBytes), "fechar menu" },
+        { kOnlineStainOffset, kOnlineStainBytes, sizeof(kOnlineStainBytes), "mancha online" },
+        { kOnlineStatueOffset, kOnlineStatueBytes, sizeof(kOnlineStatueBytes), "mancha online de estatua" },
     };
     for (const auto& Check : Checks)
     {
@@ -1172,6 +1520,15 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_no_penalty = (Check_p)(s_base + kNoPenaltyOffset);
     s_not_a_player = (Check_p)(s_base + kNotAPlayerOffset);
     s_refill_estus = (RefillEstus_p)(s_base + kRefillEstusOffset);
+    s_role_param = (RoleParam_p)(s_base + kRoleParamOffset);
+    s_hollow_exempt = (Check_p)(s_base + kHollowExemptOffset);
+    s_local_branch = (Check_p)(s_base + kLocalBranchOffset);
+    s_death_counter = (Action_p)(s_base + kDeathCounterOffset);
+    s_ring_break = (Global_p)(s_base + kRingBreakOffset);
+    s_menu_open = (Check_p)(s_base + kMenuOpenOffset);
+    s_menu_close = (Action_p)(s_base + kMenuCloseOffset);
+    s_online_stain = (Action_p)(s_base + kOnlineStainOffset);
+    s_online_statue = (Action_p)(s_base + kOnlineStatueOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
