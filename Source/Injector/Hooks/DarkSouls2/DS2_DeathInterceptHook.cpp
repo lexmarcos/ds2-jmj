@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -109,6 +110,7 @@ namespace
 
     // The last bonfire, found the way the respawn finds it (step 2).
     constexpr size_t kBonfireRecord = 0x70;            // ctx+0x70
+    constexpr size_t kRecordMap = 0x164;               // then +0x168 type, +0x16c id
     constexpr size_t kRecordId = 0x16c;
     constexpr size_t kRecordList = 0x58;
     constexpr size_t kListFirst = 0x08;
@@ -118,6 +120,8 @@ namespace
     constexpr size_t kObjectComponents = 0xb8;
     constexpr size_t kComponentsReaction = 0x20;       // MapObjReactionComponent
     constexpr size_t kReactionId = 0xe0;
+    constexpr size_t kObjectMap = 0x28;                // *(*(obj+0x28)+8), FUN_1403ba320
+    constexpr size_t kMapId = 0x08;
     constexpr size_t kObjectAxisZ = 0x60;
     constexpr size_t kObjectTranslation = 0x70;
     constexpr float kSpawnBehind = 1.1f;
@@ -204,6 +208,7 @@ namespace
     // phantom roles 1 and 3).
     constexpr size_t kChrRoles = 0xb0;
     constexpr size_t kRole = 0x3c;
+    constexpr uint8_t kWorldOwnerRole = 0;
     constexpr size_t kRoleTableOffset = 0x10c0050;
     constexpr size_t kRoleRows = 0x14;
     constexpr size_t kRoleRowSize = 0x10;
@@ -309,6 +314,7 @@ namespace
         FeatureEstus = 1 << 5,
         FeatureBanner = 1 << 6,
         FeatureRemote = 1 << 7,
+        FeatureHostBonfire = 1 << 8,
     };
     struct FeatureName
     {
@@ -324,6 +330,7 @@ namespace
         { "estus", FeatureEstus },
         { "banner", FeatureBanner },
         { "copias", FeatureRemote },
+        { "fogueira_do_host", FeatureHostBonfire },
     };
 
     enum Mode : int
@@ -392,7 +399,7 @@ namespace
     std::atomic<uint64_t> s_respawns{ 0 };
     std::atomic<uint64_t> s_remote_transitions{ 0 };
     std::atomic<uint64_t> s_remote_refused{ 0 };
-    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureBanner | FeatureRemote };
+    std::atomic<uint32_t> s_features{ FeatureSouls | FeatureHollow | FeatureCounter | FeatureRing | FeatureEstus | FeatureBanner | FeatureRemote | FeatureHostBonfire };
 
     // Touched only from the game's thread, inside the detours.
     void* s_local_ctrl = nullptr;
@@ -531,16 +538,44 @@ namespace
         return ReadPointer((uintptr_t)Chr + kActions, Actions) && ReadPointer(Actions + kActionsFall, Fall) ? Fall : 0;
     }
 
-    // The spawn point of the bonfire in the respawn record, if that bonfire is
-    // in the loaded map: translation - 1.1 * Z axis of its map object, which is
-    // where the game itself put the character (0.000 m, measured on 13/09).
-    bool FindBonfireSpawn(float Out[3], uint32_t& Id)
+    // The record of the last bonfire: map, type and id.
+    bool ReadRecord(uint32_t& Map, int32_t& Type, uint32_t& Id)
     {
-        uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
-        Id = 0;
+        uintptr_t Context = 0, Record = 0;
+        int32_t Fields[3] = {};
         if (!ReadPointer(s_base + kContextOffset, Context) ||
             !ReadPointer(Context + kBonfireRecord, Record) ||
-            !ReadBytes(Record + kRecordId, &Id, sizeof(Id)) ||
+            !ReadBytes(Record + kRecordMap, Fields, sizeof(Fields)))
+        {
+            return false;
+        }
+        Map = (uint32_t)Fields[0];
+        Type = Fields[1];
+        Id = (uint32_t)Fields[2];
+        return true;
+    }
+
+    uint8_t RoleOf(uint8_t* Chr)
+    {
+        uintptr_t Roles = 0;
+        uint8_t Role = 0xff;
+        if (ReadPointer((uintptr_t)Chr + kChrRoles, Roles))
+        {
+            ReadBytes(Roles + kRole, &Role, 1);
+        }
+        return Role;
+    }
+
+    // The spawn point of a bonfire of the loaded map: translation - 1.1 * Z
+    // axis of its map object, which is where the game itself put the character
+    // (0.000 m, measured on 13/09). The map is compared too, the way
+    // FUN_1401caf50 records it (`*(*(obj+0x28)+8)`, 0x0a1f0000 for all three
+    // of Heide, read on 14/09): an id alone is only an object of some map.
+    bool FindBonfireSpawn(uint32_t Map, uint32_t Id, float Out[3])
+    {
+        uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kBonfireRecord, Record) ||
             !ReadPointer(Record + kRecordList, List) ||
             !ReadPointer(List + kListFirst, Node))
         {
@@ -549,15 +584,17 @@ namespace
 
         for (int i = 0; i < 256 && Node != 0; ++i)
         {
-            uintptr_t Object = 0, Components = 0, Reaction = 0, IdAt = 0;
+            uintptr_t Object = 0, Components = 0, Reaction = 0, IdAt = 0, MapAt = 0;
             uint8_t Kind = 0;
-            uint32_t NodeId = 0;
+            uint32_t NodeId = 0, NodeMap = 0;
             if (ReadPointer(Node + kNodeObject, Object) &&
                 ReadBytes(Object + kObjectKind, &Kind, 1) && (Kind == 1 || Kind == 5) &&
                 ReadPointer(Object + kObjectComponents, Components) &&
                 ReadPointer(Components + kComponentsReaction, Reaction) &&
                 ReadPointer(Reaction + kReactionId, IdAt) &&
-                ReadBytes(IdAt, &NodeId, sizeof(NodeId)) && NodeId == Id)
+                ReadBytes(IdAt, &NodeId, sizeof(NodeId)) && NodeId == Id &&
+                ReadPointer(Object + kObjectMap, MapAt) &&
+                ReadBytes(MapAt + kMapId, &NodeMap, sizeof(NodeMap)) && NodeMap == Map)
             {
                 float Axis[4] = {}, Translation[4] = {};
                 if (!ReadBytes(Object + kObjectAxisZ, Axis, sizeof(Axis)) ||
@@ -580,6 +617,18 @@ namespace
             Node = Next;
         }
         return false;
+    }
+
+    // Once a frame, for the channel: who the local player is and what its
+    // record holds. The host announces it; see DS2_CoopChannelHook.h.
+    void PublishLocal(uint8_t* Chr)
+    {
+        uint32_t Map = 0, Id = 0;
+        int32_t Type = 0;
+        if (ReadRecord(Map, Type, Id))
+        {
+            DS2_CoopChannel::PublishLocal(RoleOf(Chr), Map, Type, Id);
+        }
     }
 
     // XYZ only, every w left alone; the order is the one that worked by hand.
@@ -1263,29 +1312,63 @@ namespace
         Recovery Next;
         Next.Active = true;
         Next.Why = Why;
-        uint32_t Id = 0;
-        if (FindBonfireSpawn(Next.Target, Id))
+
+        uint32_t Map = 0, Id = 0;
+        int32_t Type = 0;
+        const bool HaveRecord = ReadRecord(Map, Type, Id);
+
+        // A guest's own record holds a bonfire of its own world, and the game
+        // writes none for it in the host's: it goes where the host would.
+        std::string Host;
+        const uint8_t Role = RoleOf(Chr);
+        if (Role != kWorldOwnerRole && Enabled(FeatureHostBonfire))
         {
-            Next.Where = "fogueira do registro";
-        }
-        else
-        {
-            const uintptr_t Fall = FallController(Chr);
-            if (Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
+            DS2_CoopChannel::Bonfire Said;
+            if (!DS2_CoopChannel::HostBonfire(Said))
             {
-                ++s_recovery_failed;
-                Append(StringFormat("%s  %s: sem fogueira %08x no mapa e sem a ultima posicao no chao; nada a fazer\n",
-                    Clock().c_str(), Why, Id));
-                return;
+                Host = StringFormat("; papel %u, nenhum anuncio do host", Role);
             }
-            Next.Where = "ultima posicao no chao";
+            else if (FindBonfireSpawn(Said.Map, Said.Id, Next.Target))
+            {
+                Next.Where = "fogueira do host";
+                Map = Said.Map;
+                Type = Said.Type;
+                Id = Said.Id;
+                Host = StringFormat("; papel %u, anunciada por %016llx ha %llu ms", Role,
+                    (unsigned long long)Said.From, (unsigned long long)Said.AgeMs);
+            }
+            else
+            {
+                Host = StringFormat("; papel %u, a fogueira do host (mapa %08x id %08x) nao esta no mapa carregado",
+                    Role, Said.Map, Said.Id);
+            }
+        }
+
+        if (Next.Where[0] == '\0')
+        {
+            if (HaveRecord && FindBonfireSpawn(Map, Id, Next.Target))
+            {
+                Next.Where = "fogueira do registro";
+            }
+            else
+            {
+                const uintptr_t Fall = FallController(Chr);
+                if (Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
+                {
+                    ++s_recovery_failed;
+                    Append(StringFormat("%s  %s: sem a fogueira %08x/%08x no mapa e sem a ultima posicao no chao; nada a fazer%s\n",
+                        Clock().c_str(), Why, Map, Id, Host.c_str()));
+                    return;
+                }
+                Next.Where = "ultima posicao no chao";
+            }
         }
 
         s_recovery = Next;
         const bool Moved = TeleportLocal(Chr, s_recovery.Target);
-        Append(StringFormat("%s  %s: levando para %s (%.3f, %.3f, %.3f) id=%08x %s\n",
+        Append(StringFormat("%s  %s: levando para %s (%.3f, %.3f, %.3f) mapa=%08x tipo=%d id=%08x %s%s\n",
             Clock().c_str(), Why, s_recovery.Where, s_recovery.Target[0], s_recovery.Target[1], s_recovery.Target[2],
-            Id, Moved ? "teleportado" : "TELEPORTE FALHOU"));
+            Map, Type, Id, Moved ? "teleportado" : "TELEPORTE FALHOU", Host.c_str()));
     }
 
     void ContinueRecovery(uint8_t* Chr, uint8_t* Data)
@@ -1426,6 +1509,7 @@ namespace
         uint8_t* Chr = (uint8_t*)Character;
         uint8_t* Data = *(uint8_t**)(Chr + kCharacterData);
         const uint8_t Before = Bytes[kCtrlState];
+        PublishLocal(Chr);
 
         if (Ctrl != s_local_ctrl)
         {

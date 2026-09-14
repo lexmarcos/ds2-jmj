@@ -39,11 +39,13 @@
 //             counters, a worn protection ring broken, Estus refilled,
 //             "YOU DIED", and the character standing at the spawn point of the
 //             last bonfire with full HP. Each cost goes through the game's own
-//             gate for who pays, so a phantom keeps its souls and its humanity
+//             gate for who pays, so a phantom keeps its souls and its humanity.
+//             A guest stands at the host's bonfire, the one the host announces
+//             over DS2_CoopChannelHook, and at its own only when none came
 //   feature <name> on|off
 //             switch one part off without a build: almas, hollow, contador,
 //             anel, mancha_online (off: sends nothing, see the .cpp), estus,
-//             banner, copias
+//             banner, copias, fogueira_do_host
 //   status    write the counters to the log
 //
 // In a session the death is the dying machine's to refuse, but its HP 0 can
