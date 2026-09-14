@@ -2,7 +2,7 @@
 use std::{path::Path, time::{Duration, Instant}};
 use serde::Serialize;
 use serde_json::{json, Value};
-use crate::{api, env::{Environment, Install}, game, nav, probe::{self, Where}, settings::HarnessConfig};
+use crate::{api, env::{Environment, Install}, game, nav, probe::{self, Reason, Where}, settings::HarnessConfig};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -44,22 +44,33 @@ pub fn age_ms(path: &Path) -> Option<u128> {
     Some(std::fs::metadata(path).ok()?.modified().ok()?.elapsed().ok()?.as_millis())
 }
 
-/// Whether the install runs the build every version-specific offset was
-/// measured against. The executable is the one the environment resolved for the
-/// install (`Game/DarkSoulsII.exe` for Scholar of the First Sin), not a file in
-/// the install root: looking there found nothing, so from 13/09 every probe
-/// answered `unknown` and `game enter` never pressed a button.
-pub fn supported_game(install: &Install) -> bool {
-    runs_build(install, ds2os_core::exe::DS2_SOTFS_1_03)
+/// What an install's executable is, as far as the version-specific offsets are
+/// concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Build {
+    /// The build every offset was measured against.
+    Expected,
+    /// Another build: nothing version specific may be asked of it.
+    Other,
+    /// No executable resolved, or it cannot be read.
+    Missing,
 }
 
-fn runs_build(install: &Install, expected: ds2os_core::exe::Fingerprint) -> bool {
-    install.game_exe.as_deref().is_some_and(|exe| is_build(exe, expected))
+/// The executable checked is the one the environment resolved for the install
+/// (`Game/DarkSoulsII.exe` for Scholar of the First Sin), not a file in the
+/// install root: looking there found nothing, so from 13/09 every probe
+/// answered `unknown` and `game enter` never pressed a button.
+pub fn build_of(install: &Install, expected: ds2os_core::exe::Fingerprint) -> Build {
+    match install.game_exe.as_deref().map(fingerprint) {
+        Some(Some(taken)) if taken == expected => Build::Expected,
+        Some(Some(_)) => Build::Other,
+        _ => Build::Missing,
+    }
 }
 
 /// Hashing 28 MB on every probe would be slow, so the fingerprint is kept
 /// until the file's size or modification time changes.
-fn is_build(exe: &Path, expected: ds2os_core::exe::Fingerprint) -> bool {
+fn fingerprint(exe: &Path) -> Option<ds2os_core::exe::Fingerprint> {
     use std::sync::{Mutex, OnceLock};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -67,15 +78,15 @@ fn is_build(exe: &Path, expected: ds2os_core::exe::Fingerprint) -> bool {
     use ds2os_core::exe::Fingerprint;
     type Cache = HashMap<PathBuf, (SystemTime, u64, Option<Fingerprint>)>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    let Ok(meta) = std::fs::metadata(exe) else { return false; };
-    let Ok(modified) = meta.modified() else { return false; };
+    let meta = std::fs::metadata(exe).ok()?;
+    let modified = meta.modified().ok()?;
     let mut cache = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
     if let Some(&(old, size, taken)) = cache.get(exe) {
-        if old == modified && size == meta.len() { return taken == Some(expected); }
+        if old == modified && size == meta.len() { return taken; }
     }
     let taken = ds2os_core::exe::fingerprint(exe).ok();
     cache.insert(exe.to_path_buf(), (modified, meta.len(), taken));
-    taken == Some(expected)
+    taken
 }
 pub fn hooks(dir: &Path) -> Option<Value> {
     let (_, boot) = sample(dir)?;
@@ -93,6 +104,8 @@ pub struct Instance {
     pub steam_id: Option<String>,
     pub identity_source: &'static str,
     pub state: Where,
+    /// Why `state` is what it is; see `probe::Reason`.
+    pub state_reason: Reason,
     pub pose: Option<nav::Pose>,
     pub pose_age_ms: Option<u128>,
     pub boot_id: Option<String>,
@@ -129,8 +142,8 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
         let id = steam_id(account);
         let mut item = Instance { instance: account, observed_at_ms: crate::output::now_ms(), processes: pids.clone(),
             steam_id: id.clone().ok(), identity_source: "harness_config", state: Where::Unknown,
-            pose: None, pose_age_ms: None, boot_id: None, player: None, server_connected: None,
-            p2p_session_verified: None, hooks: None, problems: Vec::new() };
+            state_reason: Reason::InstanceStopped, pose: None, pose_age_ms: None, boot_id: None, player: None,
+            server_connected: None, p2p_session_verified: None, hooks: None, problems: Vec::new() };
         if let Err(e) = &id { item.problems.push(e.clone()); }
         if let (Ok(id), Ok(players)) = (&id, &server_players) {
             match player_for(players, id) {
@@ -138,27 +151,42 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
                 Err(e) => item.problems.push(e),
             }
         }
-        if let Some(install) = env.installs.iter().find(|i| i.account == account) {
-            if !pids.is_empty() && deadline.remaining().is_ok() {
-                let before = sample(&install.game_dir);
-                item.state = probe::locate(install, deadline.remaining().unwrap_or_default().min(Duration::from_secs(2)));
-                let _ = deadline.sleep(Duration::from_millis(100));
-                let after = sample(&install.game_dir);
-                let fresh = match (&before, &after) {
-                    (Some((a, boot_a)), Some((b, boot_b))) => b > a && boot_a == boot_b,
-                    _ => false,
-                };
-                if fresh && processes(env, account) == pids {
-                    item.boot_id = after.and_then(|(_, b)| b);
-                    item.hooks = hooks(&install.game_dir);
-                    if item.state == Where::World { item.pose = nav::read(&install.game_dir); }
-                    item.pose_age_ms = age_ms(&install.game_dir.join("DS2_Nav.txt"));
-                } else {
-                    item.state = Where::Unknown;
-                    item.problems.push("stale_telemetry: sem amostra nova do mesmo processo/boot".into());
+        match env.installs.iter().find(|i| i.account == account) {
+            None => {
+                item.state_reason = Reason::InstanceMissing;
+                item.problems.push("instance_missing: instalação não encontrada".into());
+            }
+            Some(_) if pids.is_empty() => item.problems.push("instance_stopped: processo da instância ausente".into()),
+            Some(install) => match deadline.remaining() {
+                Err(e) => {
+                    item.state_reason = if e.starts_with("cancelled") { Reason::Cancelled } else { Reason::Timeout };
+                    item.problems.push(format!("state_unknown: {e}"));
                 }
-            } else { item.problems.push("instance_stopped: processo da instância ausente".into()); }
-        } else { item.problems.push("instance_missing: instalação não encontrada".into()); }
+                Ok(left) => {
+                    let before = sample(&install.game_dir);
+                    let located = probe::locate(install, left.min(Duration::from_secs(2)));
+                    (item.state, item.state_reason) = (located.state, located.reason);
+                    if located.state == Where::Unknown { item.problems.push(format!("state_unknown: {}", located.reason)); }
+                    let _ = deadline.sleep(Duration::from_millis(100));
+                    let after = sample(&install.game_dir);
+                    let fresh = match (&before, &after) {
+                        (Some((a, boot_a)), Some((b, boot_b))) => b > a && boot_a == boot_b,
+                        _ => false,
+                    };
+                    if fresh && processes(env, account) == pids {
+                        item.boot_id = after.and_then(|(_, b)| b);
+                        item.hooks = hooks(&install.game_dir);
+                        if item.state == Where::World { item.pose = nav::read(&install.game_dir); }
+                        item.pose_age_ms = age_ms(&install.game_dir.join("DS2_Nav.txt"));
+                    } else {
+                        // An unknown keeps the probe's own reason; a known state
+                        // without fresh telemetry is not believed.
+                        if item.state != Where::Unknown { (item.state, item.state_reason) = (Where::Unknown, Reason::StaleTelemetry); }
+                        item.problems.push("stale_telemetry: sem amostra nova do mesmo processo/boot".into());
+                    }
+                }
+            },
+        }
         item.observed_at_ms = crate::output::now_ms();
         instances.push(item);
     }
@@ -169,7 +197,7 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
 pub fn command(env: &Environment, accounts: &[u8]) -> Result<(), String> {
     let observation = collect(env, accounts);
     crate::output::data(json!(observation));
-    for i in &observation.instances { println!("conta {}: {:?}, personagem {}, posição {:?}", i.instance, i.state,
+    for i in &observation.instances { println!("conta {}: {} ({}), personagem {}, posição {:?}", i.instance, i.state, i.state_reason,
         i.player.as_ref().map(|p| p.name.as_str()).unwrap_or("desconhecido"), i.pose); }
     if observation.server_error.is_some() || observation.instances.iter().any(|i| !i.problems.is_empty() || i.state == Where::Unknown) {
         crate::output::outcome("inconclusive");
@@ -196,11 +224,11 @@ mod tests {
         let hello = ds2os_core::exe::fingerprint(&exe).unwrap();
         let install = Install { account: 1, steam_root: root.clone(), game_dir: root.clone(), game_exe: Some(exe), prefix: None };
 
-        assert!(runs_build(&install, hello));
-        assert!(!is_build(&install.game_dir.join("DarkSoulsII.exe"), hello));
-        assert!(!runs_build(&Install { game_exe: None, ..install.clone() }, hello));
+        assert_eq!(build_of(&install, hello), Build::Expected);
+        assert_eq!(build_of(&Install { game_exe: Some(root.join("DarkSoulsII.exe")), ..install.clone() }, hello), Build::Missing);
+        assert_eq!(build_of(&Install { game_exe: None, ..install.clone() }, hello), Build::Missing);
         // Any other build is not the one the offsets were measured against.
-        assert!(!supported_game(&install));
+        assert_eq!(build_of(&install, ds2os_core::exe::DS2_SOTFS_1_03), Build::Other);
         std::fs::remove_dir_all(&root).ok();
     }
 

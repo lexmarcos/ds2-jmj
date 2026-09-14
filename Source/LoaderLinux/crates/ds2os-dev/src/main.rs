@@ -559,7 +559,7 @@ fn run(command: Command) -> Result<(), String> {
                 // nothing it sends arrives. Saying so here is cheap; finding it
                 // out later, from a test that quietly reports nothing, is not.
                 for instance in drive::open_instances(&environment) {
-                    if drive::locate(&environment, instance) == Where::World {
+                    if drive::locate(&environment, instance).state == Where::World {
                         println!(
                             "  atenção: a instância {instance} está no mundo. Reiniciar assim \
                              deixa a conexão dela quebrada em silêncio; `ds2os-dev reload` sai \
@@ -735,10 +735,12 @@ fn reload(environment: &Environment) -> Result<(), String> {
     // session plays on offline, which the server never sees at all.
     let mut playing = Vec::new();
     for &account in &instances {
-        match drive::locate(environment, account) {
+        let located = drive::locate(environment, account);
+        match located.state {
             Where::World => playing.push(account),
             Where::Title => {},
-            _ => return Err(format!("state_unknown: conta {account}; reload não pode reiniciar sem confirmar o título")),
+            _ => return Err(format!("state_unknown: conta {account} respondeu {} ({}); reload não pode reiniciar sem confirmar o título",
+                located.state, located.reason)),
         }
     }
 

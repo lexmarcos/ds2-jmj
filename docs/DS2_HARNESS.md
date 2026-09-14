@@ -99,12 +99,13 @@ ds2os-dev players --json
 | `instance`, `steamId`, `identitySource` | Conta declarada no harness |
 | `processes[].pid`, `startTicks` | Processo no prefixo Proton e instante de início em ticks do Linux |
 | `state` | `title`, `loading`, `world` ou `unknown` |
+| `stateReason` | Por que `state` é esse; ver a tabela de motivos abaixo |
 | `pose`, `poseAgeMs` | Posição, orientação, tick e arquétipo publicados pelo injector |
 | `bootId` | Identificador do carregamento do injector; `null` com DLL antiga |
 | `player`, `serverConnected` | Registro da API filtrado pelo Steam ID; `null` quando não verificável |
 | `hooks` | Recibo dos hooks instalados no mesmo boot da telemetria |
 | `p2pSessionVerified` | Reservado para uma prova de interação entre peers; atualmente `null` |
-| `problems` | Motivos pelos quais alguma observação não pôde ser confirmada |
+| `problems` | Motivos pelos quais alguma observação não pôde ser confirmada; um `unknown` aparece como `state_unknown: <motivo>` |
 
 `observedAtMs`, `serverObservedAtMs` e `durationMs` tornam visível quando as
 fontes foram consultadas. As fontes são amostradas sequencialmente, não em um
@@ -116,17 +117,59 @@ O byte do título só é lido para o executável 1.03 conhecido pelo SHA-256 de
 resolveu para a instalação (`installs[].gameExe`, que no Scholar of the First
 Sin fica em `Game/`); os arquivos de pedido ficam na raiz, ao lado do injector.
 Byte 1 confirma título; zero com posição válida e avançando confirma mundo;
-zero sem jogador indica carregamento. Byte inesperado, executável diferente,
-resposta ausente ou telemetria parada resultam em `unknown`.
+zero sem jogador indica carregamento. Todo o resto é `unknown`, e o motivo vai
+junto:
+
+| Motivo | Estado | Significado |
+| --- | --- | --- |
+| `title_flag_set` | `title` | O byte do título lido como 1 |
+| `telemetry_advancing` | `world` | Byte 0 e o tick da pose publicada avançou |
+| `no_telemetry` | `loading` | Byte 0 e nenhuma pose publicada |
+| `instance_stopped` | `unknown` | Nenhum processo do jogo no prefixo da conta |
+| `instance_missing` | `unknown` | Nenhuma instalação resolvida para a conta |
+| `exe_missing` | `unknown` | A instalação não resolveu executável, ou ele não pode ser lido; nenhum pedido é escrito |
+| `unsupported_exe` | `unknown` | Executável diferente do 1.03; nenhum pedido é escrito |
+| `probe_busy` | `unknown` | Outro leitor segurou `DS2_MemProbe.lock` durante o prazo inteiro |
+| `request_write_failed` | `unknown` | Não foi possível escrever o pedido ou o lock; o erro vai em `detail` |
+| `request_not_consumed` | `unknown` | O pedido continua no disco: nada no jogo está lendo pedidos (jogo ainda iniciando, DLL sem a sonda) |
+| `no_answer` | `unknown` | O pedido foi consumido, mas nenhuma resposta com o rótulo apareceu no prazo |
+| `malformed_answer` | `unknown` | Resposta com o rótulo, num formato que não é o dump de bytes |
+| `unreadable` | `unknown` | O injector respondeu que o endereço é ilegível |
+| `unexpected_byte` | `unknown` | Byte diferente de 0 e 1 |
+| `telemetry_stalled` | `unknown` | Byte 0 com pose publicada, mas o tick não andou |
+| `stale_telemetry` | `unknown` | Só em `observe`: sem amostra nova do mesmo processo e boot |
+| `timeout`, `cancelled` | `unknown` | O prazo acabou, ou a operação foi cancelada, antes de perguntar |
+
+Os nomes fazem parte do contrato: podem ganhar valores, não mudam de sentido.
 
 Entre 13/09 e 14/09 a conferência procurava `DarkSoulsII.exe` na raiz, não
 achava nada e todo `locate` respondia `unknown`: `game enter`, `game leave`,
 `up`, `reload` e os cenários esperavam até o prazo sem apertar um botão.
 
 Cada pedido de MemProbe recebe um rótulo único. A resposta de um pedido
-anterior não o satisfaz. Há um lock por instalação para os pedidos do harness.
+anterior não o satisfaz, e só o trecho de `DS2_MemProbe.log` escrito depois do
+pedido é lido. Há um lock por instalação para os pedidos do harness; um lock
+ocupado é esperado até o prazo da consulta, e só então vira `probe_busy`.
 Ferramentas externas que escrevam diretamente em `DS2_MemProbe.req` precisam
 respeitar o mesmo lock para não sobrescrever pedidos.
+
+### Eventos de navegação
+
+Cada pergunta ao jogo, cada tecla e cada espera pela API ficam em
+`events.jsonl`, para que uma falha diga onde parou:
+
+| `kind` | `data` |
+| --- | --- |
+| `locate` | `instance`, `state`, `reason`, `exe` (o executável conferido), `label`, `requestWritten`, `byte`, `tickBefore`, `tickAfter`, `elapsedMs` e, quando houver, `detail` |
+| `press` | `instance`, `command`, `ok`, `error` |
+| `enter` | `phase: "world_without_api_record"` com `expected`, `listed` (os Steam IDs que a API listou) e `offlineForMs`; `phase: "offline_recovery"` com `attempt` |
+
+Um `timeout` ou `leave_failed` de `game enter`, `game leave`, `reload` e
+`up --no-enter` acrescenta ao erro o último estado e motivo lidos, quantas
+teclas foram enviadas e quantas leituras da API vieram sem a conta — por
+exemplo `timeout: prazo da operação esgotado; último estado unknown
+(request_not_consumed) há 2.0s; 0 tecla(s); 0 leitura(s) da API sem a conta`.
+O `errorCode` continua `timeout`.
 
 Uma pose exige campos completos e finitos e arquivo com até 2 segundos de
 idade. `observe` exige avanço de tick no mesmo boot e processos inalterados.
