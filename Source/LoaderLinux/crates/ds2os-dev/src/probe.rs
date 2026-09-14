@@ -38,9 +38,13 @@ pub enum Where {
 /// about that long. Anything slower than `timeout` counts as unknown rather
 /// than as an error: this is asked in a loop, and a driver that stops because
 /// one read was slow is worse than one that tries again.
-pub fn locate(install_dir: &Path, timeout: Duration) -> Where {
+///
+/// The request files live beside the injector, in the install root; the
+/// executable whose build is checked first lives wherever the install says.
+pub fn locate(install: &crate::env::Install, timeout: Duration) -> Where {
     let deadline = Instant::now() + timeout;
-    if !crate::observe::supported_game(install_dir) { return Where::Unknown; }
+    if !crate::observe::supported_game(install) { return Where::Unknown; }
+    let install_dir = install.game_dir.as_path();
     let Ok(_lock) = crate::control::Lock::acquire(&install_dir.join("DS2_MemProbe.lock")) else { return Where::Unknown; };
     let answer = install_dir.join(ANSWER);
     // The existing injector echoes labels. A unique label correlates requests

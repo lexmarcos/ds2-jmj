@@ -112,10 +112,16 @@ instante atômico. A idade da resposta da API não é a idade do último pacote
 enviado pelo jogo.
 
 O byte do título só é lido para o executável 1.03 conhecido pelo SHA-256 de
-`ds2os-core::exe::DS2_SOTFS_1_03`. Byte 1 confirma título; zero com posição
-válida e avançando confirma mundo; zero sem jogador indica carregamento.
-Byte inesperado, executável diferente, resposta ausente ou telemetria parada
-resultam em `unknown`.
+`ds2os-core::exe::DS2_SOTFS_1_03`. O executável conferido é o que o ambiente
+resolveu para a instalação (`installs[].gameExe`, que no Scholar of the First
+Sin fica em `Game/`); os arquivos de pedido ficam na raiz, ao lado do injector.
+Byte 1 confirma título; zero com posição válida e avançando confirma mundo;
+zero sem jogador indica carregamento. Byte inesperado, executável diferente,
+resposta ausente ou telemetria parada resultam em `unknown`.
+
+Entre 13/09 e 14/09 a conferência procurava `DarkSoulsII.exe` na raiz, não
+achava nada e todo `locate` respondia `unknown`: `game enter`, `game leave`,
+`up`, `reload` e os cenários esperavam até o prazo sem apertar um botão.
 
 Cada pedido de MemProbe recebe um rótulo único. A resposta de um pedido
 anterior não o satisfaz. Há um lock por instalação para os pedidos do harness.
@@ -131,6 +137,11 @@ janela na lista do X11.
 `game enter` combina estado local com a API da conta esperada e, quando
 configurado, confere o nome do personagem. Não considera mais a última linha
 global de personagem carregado como evidência da instância sendo controlada.
+O servidor publica a conta duas vezes, `steamId` em hexadecimal
+(`011000010afd1a3a`) e `steamId64` em decimal; o `player.steamId` do harness é
+o decimal, o mesmo formato de `game identity`. Comparar o hexadecimal com o
+decimal não achava ninguém: no mundo, o `enter` tomava por offline um jogador
+que a API já listava, e esgotava o prazo saindo para o título e voltando.
 `game leave` é idempotente no título e recusa agir quando o mundo não foi
 confirmado. `reload` aborta antes de reiniciar o servidor se não conseguir
 confirmar a saída de algum cliente.

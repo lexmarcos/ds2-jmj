@@ -53,7 +53,10 @@ pub struct Steam {
 pub struct GameInstall {
     pub app_id: u32,
     pub game_type: GameType,
-    /// Directory holding the game executable.
+    /// The install directory Steam names (`steamapps/common/<installdir>`),
+    /// where the injector and its files go. Not necessarily the executable's:
+    /// Scholar of the First Sin keeps it in `Game/`, which is what
+    /// `executable()` is for.
     pub install_dir: PathBuf,
     /// Steam library this install was found in.
     pub library: PathBuf,

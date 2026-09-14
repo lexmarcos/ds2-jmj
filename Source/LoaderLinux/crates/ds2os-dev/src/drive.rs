@@ -41,7 +41,7 @@ pub fn locate(env: &Environment, account: u8) -> Where {
 fn locate_until(env: &Environment, account: u8, deadline: Deadline) -> Where {
     if observe::processes(env, account).is_empty() { return Where::Unknown; }
     match (env.installs.iter().find(|i| i.account == account), deadline.remaining()) {
-        (Some(i), Ok(left)) => probe::locate(&i.game_dir, left.min(Duration::from_secs(2))),
+        (Some(i), Ok(left)) => probe::locate(i, left.min(Duration::from_secs(2))),
         _ => Where::Unknown,
     }
 }

@@ -2,7 +2,7 @@
 use std::{path::Path, time::{Duration, Instant}};
 use serde::Serialize;
 use serde_json::{json, Value};
-use crate::{api, env::Environment, game, nav, probe::{self, Where}, settings::HarnessConfig};
+use crate::{api, env::{Environment, Install}, game, nav, probe::{self, Where}, settings::HarnessConfig};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -44,23 +44,38 @@ pub fn age_ms(path: &Path) -> Option<u128> {
     Some(std::fs::metadata(path).ok()?.modified().ok()?.elapsed().ok()?.as_millis())
 }
 
-pub fn supported_game(dir: &Path) -> bool {
+/// Whether the install runs the build every version-specific offset was
+/// measured against. The executable is the one the environment resolved for the
+/// install (`Game/DarkSoulsII.exe` for Scholar of the First Sin), not a file in
+/// the install root: looking there found nothing, so from 13/09 every probe
+/// answered `unknown` and `game enter` never pressed a button.
+pub fn supported_game(install: &Install) -> bool {
+    runs_build(install, ds2os_core::exe::DS2_SOTFS_1_03)
+}
+
+fn runs_build(install: &Install, expected: ds2os_core::exe::Fingerprint) -> bool {
+    install.game_exe.as_deref().is_some_and(|exe| is_build(exe, expected))
+}
+
+/// Hashing 28 MB on every probe would be slow, so the fingerprint is kept
+/// until the file's size or modification time changes.
+fn is_build(exe: &Path, expected: ds2os_core::exe::Fingerprint) -> bool {
     use std::sync::{Mutex, OnceLock};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::SystemTime;
-    type Cache = HashMap<PathBuf, (SystemTime, u64, bool)>;
+    use ds2os_core::exe::Fingerprint;
+    type Cache = HashMap<PathBuf, (SystemTime, u64, Option<Fingerprint>)>;
     static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
-    let path = dir.join("DarkSoulsII.exe");
-    let Ok(meta) = std::fs::metadata(&path) else { return false; };
+    let Ok(meta) = std::fs::metadata(exe) else { return false; };
     let Ok(modified) = meta.modified() else { return false; };
     let mut cache = CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
-    if let Some(&(old, size, supported)) = cache.get(&path) {
-        if old == modified && size == meta.len() { return supported; }
+    if let Some(&(old, size, taken)) = cache.get(exe) {
+        if old == modified && size == meta.len() { return taken == Some(expected); }
     }
-    let supported = ds2os_core::exe::fingerprint(&path).is_ok_and(|f| f == ds2os_core::exe::DS2_SOTFS_1_03);
-    cache.insert(path, (modified, meta.len(), supported));
-    supported
+    let taken = ds2os_core::exe::fingerprint(exe).ok();
+    cache.insert(exe.to_path_buf(), (modified, meta.len(), taken));
+    taken == Some(expected)
 }
 pub fn hooks(dir: &Path) -> Option<Value> {
     let (_, boot) = sample(dir)?;
@@ -126,7 +141,7 @@ pub fn collect_until(env: &Environment, accounts: &[u8], deadline: crate::contro
         if let Some(install) = env.installs.iter().find(|i| i.account == account) {
             if !pids.is_empty() && deadline.remaining().is_ok() {
                 let before = sample(&install.game_dir);
-                item.state = probe::locate(&install.game_dir, deadline.remaining().unwrap_or_default().min(Duration::from_secs(2)));
+                item.state = probe::locate(install, deadline.remaining().unwrap_or_default().min(Duration::from_secs(2)));
                 let _ = deadline.sleep(Duration::from_millis(100));
                 let after = sample(&install.game_dir);
                 let fresh = match (&before, &after) {
@@ -170,6 +185,25 @@ mod tests {
         api::Player { steam_id: id.into(), name: "same-name".into(), player_id: 1, soul_level: 1, souls: None,
             soul_memory: 1, death_count: None, multiplay_count: None, covenant: String::new(), status: String::new(), location: String::new(), play_time: String::new() }
     }
+    #[test]
+    fn the_build_is_read_from_the_executable_the_install_resolved() {
+        // Scholar of the First Sin's layout: the executable under Game/, the
+        // injector and its request files at the root.
+        let root = std::env::temp_dir().join(format!("ds2os-install-{}", crate::output::id()));
+        std::fs::create_dir_all(root.join("Game")).unwrap();
+        let exe = root.join("Game").join("DarkSoulsII.exe");
+        std::fs::write(&exe, b"hello").unwrap();
+        let hello = ds2os_core::exe::fingerprint(&exe).unwrap();
+        let install = Install { account: 1, steam_root: root.clone(), game_dir: root.clone(), game_exe: Some(exe), prefix: None };
+
+        assert!(runs_build(&install, hello));
+        assert!(!is_build(&install.game_dir.join("DarkSoulsII.exe"), hello));
+        assert!(!runs_build(&Install { game_exe: None, ..install.clone() }, hello));
+        // Any other build is not the one the offsets were measured against.
+        assert!(!supported_game(&install));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn another_instance_with_the_same_name_is_not_ours() {
         let list = vec![player("111"), player("222")];

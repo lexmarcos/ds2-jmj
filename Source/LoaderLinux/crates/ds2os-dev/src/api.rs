@@ -130,23 +130,39 @@ pub fn players_until(server: &ServerPaths, port: u16, timeout: std::time::Durati
         .and_then(|v| v.as_array())
         .ok_or_else(|| format!("resposta sem lista de jogadores: {}", reply.trim()))?;
 
-    Ok(list
-        .iter()
-        .map(|p| Player {
-            name: text(p, "characterName"),
-            player_id: p.get("playerId").and_then(|v| v.as_u64()).unwrap_or(0),
-            steam_id: text(p, "steamId"),
-            soul_level: number(p, "soulLevel"),
-            souls: None,
-            soul_memory: number(p, "soulMemory"),
-            death_count: None,
-            multiplay_count: None,
-            covenant: text(p, "covenant"),
-            status: text(p, "status"),
-            location: text(p, "location"),
-            play_time: text(p, "playTime"),
-        })
-        .collect())
+    Ok(list.iter().map(player).collect())
+}
+
+fn player(p: &serde_json::Value) -> Player {
+    Player {
+        name: text(p, "characterName"),
+        player_id: p.get("playerId").and_then(|v| v.as_u64()).unwrap_or(0),
+        steam_id: steam_id64(p),
+        soul_level: number(p, "soulLevel"),
+        souls: None,
+        soul_memory: number(p, "soulMemory"),
+        death_count: None,
+        multiplay_count: None,
+        covenant: text(p, "covenant"),
+        status: text(p, "status"),
+        location: text(p, "location"),
+        play_time: text(p, "playTime"),
+    }
+}
+
+/// The account in the form the harness is configured with: the SteamID64 in
+/// decimal. The server publishes it twice, `steamId` in the hexadecimal its
+/// protocol uses (`011000010afd1a3a`) and `steamId64` in decimal
+/// (`76561198144625210`). Reading the first and comparing it with the
+/// configured decimal matched nobody, so `game enter` waited for a player the
+/// server was already listing.
+fn steam_id64(p: &serde_json::Value) -> String {
+    let decimal = text(p, "steamId64");
+    if !decimal.is_empty() {
+        return decimal;
+    }
+    let hex = text(p, "steamId");
+    u64::from_str_radix(&hex, 16).map(|id| id.to_string()).unwrap_or(hex)
 }
 
 /// The web UI port the server was configured with.
@@ -156,4 +172,23 @@ pub fn web_port(config: &Path) -> u16 {
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|json| json.get("WebUIServerPort").and_then(|v| v.as_u64()))
         .unwrap_or(50005) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_steam_id_is_the_decimal_the_harness_is_configured_with() {
+        // The shape PlayersHandler.cpp writes.
+        let both: serde_json::Value = serde_json::json!({
+            "steamId64": "76561198144625210", "steamId": "011000010afd1a3a",
+            "playerId": 1, "characterName": "Samuel", "soulLevel": 14, "soulMemory": 0,
+        });
+        assert_eq!(player(&both).steam_id, "76561198144625210");
+        assert_eq!(player(&both).name, "Samuel");
+
+        let only_hex: serde_json::Value = serde_json::json!({ "steamId": "0110000140d6d6d1" });
+        assert_eq!(player(&only_hex).steam_id, "76561199048087249");
+    }
 }
