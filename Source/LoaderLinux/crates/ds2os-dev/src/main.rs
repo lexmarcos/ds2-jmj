@@ -112,6 +112,23 @@ enum Command {
         #[arg(long, default_value_t = 120)]
         seconds: u64,
     },
+    /// Raw MemProbe commands in one request, with every reply parsed
+    ///
+    /// Each line is `<kind> <name> <args>`: `abs r 141614804 1`,
+    /// `chain chr 16148f0 d0 376`, `pokeabs hp <addr> 00000000 <expected>`.
+    /// Lengths are decimal. Reads run beside a controller; a line that writes
+    /// takes the control lock.
+    Probe {
+        /// 1 or 2
+        #[arg(long)]
+        instance: u8,
+        /// How long to wait for every reply, in milliseconds
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+        /// The commands, one per argument
+        #[arg(required = true)]
+        lines: Vec<String>,
+    },
     /// Where a character is standing, as the game itself sees it
     Where {
         /// 1, 2, or both
@@ -467,7 +484,8 @@ fn main() {
     record_invocation();
     // One owner for the entire action/sequence, including focus, save restore and cleanup.
     // Read-only observation and the pad daemon do not monopolize the control lock.
-    let exclusive = !matches!(&cli.command,
+    let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
+    let exclusive = !reads_only && !matches!(&cli.command,
         Command::Doctor | Command::Status | Command::Observe { .. } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
@@ -539,6 +557,7 @@ fn run(command: Command) -> Result<(), String> {
             )
         }
         Command::Where { instance } => where_is(&environment, &instance),
+        Command::Probe { instance, timeout_ms, lines } => probe_command(&environment, instance, &lines, timeout_ms),
         Command::Goto { instance, to, to_instance, radius, seconds } => {
             goto(&environment, instance, to, to_instance, radius, seconds)
         }
@@ -1027,6 +1046,40 @@ fn install_for(environment: &Environment, account: u8) -> Result<&env::Install, 
         .iter()
         .find(|i| i.account == account)
         .ok_or_else(|| format!("conta {account} não encontrada"))
+}
+
+fn probe_command(environment: &Environment, instance: u8, lines: &[String], timeout_ms: u64) -> Result<(), String> {
+    let commands = lines.iter().map(|l| probe::Command::parse(l)).collect::<Result<Vec<_>, _>>()?;
+    let mut names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    if names.windows(2).any(|w| w[0] == w[1]) { return Err("invalid_probe_line: nomes repetidos no mesmo pedido".into()); }
+    let install = install_for(environment, instance)?;
+    if observe::processes(environment, instance).is_empty() {
+        return Err(format!("instance_stopped: conta {instance} sem processo do jogo"));
+    }
+    let exchange = probe::request(install, &commands, std::time::Duration::from_millis(timeout_ms));
+    let answers: Option<Vec<_>> = exchange.outcome.as_ref().ok().map(|a| a.iter().map(probe::Answer::json).collect());
+    output::data(serde_json::json!({"instance": instance, "requestWritten": exchange.request_written,
+        "elapsedMs": exchange.elapsed_ms, "labels": exchange.labels, "answers": answers,
+        "reason": exchange.outcome.as_ref().err(), "detail": exchange.detail}));
+    let answers = match exchange.outcome {
+        Ok(answers) => answers,
+        Err(reason) => return Err(format!("{reason}: {}", exchange.detail.unwrap_or_else(|| "sem resposta completa".into()))),
+    };
+    for answer in &answers { println!("{}", answer.json()); }
+    // A write is proven by the injector saying it wrote, never by the absence of a refusal.
+    let unwritten: Vec<&str> = answers.iter().filter(|a| match &a.reply {
+        probe::Reply::Poked { wrote, .. } => !wrote,
+        probe::Reply::PokeRefused { .. } | probe::Reply::PokeInvalid => true,
+        probe::Reply::Malformed { .. } => commands.iter().any(|c| c.name == a.name && c.is_poke()),
+        _ => false,
+    }).map(|a| a.name.as_str()).collect();
+    if !unwritten.is_empty() { return Err(format!("poke_not_written: {}", unwritten.join(", "))); }
+    if answers.iter().any(|a| matches!(a.reply, probe::Reply::Malformed { .. })) {
+        output::outcome("inconclusive");
+        return Err("malformed_answer: resposta num formato desconhecido; veja data.answers".into());
+    }
+    Ok(())
 }
 
 /// Prints where each character is standing. Useful on its own, and the only

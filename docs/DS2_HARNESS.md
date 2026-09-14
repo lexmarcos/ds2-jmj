@@ -251,6 +251,45 @@ que a API já listava, e esgotava o prazo saindo para o título e voltando.
 confirmado. `reload` aborta antes de reiniciar o servidor se não conseguir
 confirmar a saída de algum cliente.
 
+## Memória do jogo: `probe`
+
+```bash
+ds2os-dev probe --instance 1 "mod title 1614804 1" "chain chr 16148f0 d0 376" --json
+ds2os-dev probe --instance 1 "pokeabs hp 7fffeb7b9fc8 00000000 64030000" --json
+```
+
+Cada argumento é um comando do MemProbe com um **nome** no lugar do rótulo:
+`abs|mod <nome> <endereço hex> <comprimento>`,
+`chain <nome> <offset hex> <offsets hex separados por vírgula> <comprimento>`,
+`pokeabs|pokemod <nome> <endereço> <bytes hex> [<bytes esperados>]`,
+`pokechain <nome> <offset> <offsets> <bytes> [<esperados>]` e
+`scan <nome> <valor hex> <largura 1|2|4|8> [<máximo>]`. O harness troca o nome
+por um rótulo único, manda todas as linhas **num pedido só** (cada ida e volta
+custa cerca de meio segundo) e espera a resposta de todas.
+
+Duas regras do parser do injector que falham em silêncio, e que o harness
+confere antes de escrever:
+
+- o **comprimento é decimal**: `200` são 0xc8 bytes. Fica entre 1 e 16384;
+  fora disso o injector lê 0x100 bytes sem avisar.
+- a cadeia já começa desreferenciando o endereço do módulo, então a lista traz
+  só os offsets seguintes: `chain chr 16148f0 d0 376` lê a partir de
+  `*(*(base+0x16148f0)+0xd0)`. Um `0,` na frente desreferencia a vtable do
+  contexto.
+
+`data.answers[]` traz `name`, `label` e `kind`: `bytes` (`address`, `bytes` em
+hex), `unreadable`, `chain_unresolved`, `poked` (`address`, `before`, `wrote`),
+`poke_refused` (`expected`, `found`), `poke_invalid`, `scan` (`hits`) ou
+`malformed` (`line`). Uma resposta só conta com todas as linhas completas, e só
+o trecho do log escrito depois do pedido é lido.
+
+Uma escrita só passa quando o injector diz que escreveu (`poked` com `wrote`
+verdadeiro); recusa, bytes inválidos ou falha terminam em `poke_not_written`.
+Sem resposta completa, o erro é o motivo do `locate` (`request_not_consumed`,
+`no_answer`, `probe_busy`, `unsupported_exe`...). Só leituras rodam ao lado de
+um controlador; uma linha `poke*` toma o `control.lock`. Todo pedido fica no
+`events.jsonl` como evento `probe`, com as linhas enviadas e as respostas.
+
 ## Cenários
 
 ```bash
