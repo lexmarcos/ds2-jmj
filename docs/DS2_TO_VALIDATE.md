@@ -207,6 +207,17 @@ and dates, tiny files): 57 snapshots became 28, three rescues kept per account
 and `conta2-antes-de-nivel1` left alone as a chosen label. The real store,
 36 rescues and about 230 MB, has only been through `--dry-run`.
 
+### `human` in other saves, and after a warp
+
+`ds2os-dev human` walks the Inventory blind and was measured only on Samuel
+and Chico's saves, where the Human Effigy is the second consumable, and only
+from the menu's state after a load (tab Equipment). Unknown: whether a warp
+or a bonfire rest resets the remembered tab the way the title screen does,
+and what the walk does in a save with another inventory order — it fails
+honestly (`still_hollow`), but the presses may have used another item first.
+Whether the remembered tab explains the `game leave` that got stuck in the
+Item box on 14/09 (T5) is a hypothesis, not a measurement.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway

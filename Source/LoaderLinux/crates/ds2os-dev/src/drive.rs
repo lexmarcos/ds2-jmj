@@ -81,7 +81,7 @@ fn locate_until(env: &Environment, account: u8, deadline: Deadline) -> Located {
     }
 }
 
-fn press(env: &Environment, account: u8, command: &str, deadline: Deadline) -> Result<(), String> {
+pub fn press(env: &Environment, account: u8, command: &str, deadline: Deadline) -> Result<(), String> {
     deadline.remaining()?;
     let result = (|| {
         let window = window_for(env, account)?;

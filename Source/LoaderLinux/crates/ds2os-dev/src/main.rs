@@ -17,6 +17,7 @@ mod death;
 mod doctor;
 mod hook_request;
 mod hooks;
+mod human;
 mod hygiene;
 mod injector;
 mod memory;
@@ -271,6 +272,16 @@ enum Command {
     Injector {
         #[command(subcommand)]
         action: InjectorAction,
+    },
+    /// Burns a Human Effigy through Inventory; passes only when hollowing and the hollow state read 0 in memory
+    ///
+    /// Presses nothing when the character is already human. The walk is right
+    /// only from the menu's default tab (Equipment), which every load restores;
+    /// a menu opened by hand since the last load sends it elsewhere.
+    Human {
+        /// 1, 2, or both
+        #[arg(long)]
+        instance: String,
     },
     /// The last bonfire record and the bonfires of the loaded map, with their spawn points
     Bonfires {
@@ -867,6 +878,7 @@ fn run(command: Command) -> Result<(), String> {
         Command::Where { instance } => where_is(&environment, &instance),
         Command::Teleport { instance, to, to_bonfire } => teleport::command(&environment, instance, to, to_bonfire),
         Command::Bonfires { instance } => teleport::bonfires_command(&environment, instance),
+        Command::Human { instance } => human::command(&environment, &accounts(&instance)?),
         Command::Injector { action: InjectorAction::Fetch { run, latest, seconds } } => injector::fetch(&environment,
             match (run, latest) { (Some(id), _) => injector::Pick::Run(id), (None, true) => injector::Pick::Latest, _ => injector::Pick::SameCode },
             std::time::Duration::from_secs(seconds)),

@@ -375,7 +375,15 @@ o decimal, o mesmo formato de `game identity`. Comparar o hexadecimal com o
 decimal não achava ninguém: no mundo, o `enter` tomava por offline um jogador
 que a API já listava, e esgotava o prazo saindo para o título e voltando.
 `game leave` é idempotente no título e recusa agir quando o mundo não foi
-confirmado. `reload` aborta antes de reiniciar o servidor se não conseguir
+confirmado. O caminho dele supõe o menu abrindo na aba Equipment, que é onde
+ele abre depois de todo carregamento; um menu usado à mão no mesmo boot deixa
+outra aba lembrada (ver `human`).
+
+Parar uma instância que o próprio harness lançou (o passo `launch` de um
+cenário) deixava o `proton run` como zumbi do processo do harness, que não
+fazia `wait`: `/proc/<pid>` continuava lá, e a limpeza do cenário falhava com
+"a instância 1 não morreu" até o harness sair. Processo zumbi agora conta como
+encerrado, e o harness recolhe os próprios filhos. `reload` aborta antes de reiniciar o servidor se não conseguir
 confirmar a saída de algum cliente.
 
 ## Memória do jogo: `probe`
@@ -444,6 +452,45 @@ Cenários aceitam `/character/hp`, `/character/hpMax`, `/character/souls`,
 `/character/role`, `/character/bonfire/id` e `/character/bonfire/map`; a
 observação dessas assertions já inclui o personagem, e fora de `state: world`
 elas são inconclusivas.
+
+## Efígie humana: `human`
+
+```bash
+ds2os-dev human --instance both --json
+ds2os-dev scenario run docs/scenarios/human.json --json
+```
+
+Queima uma Human Effigy pelo **Inventário** e só passa quando a memória do
+personagem diz humano: `hollow` (`param+0x1ac`) e `hollowState` (`roles+0x3e`)
+em 0. A contagem do cinto nunca conta. Personagem já humano sai com `verdict`
+`already_human` e **nenhuma** tecla. Fora do mundo é `not_in_world`.
+
+O caminho é cego: start (1200 ms), direita (Inventory), A (categorias,
+consumíveis primeiro), A (grade, abre sempre no primeiro item, o Estus),
+direita (Human Effigy), A (submenu com Use selecionado), captura em meia
+escala em `human-<N>/` (evidência, não oráculo), A. Espera até 5 s pela
+virada dos bytes. Passando, fecha com B, B, esquerda, B, o que devolve a aba a
+Equipment; falhando, sai só com B ×3 e o erro é `still_hollow`. `data` traz
+`before`, `after` (`hollow`, `hollowState`, `hp`, `hpMax`) e `presses`.
+
+**O caminho só vale a partir da aba padrão.** O menu de start lembra a aba
+enquanto o jogo roda e dá a volta nos dois sentidos (Inventory → Equipment →
+System → …), então nenhuma sequência de teclas chega a uma aba conhecida
+partindo de uma desconhecida. Um carregamento (ir ao título e voltar) devolve
+a aba a Equipment, e a grade do inventário abre sempre no primeiro item.
+Medido em 14/09 com Samuel e Chico, cujos saves têm a efígie como segundo
+consumível. Um menu aberto à mão depois do último carregamento, ou outra ordem
+de inventário (o botão Y ordena), manda as mesmas teclas para outro lugar.
+`game leave` depende da mesma coisa: o caminho dele (start, RB ×5, baixo ×2, A,
+esquerda, A) supõe o menu abrindo em Equipment. Por isso o `human` termina
+devolvendo a aba.
+
+`docs/scenarios/human.json` faz o mesmo com passos `input` sobre a baseline
+`pre-passo6`: lança e entra as duas contas, `assert /character/hollowState 1`
+antes de apertar (se já é humano o cenário falha sem tocar em nada), as teclas
+com `afterMs`, `screenshot`, `wait /character/hollowState 0` e
+`assert /character/hollow 0`. Com baseline, uma tecla errada não sobrevive à
+limpeza.
 
 ## O hook de morte: `death` e `kill`
 
@@ -837,7 +884,7 @@ para não mudar os cenários que já existem.
 | `launch` | `instance`; requer ambiente já preparado e pad existente |
 | `enter` | `instance`, `character` opcional; usa o personagem configurado se omitido |
 | `leave` | `instance` |
-| `input` | `instance`, `command`, por exemplo `press a 90` ou `stick l 0 -1 500` |
+| `input` | `instance`, `command`, por exemplo `press a 90` ou `stick l 0 -1 500`; `afterMs` opcional (0 a 5000) espera depois da tecla |
 | `goto` | `instance`, `x`, `z`, `radius` opcional, padrão 2 metros |
 | `assert` | `instance`, `pointer`, `equals` |
 | `wait` | Os campos de `assert`, mais `seconds` |

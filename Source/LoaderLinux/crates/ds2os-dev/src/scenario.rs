@@ -52,7 +52,8 @@ enum Step {
     Launch { instance: u8 },
     Enter { instance: u8, character: Option<String> },
     Leave { instance: u8 },
-    Input { instance: u8, command: String },
+    /// One pad command to the instance's window, then `afterMs` (0..5000) for the game to follow.
+    Input { instance: u8, command: String, #[serde(default, rename = "afterMs")] after_ms: u64 },
     Goto { instance: u8, x: f32, z: f32, #[serde(default = "default_radius")] radius: f32 },
     Assert { instance: u8, pointer: String, equals: Value },
     Wait { instance: u8, pointer: String, equals: Value, seconds: u64 },
@@ -121,7 +122,10 @@ fn validate(scenario: &Scenario) -> Result<(), String> {
                     return Err(format!("invalid_assertion: {pointer}; valor desconhecido não pode aprovar teste"));
                 }
             }
-            Step::Input { command, .. } => crate::pad::validate(command)?,
+            Step::Input { command, after_ms, .. } => {
+                crate::pad::validate(command)?;
+                if *after_ms > 5000 { return Err("invalid_scenario: afterMs entre 0 e 5000".into()); }
+            }
             Step::Goto { x, z, radius, .. } if !x.is_finite() || !z.is_finite() || !radius.is_finite() || *radius <= 0.0 => {
                 return Err("invalid_target: coordenadas finitas e raio positivo".into());
             }
@@ -248,9 +252,11 @@ fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline, 
             crate::drive::enter(env, *instance, expected.as_deref(), deadline.remaining()?).map(|_| ())
         }
         Step::Leave { instance } => crate::drive::leave(env, *instance, deadline.remaining()?).map(|_| ()),
-        Step::Input { instance, command } => {
+        Step::Input { instance, command, after_ms } => {
             crate::screen::focus(&crate::drive::window_for(env, *instance)?)?;
-            crate::pad::send_until(1, command, deadline.remaining()?).map(|_| ())
+            crate::pad::send_until(1, command, deadline.remaining()?)?;
+            if *after_ms > 0 { deadline.sleep(Duration::from_millis(*after_ms))?; }
+            Ok(())
         }
         Step::Goto { instance, x, z, radius } => {
             let install = crate::install_for(env, *instance)?;

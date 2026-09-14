@@ -64,6 +64,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `timeline --last 10m \| --since HH:MM \| --run <id>` | server, hook and harness logs merged, ordered and classified; hook logs without a clock only appear with `--run` |
 | `where` | where each character is standing, from the game's own memory |
 | `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
+| `human --instance N` | burns a Human Effigy through Inventory and passes only when hollowing and the hollow state read 0 in memory; presses nothing if already human |
 | `death --instance N mode\|feature\|status` / `death profile set` | the death hook's mode and bill, confirmed by its echo; the profile is reapplied on every `game enter` |
 | `session` | both instances: roles, members, session machine states, channel counters, and `p2pSessionVerified` |
 | `kill --instance N` | zeroes HP with expected bytes and passes only on the hook's death lines |
@@ -246,13 +247,20 @@ dying as an invader in someone else's world does not, so a duel loss costs no
 effigy.
 
 **So burn a Human Effigy before every staging, rather than checking first** —
-and burn it through **Inventory**, not the belt. Both characters carry 90+ of
-them. Pressing X on the effigy in the belt has repeatedly done nothing while
-the menu path (menu → Inventory → Human Effigy → A → Use → A) worked a minute
-later on the same character, so a belt count that does not move proves
-nothing; the menu's count dropping is the only honest check. Burn it **after**
-the instance is in the world — a killed client never saves, so an effigy burnt
-before a `game stop` is gone when the game comes back.
+and burn it through **Inventory**, not the belt: `ds2os-dev human --instance
+both`, right after `up`. Both characters carry 80+ of them. Pressing X on the
+effigy in the belt has repeatedly done nothing while the menu path worked a
+minute later on the same character, so a belt count that does not move proves
+nothing. `human` believes only the character's memory: `hollow` and
+`hollowState` both 0 (and the maximum HP comes back, 777 → 915 on Samuel).
+Burn it **after** the instance is in the world. The game saves when the item
+is used, so a burn survives a killed client.
+
+**The start menu remembers its tab until the next load, and wraps.** Every
+blind menu walk here — `human`, and `game leave`'s way to Quit Game — assumes
+it opens on Equipment, which is true after every trip through the title
+screen. Opening the menu by hand in the world and leaving it on another tab
+sends the next walk somewhere else; `human` puts the tab back when it is done.
 
 **Killing a client during a live session is an *illegal disconnect*, and the
 game counts them.** After enough of them it puts up
