@@ -1445,3 +1445,128 @@ função são conferidos na instalação.
 
 O Estus apareceu recarregado no próprio inventário do jogo (1 carga depois de
 zerado à mão).
+
+## Com sessão (passo 6, 13–14/09)
+
+Samuel em Heide, Chico invocado por marca branca, os dois no modo `respawn`.
+Duas sessões, cada uma terminada pelo caminho legal (modo `observe` no Chico e
+uma morte comum de fantasma: `RequestNotifyLeaveSession` e
+`RequestNotifyLeaveGuestPlayer` em um segundo). Saves fotografados antes
+(`pre-passo6`) e restaurados depois.
+
+### Quem paga o quê, pelas checagens do jogo
+
+A cobrança do passo 5 cobrava de qualquer um. O que o jogo decide está na
+sequência da morte e em `FUN_14037dcc0`, e o hook agora passa pelas mesmas
+portas:
+
+| custo | quem decide | fantasma branco (papel 1) |
+| --- | --- | --- |
+| almas | `FUN_14018fbc0`, passo da sequência `EventResult` para a morte tipo 1: há gerenciador de sessão (`ctx+0x22f0`) e `NetSvrManager`, e `FUN_14018fd70` concorda — `*(ctx+0x70)+0x1b9` limpo e, se o papel é de convidado (segundo byte da linha do papel na tabela `0x1410c0050`, 16 bytes por papel), o param do papel (`FUN_14016f540`) com `+0x2e == 1` | `+0x2e = 0`: **as almas ficam** |
+| mancha | só quando almas entraram agora, e só onde `FUN_14026b0d0` poria uma (slot `+0x58` do contexto) | intocada |
+| hollow | as cinco checagens de `FUN_14037dcc0`; a que o decompilador não mostra é `call 0x14016f7d0`, um salto para código ofuscado, `bool(chr)` | a ofuscada diz **isento** |
+| contador de mortes, anel | `call 0x140203be0` (outro salto ofuscado) escolhe o ramo do jogador desta máquina: `FUN_140203ad0` soma em `PlayerParam+0x104+papel*8` e `+0x1a4`, `FUN_1401ac240` quebra o anel de proteção vestido, e um menu aberto de `ctx+0x22e0` é fechado | soma |
+| Estus | o renascer comum recarrega para todos | recarregado |
+
+O papel é o byte `*(chr+0xb0)+0x3c` (0 dono do mundo, 1 fantasma branco); o
+estado de hollow é o `+0x3e` ao lado. Os dois saltos ofuscados foram chamados
+como o jogo chama, com o personagem em `rcx`, e os bytes do salto são
+conferidos na instalação.
+
+### A cópia do outro jogador morria
+
+A primeira rodada (build `1424e7c8`) acertou tudo do lado de quem morre e
+errou do outro lado. Com o HP do Chico zerado:
+
+```
+Chico   custos da morte (papel 1, convidado 1): almas 1234 -> 1234 (convidado que nao paga ...);
+        hollow isento (... ofuscada=1 ...); mortes 69 -> 70 ...; renascer concluido em 1 quadros
+Samuel  outro controlador ... personagem ... (vftable +0x10e4bb8, papel 1) estado 0 -> 2 hp=0
+```
+
+Na tela do Samuel, **"Phantom Chico has been vanquished."**; no servidor,
+`RequestNotifyKillEnemy` do Samuel. O HP 0 do Chico já tinha saído pela rede
+antes de o hook devolvê-lo, e a cópia dele no mundo do Samuel (`PlayerCtrl`,
+tipo de personagem 2 em `chr+0x54`) morreu pelo próprio controlador — o mesmo
+formato de uma morte local: causa 10, bits `0x4000/0x8000` em `+0x4c8`. As
+máquinas de sessão continuaram em `0x10` e 7, mas o host não via mais o
+fantasma.
+
+É uma corrida: aconteceu uma vez em duas mortes com o HP zerado por fora do
+quadro, e nenhuma vez nas sete seguintes (seis com o HP zerado, uma queda).
+
+A morte de um jogador pertence à máquina que joga o personagem. O build
+`69a68af9` recusa, nos modos `cancel` e `respawn`, a morte pendente de uma
+cópia de `PlayerCtrl` com o mesmo teste do controlador local (estado 0,
+`+0x5fc` zero, `+0x759` ligado): limpa o byte, devolve o HP e os bits, e não
+deixa o controlador rodar naquele quadro. Medido com o byte ligado à mão na
+cópia do Chico dentro do Samuel:
+
+```
+morte da copia RECUSADA #1 ... personagem ... tipo 2 papel 1 hp=853 -> 853 ...
+```
+
+e o Chico continuou de pé ao lado dele. Zerar o HP da cópia à mão **não**
+serve de teste: a rede o regrava antes do quadro seguinte.
+
+### "YOU DIED"
+
+A sequência da morte (`EventResult` slot `+0x20`, `FUN_14018f830`) monta jobs
+a partir de uma linha de parâmetro: id `papel + tipo*100` na tabela do registro
+da fogueira (`FUN_14044ed10`), ou `tipo*100 + 99`. O primeiro byte é um tipo
+FE, e a tabela de dez ints em `0x1410c3580` o traduz em banner para
+`FUN_1405012e0(*(ctx+0x22e0), id)`. Lido ao vivo: a linha 100 (dono do mundo)
+e a 199 (fantasma branco) dizem FE 1, banner 3.
+
+O banner 3 esconde o HUD (`+0x46c` de `*(frontend+0xd8)`), e só uma carga o
+devolve: `FUN_1404fffb0` liga `+0x468`, que o update do HUD (`FUN_140507360`)
+lê como "mostrar tudo de novo". O hook chama a mesma função quando
+`FUN_140500b10` diz que o front end terminou. Medido no Chico e no Samuel, em
+sessão: o letreiro, o HUD sumido, e `banner 3 acabou em 203 quadros: HUD
+devolvido`. O som da morte (`FUN_1401905c0`, uma sobreposição de BGM que ninguém
+desfaz sem carga) ficou de fora.
+
+Para fantasma, a morte comum mostra depois do banner "You have been
+vanquished. Returning to your world..." (mensagem `0x129da1` da linha 199). O
+hook não a mostra: o fantasma não volta para casa.
+
+### A mancha online não sai
+
+`FUN_14026c0b0` (ou `FUN_14026c1b0` para morte tipo 3) é o que o update do
+`NetSvrBloodstainManager` chama no quadro em que o personagem local está com
+HP 0 e o bit `0x4000`. Rastreado com hora numa morte comum: a chamada no mesmo
+quadro da morte, o job (`FUN_14026bd10`) **cinco segundos depois**, e aí
+`FUN_14019f520` lê o gravador de fantasma e `FUN_140269650` envia; o servidor
+registrou `RequestCreateBloodstain` cinco segundos depois da morte.
+
+Chamada pelo hook, a mesma cadeia passa pelas três checagens de
+`FUN_14026bc50`, cria o job, o job roda cinco segundos depois — e não envia.
+`FUN_14019f520` só aceita se entre os últimos 16 quadros do gravador houver um
+marcado `0x1000` (`FUN_1401a25e0`): um quadro gravado com o personagem morto.
+Com a morte recusada no mesmo quadro, esse quadro nunca é gravado. A chave
+`mancha_online` fica desligada.
+
+### O resultado
+
+| teste | quem morreu | conferido |
+| --- | --- | --- |
+| HP zerado a 7,6 m da fogueira (build 1) | Chico, fantasma | lado dele certo; **cópia morta no host**, "vanquished" |
+| HP zerado (build 1) | Samuel, host | almas 4321 para a mancha, hollow 0→1, máximo 915→869, mortes 55→56, teleporte; na tela do Chico, o Samuel na fogueira; 60 s depois: nenhum `NotifyDeath`/`LeaveGuestPlayer`, host `0x10`, convidado 7 |
+| HP zerado (build 2) | Chico | **o host vê o Chico na fogueira**, sem "vanquished"; 60 s depois host `0x10`, convidado 7, nenhum `LeaveGuestPlayer` |
+| byte de morte ligado na cópia (build 2) | cópia do Chico no Samuel | `morte da copia RECUSADA`, cópia de pé |
+| quatro mortes seguidas (build 2) | Chico | todas recusadas, nenhuma cópia morta |
+| queda no mar (build 2) | Chico | causa 90, câmera de queda desligada, fogueira em 1 quadro |
+| queda no mar (build 2) | Samuel | almas para a mancha na beira, hollow 0→1, fogueira; 60 s depois host `0x10`, convidado 7 |
+| banner (build 2) | Chico e Samuel | "YOU DIED", HUD devolvido em 203 quadros |
+| servidor | — | o primeiro `RequestNotifyDeath` da conexão do Chico só apareceu na morte comum da saída, depois de sete mortes recusadas na sessão |
+
+### Duas armadilhas desta rodada
+
+**O modo volta a `observe` a cada boot.** Um `goto --to-instance 2` feito
+antes de escrever `respawn` levou o Samuel para fora da laje de Heide: morte
+por queda de verdade, sem sessão aberta, custando a efígie e as almas de teste.
+Escreva o modo nos dois `DS2_Death.req` antes de mexer em qualquer personagem.
+
+**Um breakpoint armado no meio de uma instrução derruba o jogo** quando o fluxo
+chega nele: o `0xCC` corta a instrução. `bp` precisa do início exato de uma
+instrução; confira no objdump antes de armar.

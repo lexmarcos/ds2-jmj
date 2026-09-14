@@ -207,6 +207,24 @@ clear
 bp 2a14c0 deref rdx 4
 ```
 
+### O endereço tem que ser o início de uma instrução
+
+`bp` escreve `0xCC` no byte pedido, sem conferir se é o começo de uma
+instrução. Armado no meio de uma (`bp 26bdab`, dentro de um `movsd` de 5 bytes,
+em 14/09), só não derrubou o jogo porque o salto anterior desviou antes; o
+primeiro fluxo que passasse por ali executaria uma instrução cortada. Confira o
+endereço num objdump da faixa antes de armar, e mande `clear` se errou.
+
+### A hora de cada alcance
+
+A linha do alcance não tem hora. Para medir quanto tempo separa dois pontos
+(a mancha online: a chamada no quadro da morte, o job cinco segundos depois),
+carimbe o log por fora enquanto ele cresce:
+
+```
+tail -n0 -F DS2_Trace.log | while IFS= read -r l; do echo "$(date +%T.%3N) $l"; done
+```
+
 ## A vigia de escrita: quem grava este endereço
 
 `DS2_Trace.req` aceita, desde 13/09:

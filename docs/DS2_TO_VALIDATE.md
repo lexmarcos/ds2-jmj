@@ -257,9 +257,9 @@ Em aberto:
 - **Um personagem de pé com HP zerado por um quadro**: o hook devolve o HP no
   mesmo quadro em que o byte aparece, mas o que roda entre `FUN_14016a650` e o
   controlador naquele quadro vê HP 0. Ninguém olhou o que isso dispara.
-- **Com sessão, nada.** Se o outro lado vê a morte pela replicação e não pelo
-  aviso, cancelar só no cliente que morre não basta. A cópia do bloco de morte
-  em `+0x8d615` é a candidata a ler.
+- **Com sessão**: medido em 14/09 — o outro lado via a morte pela replicação
+  do HP, e cancelar só no cliente que morre não bastava. A recusa da cópia está
+  na seção do passo 6, abaixo.
 - **A queda desfeita foi medida num volume só**: a água de Heide, bit 51. Os
   volumes que ligam o bit 52 (tipos 3, 4, 7, 8), a morte por dano ao aterrissar
   (`FUN_140372c00`, causas `0xa0`/`0x3c`) e o tipo 10, que só pede a câmera,
@@ -273,26 +273,46 @@ Em aberto:
 - **A orientação não é escrita** no teleporte: o personagem chega à fogueira
   virado para onde estava.
 
-### O renascer do passo 5
+### O renascer do passo 5 e a sessão do passo 6
 
-Medido só solo, em Heide, com o Samuel. Ficou de fora ou sem medir:
+Medido em Heide, com o Samuel e o Chico, solo e em sessão
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "Renascer pagando a morte" e
+"Com sessão"). Resolvido em 14/09: o contador de mortes, a checagem ofuscada
+do hollow (é a isenção do fantasma), "YOU DIED" e a cobrança de fantasma. Em
+aberto:
 
-- **Contadores de morte**: a morte comum soma em `PlayerParam+0x104+tipo*8` e
-  `+0x1a4` (`FUN_140203ad0`, só quando online). O renascer não soma.
 - **Usos de magia e estados** (veneno, maldição, etc.) não são restaurados; só
-  o Estus e o HP. A morte comum recarrega tudo pela recarga.
-- **A checagem ofuscada** `thunk_FUN_140014b03`, uma das cinco antes do hollow,
-  não é chamada.
-- **A mancha online** (`NetSvrBloodstainManager::_StartCreateBloodstainJob`,
-  `RequestCreateBloodstain`) não é enviada; outros jogadores não veem a morte.
-- **O pecado** (`FUN_140202ae0`, que a sequência "YOU DIED" chama em sessão) não
-  é tocado.
-- **Nenhum aviso de morte** aparece: nem "YOU DIED", nem fade.
+  o Estus e o HP. O descanso na fogueira os restaura por um despachante de
+  SpEffect cujos alvos são saltos para código ofuscado (`0x14014c183` é a
+  chamada que recarrega o Estus, cercada de outras); `ItemInventory2SpellList`
+  não tem método de recarga à vista. Nenhum dos dois personagens tem magia para
+  medir com um vigia de escrita.
+- **A mancha online** não sai: o job roda e não envia, porque o gravador de
+  fantasma nunca grava o quadro com o personagem morto (`0x1000`). Chave
+  `mancha_online` desligada.
+- **A cópia do outro jogador**: a recusa foi medida com o byte de morte ligado
+  à mão. A corrida natural — o HP 0 saindo pela rede antes de ser devolvido —
+  aconteceu uma vez antes da correção e nenhuma das sete vezes depois; não foi
+  vista sendo recusada.
+- **A recusa vale para qualquer `PlayerCtrl` que não seja o local.** A cópia de
+  um jogador remoto é tipo 2 em `chr+0x54`; se um fantasma de NPC for
+  `PlayerCtrl`, ficaria imortal nos modos `cancel`/`respawn`. Não medido.
+- **Uma morte de verdade do outro lado** (a máquina dele sem o hook, ou em
+  `observe`) é recusada na cópia do lado de cá enquanto `copias` estiver
+  ligada: o "vanquished" e o `RequestNotifyKillEnemy` somem. A sessão ainda
+  termina pelo lado de lá.
+- **O pecado** (`FUN_140202ae0`): a morte tipo 1 o *reduz* em sessão quando
+  `FUN_14018fc90` acha certo membro na sessão; não é tocado.
+- **O som da morte** (`FUN_1401905c0`, BGM 2) e o evento `0x25` de
+  `FUN_14037d9f0` ficaram de fora.
+- **O banner e o HUD**: `FUN_1404fffb0` também zera `+0x31c` e manda
+  `FUN_140507360` refazer quatro objetos do HUD que não foram lidos (uma barra
+  de chefe, por exemplo). Medido fora de luta.
 - **Fogueira fora do mapa carregado**: a volta para "a última posição no chão"
   num renascer por HP deixaria o personagem onde morreu, pagando a morte.
-- **Como fantasma, na sessão**, a morte comum não tira almas nem hollowa. O
-  renascer ainda não distingue, e as checagens do jogo (`FUN_140203b90`, o slot
-  `+0x58` do contexto) podem recusar parte do custo. É o passo 6.
+- **O convidado usa o registro da própria fogueira.** Nos testes os dois tinham
+  a mesma (`0x7ba7`). Com fogueiras diferentes, o fantasma volta para a dele se
+  estiver no mapa do host, ou fica onde morreu. É o passo 7.
 
 ## O login que resolve o hostname oficial, depois de um reboot
 

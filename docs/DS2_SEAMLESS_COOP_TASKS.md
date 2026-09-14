@@ -124,7 +124,10 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ## M2 — respawn dentro da sessão
 
-**Não está feito.** O critério, definido pelo dono do projeto em 13/09:
+**Não está fechado.** O critério foi observado em 14/09 no caso medido — os
+dois jogadores no mesmo mapa, com a mesma fogueira no registro (passo 6) —, mas
+faltam a fogueira do convidado no mundo do host (passo 7) e a fogueira fora do
+mapa carregado. O critério, definido pelo dono do projeto em 13/09:
 
 > morre → respawna → continua na **mesma** sessão, e o host continua jogando
 > normalmente. Vale para a morte de **qualquer** um dos dois, host ou fantasma.
@@ -192,10 +195,19 @@ sem sessão, e não custam desconexão ilegal:
    na beira. Medido com HP zerado, queda no vazio, duas mortes seguidas e um
    personagem humano; nenhum `RequestNotifyDeath` nem warp. Detalhes em
    DS2_SEAMLESS_COOP.md, "Renascer pagando a morte".
-6. **Com sessão** (snapshot dos saves antes). *Positivo:* nenhum
-   `RequestNotifyDeath` nem `RequestNotifyLeaveGuestPlayer` em 60 s, host em
-   `0x10`, e o host **vê** o fantasma na fogueira. Depois o simétrico: o host
-   morre.
+6. **Com sessão.** — **feito em 14/09.** Chico invocado no mundo do Samuel,
+   os dois em `respawn`. A morte do fantasma e a do host, por HP e por queda,
+   renascem na fogueira sem carga e a sessão continua: 60 s depois nenhum
+   `RequestNotifyLeaveGuestPlayer`, host em `0x10`, convidado em 7, e cada um
+   **vê** o outro na fogueira. O primeiro `RequestNotifyDeath` da conexão do
+   Chico só saiu na morte comum usada para encerrar, depois de sete recusadas.
+   A cobrança segue as checagens do jogo para quem paga: o fantasma guarda as
+   almas e não hollowa (a checagem ofuscada `0x14016f7d0` é essa isenção), e o
+   contador de mortes soma para os dois. Custou uma descoberta: o HP 0 do
+   fantasma chegou uma vez ao host antes de ser devolvido, e a cópia dele morreu
+   lá ("Phantom Chico has been vanquished"); o hook agora recusa também a morte
+   pendente da cópia de um jogador. "YOU DIED" aparece e o HUD volta. Detalhes
+   em DS2_SEAMLESS_COOP.md, "Com sessão".
 7. **Fogueira compartilhada.** O convidado não grava a própria fogueira no mundo
    do host (`FUN_1401caf50` só grava para o jogador local, e com uma condição
    que parece ser "não estou no mundo de outro" — inferência). O triplo
