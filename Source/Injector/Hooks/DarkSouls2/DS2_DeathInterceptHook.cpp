@@ -138,6 +138,11 @@ namespace
     constexpr uint32_t kLoadPollFrames = 10;
     constexpr uint32_t kLoadGiveUpFrames = 1800;       // 30 s at 60 frames a second
     constexpr uint32_t kSettleGiveUpFrames = 600;
+    // Two maps can overlap: Heide's first bonfire stands where Majula's sea
+    // rocks are (measured 14/09). Landed on the old map's ground, the character
+    // is sent to the bonfire again while the old map's parts go.
+    constexpr uint32_t kSettleRetryFrames = 90;
+    constexpr uint8_t kRemotePlayerCopy = 2;           // chr+0x54
     // Once there, the ground of that map still has to come in, and the fall
     // controller re-teleports every 30 frames until the character lands.
     constexpr uint32_t kOtherMapGiveUpFrames = 900;
@@ -457,6 +462,8 @@ namespace
         bool Active = false;
         uint32_t Map = 0;
         uint32_t Frames = 0;
+        float Target[3] = {};
+        uint32_t Retries = 0;
     };
     Settle s_settle;
 
@@ -1503,6 +1510,8 @@ namespace
             s_settle.Active = true;
             s_settle.Map = s_recovery.LoadMap;
             s_settle.Frames = 0;
+            s_settle.Retries = 0;
+            memcpy(s_settle.Target, Spawn, sizeof(Spawn));
             const bool Moved = TeleportLocal(Chr, s_recovery.Target);
             Append(StringFormat("%s  %s: o mapa %08x carregou em %u quadros; levando para a fogueira %08x (%.3f, %.3f, %.3f) %s\n",
                 Clock().c_str(), s_recovery.Why, s_recovery.LoadMap, s_recovery.LoadFrames, s_recovery.LoadId,
@@ -1523,13 +1532,21 @@ namespace
 
     // Holding the map the character jumped to until the streamer has it under
     // the character's feet, so letting go unloads only the map left behind.
-    void ContinueSettle()
+    void ContinueSettle(uint8_t* Chr)
     {
         ++s_settle.Frames;
         const uint32_t Current = CurrentMap();
         const bool Arrived = Current == s_settle.Map;
         if (!Arrived && s_settle.Frames < kSettleGiveUpFrames)
         {
+            // Standing, but on another map's ground.
+            if (Current != 0 && s_settle.Frames % kSettleRetryFrames == 0)
+            {
+                ++s_settle.Retries;
+                const bool Moved = TeleportLocal(Chr, s_settle.Target);
+                Append(StringFormat("%s  pisando no mapa %08x e nao no %08x; de novo para a fogueira (%u) %s\n",
+                    Clock().c_str(), Current, s_settle.Map, s_settle.Retries, Moved ? "teleportado" : "TELEPORTE FALHOU"));
+            }
             return;
         }
         DS2_Backread::Unfocus();
@@ -1662,7 +1679,8 @@ namespace
         {
             // The map another player stands in must not unload under its
             // copy here, whatever this machine's player does.
-            if (Character != nullptr && Enabled(FeatureOtherMap) && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable)
+            if (Character != nullptr && Enabled(FeatureOtherMap) && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
+                ((const uint8_t*)Character)[kChrType] == kRemotePlayerCopy)
             {
                 const int32_t Index = MapIndexUnder((uint8_t*)Character);
                 if (Index >= 0)
@@ -1726,7 +1744,7 @@ namespace
         }
         if (s_settle.Active)
         {
-            ContinueSettle();
+            ContinueSettle(Chr);
         }
 
         // The same three tests the controller makes, in its order. The HP
