@@ -361,6 +361,11 @@ de outro mapa"). Em aberto:
   noutra (duas mortes). Uma cópia que chega a um mapa em cima de um objeto
   (tipo 1) mantém todas as partes até pisar numa parte. São 8 mapas mantidos no
   máximo, por índice.
+- **A cópia andando dentro do mapa mantido.** A manutenção guarda só o conjunto
+  da parte sob a cópia, trocado a cada parte nova, sem a soma das partes
+  vizinhas que o streamer faria para um jogador ali — e na fogueira de Majula
+  esse conjunto é um bit só. Nas duas mortes em sessão as cópias estavam
+  paradas.
 - **Memória.** Nem a manutenção inteira nem a por partes teve o custo medido.
 - **Andar de volta entre mapas com um fantasma.** A névoa de fantasma entre
   áreas continua lá (`--remove-fog` é o experimento); o passo 8 só leva de um

@@ -122,7 +122,7 @@ máquina vai quando ele recusa. Um retorno ignorado esconde a recusa.
 
 ---
 
-## M2 — respawn dentro da sessão
+## M2 — respawn dentro da sessão — **FEITO em 14/09, nos casos medidos**
 
 **Os oito passos estão feitos (14/09).** O critério foi observado em todos os
 casos medidos, com dois jogadores: a morte do host e a do convidado, por HP e

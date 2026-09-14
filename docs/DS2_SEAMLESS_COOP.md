@@ -1706,11 +1706,13 @@ carrega por partes, a cada quadro, e é essa via que o passo 8 usa.
 | a parte sob um personagem | `FUN_140312ba0`: o contato físico `*(chr+0x100)+0x10`, cujo handle em `+0xe0` tem o tipo no nibble baixo (7 colisão do mapa, 1 objeto), o índice do mapa nos bits 4..9 e o da colisão do bit 10 em diante; é uma parte quando o tipo da entidade (`+0xa2`) é 2 |
 | a célula de uma posição | `*(ctx+0xbc0)+0x10` é o gerenciador de navegação; `FUN_140badb90` acha o mapa de navegação pela chave `(índice & 0x3f) << 24 \| 0xffffff`, e `FUN_140babf90` a célula mais próxima em 10 unidades. Lê a posição com SSE alinhado |
 
-E os mapas **não** estão num espaço só: a primeira fogueira de Heide
-(`0x7ba7`, 6,186 / -18,517 / 209,053) fica a 226 m da de Majula (`0x122a`,
-10,526 / 5,916 / -16,255), dentro do mar de Majula. O jogo tem um deslocamento
-do mundo para algumas transições (`FUN_1401c3fe0` pede em `ctx+0x2530`,
-`FUN_1401c3b40` move jogador e câmera), que este passo não usa.
+Carregados juntos, a primeira fogueira de Heide (`0x7ba7`, 6,186 / -18,517 /
+209,053) fica a 226,7 m da de Majula (`0x122a`, 10,526 / 5,916 / -16,255), e
+os dois mapas não precisam caber num espaço só: o jogo tem um deslocamento do
+mundo para algumas transições (`FUN_1401c3fe0` pede em `ctx+0x2530`,
+`FUN_1401c3b40` move jogador e câmera), que este passo não usa, e numa volta
+manual o Samuel pousou numa pedra de Majula no ponto da fogueira de Heide
+(abaixo).
 
 ### O que não deu chão
 
