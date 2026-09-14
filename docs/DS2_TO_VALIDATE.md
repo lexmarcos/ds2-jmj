@@ -174,6 +174,21 @@ stayed at the old bonfire, 68 m away, with its tick advancing; only the new
 `live` field followed. `goto` and `goto --to-instance` still read that pose.
 Unknown whether walking brings it back; `nav::read` should prefer `live`.
 
+### `injector check` is mingw, not MSVC
+
+`ds2os-dev injector check` parses the injector with mingw after rewriting SEH
+and stubbing Detours. It catches typos, undeclared names and wrong types; it
+cannot see MSVC-only behaviour, the Windows SDK's own headers, link errors or
+anything inside a `__except` filter (rewritten away). A clean check is not a
+green CI run. Three files already fail under mingw at HEAD and only new
+errors are counted there: `Entry.cpp`, `ReplaceServerPortHook.cpp`, and
+`DS2_LogProtobufsHook.cpp`, which uses `std::atomic_size_t` without including
+`<atomic>` — latent, it compiles only because MSVC pulls the header in.
+
+Measured 14/09: the receipt's `build` came back as the pushed commit on both
+instances after `injector fetch` → `up`. `fetch` has not yet waited out a run
+still in progress, nor met a failed run.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway

@@ -84,7 +84,7 @@ pub fn checks(env: &Environment) -> Vec<Check> {
         let games: Vec<u32> = every_game.iter().copied().filter(|pid| in_prefix.contains(pid)).collect();
         checks.push(game_processes(account, &games));
         if games.is_empty() {
-            for name in ["memprobe", "receipt", "config_drift", "api_identity"] {
+            for name in ["memprobe", "receipt", "injector_build", "config_drift", "api_identity"] {
                 checks.push(Check::new(name, Some(account), Status::Skipped, "instância parada"));
             }
             continue;
@@ -101,6 +101,7 @@ pub fn checks(env: &Environment) -> Vec<Check> {
             let boot = observe::sample(dir).and_then(|(_, boot)| boot);
             let receipt_check = receipt_of_boot(account, boot.as_deref(), receipt.as_ref());
             let valid = receipt_check.status == Status::Ok || receipt_check.data.get("sameBoot") == Some(&json!(true));
+            checks.push(running_build(account, valid.then_some(receipt.as_ref()).flatten(), env.injector_source.as_deref()));
             checks.push(receipt_check);
             checks.push(match (valid, receipt.as_ref().and_then(|r| r.get("configured"))) {
                 (true, Some(configured)) => config_drift(account, configured, read_json(&dir.join("Injector.config")).as_ref()),
@@ -243,6 +244,31 @@ fn injector_installed(install: &Install, source: Option<&Path>) -> Check {
         (Some(a), Some(b)) => Check::new("injector_installed", account, Status::Warning,
             format!("a DLL instalada difere de {}", source.display()))
             .fix("`ds2os-dev game prepare` com as mesmas flags, e relance o jogo").data(json!({"installed": a, "source": b})),
+    }
+}
+
+/// Which commit the open game's DLL was built from, against the commit
+/// `injector fetch` recorded for the source directory.
+fn running_build(account: u8, receipt: Option<&Value>, source: Option<&Path>) -> Check {
+    use crate::injector::{compare_build, Build};
+    const NAME: &str = "injector_build";
+    let Some(receipt) = receipt else {
+        return Check::new(NAME, Some(account), Status::Skipped, "sem recibo deste boot");
+    };
+    let manifest = source.and_then(crate::injector::read_manifest);
+    let build = receipt.get("build").and_then(Value::as_str);
+    let sha = manifest.as_ref().map(|m| m.head_sha.as_str());
+    let data = json!({"build": build, "headSha": sha});
+    let relaunch = "`ds2os-dev injector fetch`, feche os jogos, `game prepare` (ou `up`) e relance";
+    match compare_build(build, sha, true) {
+        Build::Current => Check::new(NAME, Some(account), Status::Ok, format!("a DLL rodando é do commit {}", &build.unwrap_or_default()[..12.min(build.unwrap_or_default().len())])).data(data),
+        Build::Other => Check::new(NAME, Some(account), Status::Warning, "a DLL rodando é de outro commit que o do manifest")
+            .fix(relaunch).data(data),
+        Build::Unknown => Check::new(NAME, Some(account), Status::Warning, "a DLL rodando não diz o commit (build local)").data(data),
+        Build::Unrecorded => Check::new(NAME, Some(account), Status::Warning, "DLL anterior ao campo build no recibo")
+            .fix(relaunch).data(data),
+        Build::NoReference => Check::new(NAME, Some(account), Status::Skipped,
+            format!("build {} sem manifest.json para comparar; `ds2os-dev injector fetch`", build.unwrap_or("?"))).data(data),
     }
 }
 

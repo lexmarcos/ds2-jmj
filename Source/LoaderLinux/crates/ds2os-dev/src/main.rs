@@ -17,6 +17,7 @@ mod death;
 mod doctor;
 mod hook_request;
 mod hooks;
+mod injector;
 mod memory;
 mod output;
 mod observe;
@@ -252,8 +253,8 @@ enum Command {
     },
     /// Moves the local character, writing every copy of its position with the bytes it read
     ///
-    /// Passes only with all 13 writes accepted, the character within 0.3 m of
-    /// the target and no death in DS2_Death.log for 3 s. The character must be
+    /// Passes only with all 13 writes accepted, the character settled within
+    /// 1.5 m (1 m vertically) of the target and no death in DS2_Death.log for 3 s. The character must be
     /// standing still: a changed byte refuses the write.
     Teleport {
         #[arg(long)]
@@ -264,6 +265,11 @@ enum Command {
         /// A bonfire of the loaded map, by its id in hex (see `bonfires`)
         #[arg(long)]
         to_bonfire: Option<String>,
+    },
+    /// The injector from CI: fetch a run's binaries, check hook syntax with mingw, and which build each game runs
+    Injector {
+        #[command(subcommand)]
+        action: InjectorAction,
     },
     /// The last bonfire record and the bonfires of the loaded map, with their spawn points
     Bonfires {
@@ -390,6 +396,42 @@ enum SessionAction {
         #[arg(long, default_value_t = 60)]
         seconds: u64,
     },
+}
+
+#[derive(Subcommand)]
+enum InjectorAction {
+    /// Downloads the CI build of the injector HEAD has into ~/Downloads/injector, keeping the previous as injector.prev
+    ///
+    /// Waits for a run still in progress, writes manifest.json, cancels ci.yml
+    /// runs of the same commit, and says whether a `game prepare` and a relaunch
+    /// are needed. It never installs.
+    Fetch {
+        /// A specific run of injector-linux.yml
+        #[arg(long, conflicts_with = "latest")]
+        run: Option<u64>,
+        /// The newest run on this branch, even if it did not build HEAD's injector sources
+        #[arg(long)]
+        latest: bool,
+        /// How long to wait for a run in progress
+        #[arg(long, default_value_t = 1500)]
+        seconds: u64,
+    },
+    /// Syntax-checks injector .cpp files with mingw: the ones changed since HEAD by default
+    ///
+    /// Syntax, not a build: SEH is rewritten, Detours is a stub and mingw's
+    /// headers are not MSVC's. Errors HEAD's version also has are not counted.
+    Check {
+        /// Files to check (default: .cpp under Source/Injector changed against HEAD)
+        files: Vec<PathBuf>,
+        /// Every .cpp under Source/Injector
+        #[arg(long, conflicts_with = "files")]
+        all: bool,
+        /// Plants an error in a hook and passes only if it is reported at its line
+        #[arg(long, conflicts_with_all = ["files", "all"])]
+        self_test: bool,
+    },
+    /// The fetched manifest, each installation's DLL and the build each running game's receipt announces
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -721,7 +763,7 @@ fn main() {
     let exclusive = !reads_only && !matches!(&cli.command,
         Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session { action: None } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } | Command::Timeline { .. } |
-        Command::Bonfires { .. } | Command::Backread { action: BackreadAction::Status, .. } |
+        Command::Bonfires { .. } | Command::Injector { .. } | Command::Backread { action: BackreadAction::Status, .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
@@ -806,6 +848,11 @@ fn run(command: Command) -> Result<(), String> {
         Command::Where { instance } => where_is(&environment, &instance),
         Command::Teleport { instance, to, to_bonfire } => teleport::command(&environment, instance, to, to_bonfire),
         Command::Bonfires { instance } => teleport::bonfires_command(&environment, instance),
+        Command::Injector { action: InjectorAction::Fetch { run, latest, seconds } } => injector::fetch(&environment,
+            match (run, latest) { (Some(id), _) => injector::Pick::Run(id), (None, true) => injector::Pick::Latest, _ => injector::Pick::SameCode },
+            std::time::Duration::from_secs(seconds)),
+        Command::Injector { action: InjectorAction::Check { files, all, self_test } } => injector::check(&environment, &files, all, self_test),
+        Command::Injector { action: InjectorAction::Status } => injector::status(&environment),
         Command::GotoMap { instance, map, to } => backread::goto_map_command(&environment, instance, &map, &to),
         Command::Backread { instance, action } => {
             let order = match action {

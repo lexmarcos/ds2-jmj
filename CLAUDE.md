@@ -53,6 +53,9 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `session end` | ends the session the legal way (host `copias off`, guest dies in observe), waits for both channels to drop it, restores both settings |
 | `hooks reset --instance both` | Session, Backread, Trace and Death back to a fresh arrival's state, each confirmed by its echo; scenarios opt in with `"hookState": "reset"` |
 | `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations |
+| `injector fetch` | waits for the CI run that built HEAD's injector sources, downloads it into `~/Downloads/injector` (previous kept as `injector.prev`), writes `manifest.json`, cancels `ci.yml`; says `needsPrepare`/`needsRelaunch`, never installs |
+| `injector check [files] \| --all \| --self-test` | mingw **syntax** check of injector `.cpp` changed against HEAD, counting only errors HEAD's version lacks; not an MSVC build |
+| `injector status` | the manifest, each installation's DLL and the `build` commit each running game's receipt announces |
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
 | `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
@@ -376,13 +379,12 @@ kept being answered by the same client.
 
 `Injector.dll` needs MSVC (Detours), which cannot be built on this machine.
 `.github/workflows/injector-linux.yml` builds it on push to
-`Source/Injector/**`; fetch the result with
-
-```
-gh run download <run-id> -n injector -D ~/Downloads/injector
-```
-
-and `game prepare` installs it from there.
+`Source/Injector/**`. Run `ds2os-dev injector check` before pushing (syntax
+only, with mingw), then `ds2os-dev injector fetch` to wait for the run and
+download it into `~/Downloads/injector`; `game prepare` (or `up`) installs it
+from there, with the games stopped. The receipt carries the commit the DLL was
+built from (`observe` → `hooks.build`), and `injector status` / `doctor` say
+whether each open game runs the fetched one.
 
 `.github/workflows/ci.yml` is broken and unrelated to our code: `Build Linux`
 pins the retired `ubuntu-20.04` and queues forever, and the two nix jobs use

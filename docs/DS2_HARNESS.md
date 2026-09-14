@@ -45,6 +45,89 @@ lê configuração e DLL no lançamento do processo; mudar o arquivo com o jogo
 aberto não atualiza os hooks carregados. Use um relançamento para aplicar uma
 nova DLL ou configuração. `reload` serve para alterações do servidor.
 
+## O injector do CI: `injector fetch`, `check` e `status`
+
+`Injector.dll` só compila com MSVC, então só existe no CI
+(`.github/workflows/injector-linux.yml`, artefato `injector`). O ciclo de uma
+mudança num hook é:
+
+```bash
+ds2os-dev injector check              # sintaxe dos .cpp alterados, antes do push
+git push                              # o CI constrói
+ds2os-dev injector fetch --json       # espera o run, baixa, manifest
+ds2os-dev game stop --instance both   # (sem sessão viva)
+ds2os-dev up --seamless ...           # prepare copia a DLL, relança
+ds2os-dev injector status             # cada jogo diz o build que carregou
+```
+
+**O recibo diz o commit.** O CI passa `-DDS2OS_BUILD_SHA=${{ github.sha }}`;
+`DS2_Harness.json` ganha `"build"` e `observe` mostra em `hooks.build`. Build
+local diz `"unknown"`; uma DLL de antes do campo não tem `build`.
+
+**`fetch`** escolhe, por padrão, o run mais novo do branch cujo commit tem os
+mesmos fontes do injector que HEAD (`git diff --quiet <sha> HEAD --` sobre
+`Source/Injector`, `Source/InjectorLauncher`, `Source/Shared`,
+`Source/ThirdParty/detours` e o workflow). Assim um commit só do harness em
+cima de um push do injector ainda acha o run certo; sem run assim é
+`no_run_for_head`. `--latest` pega o mais novo do branch e `--run ID` um
+específico; os dois dizem `sameCodeAsHead`. Run em andamento é consultado a
+cada 15 s até `--seconds` (padrão 1500); conclusão diferente de `success` é
+`injector_build_failed`.
+
+Baixa em `~/Downloads/injector.new`, confere que `Injector.dll` e
+`Injector.exe` existem e começam com `MZ`, escreve `manifest.json`
+(`runId`, `headSha`, `branch`, `fetchedAt`, `files` com o SHA-256 de cada um)
+e só então gira: `injector.prev` é apagado, `injector` vira `injector.prev`,
+`injector.new` vira `injector`. Um run que já está lá, com os mesmos hashes,
+não é baixado de novo (`alreadyFetched`). Cancela os runs do `ci.yml` do mesmo
+commit (e de HEAD) e confirma que chegaram a `completed` (`ciCancelled`; o que
+não confirmou vira aviso).
+
+**`fetch` nunca instala**: `game prepare` sobrescreve a DLL de um jogo aberto.
+`data.installs[]` traz, por instância, `installedSha256`, `equalsSource`,
+`running`, `bootId`, `build` e `buildState`; `needsPrepare` é alguma DLL
+instalada diferente da baixada, `needsRelaunch` é algum jogo aberto com DLL
+diferente ou com `buildState` diferente de `current`.
+
+| `buildState` | Significado |
+| --- | --- |
+| `current` | O recibo deste boot diz o commit do manifest |
+| `other` | Outro commit |
+| `unknown` | `"build": "unknown"`, build local |
+| `unrecorded` | O recibo não tem `build`: DLL anterior ao campo |
+| `noReference` | Sem manifest, ou sem recibo deste boot (jogo parado) |
+
+**`status`** (não exclusivo) mostra o diretório de origem, o manifest (ou
+`null` quando o diretório não veio de `fetch`), se a DLL de origem é a do
+manifest, e os mesmos `installs`, `needsPrepare` e `needsRelaunch`.
+
+**`check`** é **sintaxe com mingw, não compilação MSVC**.
+`x86_64-w64-mingw32-g++ -fsyntax-only -fpermissive -w` em cada `.cpp`, com:
+`__try` reescrito como `if (1)`, `__except (filtro)` como `else` (as quebras de
+linha do filtro mantidas, para os números de linha baterem),
+`_ReturnAddress()` como `__builtin_return_address(0)`, um `detours.h` só com
+declarações e um `Windows.h` que inclui `<windows.h>`. Um `-include` que
+redefine `__try` não serve: a libstdc++ usa `__try` nas próprias macros.
+
+Sem argumentos, verifica os `.cpp` de `Source/Injector` alterados contra HEAD
+ou não rastreados, mais os que incluem um `.h` alterado; nada alterado é
+`nothing_to_check` (inconclusivo). Arquivos na linha de comando, ou `--all`
+(27 arquivos, ~10 s em paralelo). Um arquivo com erro é compilado também na
+versão de HEAD (com os headers da árvore) e só contam os erros cuja mensagem
+HEAD não tem: `Entry.cpp` (`::main`), `DS2_LogProtobufsHook.cpp` (falta
+`<atomic>`, que o MSVC traz de carona) e `ReplaceServerPortHook.cpp` já falham
+no mingw e aparecem como `ok` com `preexisting`. Erro novo é `syntax_errors`
+(código 1) com `files[].errors[]` `{line, message}`.
+
+`check --self-test` é o sinal positivo: verifica `DS2_CrashHook.cpp` intacto
+(tem que dar `ok`) e com uma linha quebrada no fim (tem que apontar o erro
+naquela linha). Um `check` limpo sem o autoteste não prova que o compilador
+estava olhando.
+
+`doctor` ganhou `injector_build` por instância aberta: o `build` do recibo
+contra o `headSha` do manifest de origem, `warning` para outro commit, build
+local ou DLL anterior ao campo.
+
 ## Resultados para a LLM
 
 `--json` é global: funciona antes ou depois do subcomando. O stdout contém um
@@ -123,6 +206,7 @@ outra notação pela API).
 | `install` | A instalação da conta foi resolvida |
 | `game_exe` | O executável que o probe confere (`installs[].gameExe`) é o 1.03 |
 | `injector_installed` | SHA-256 do `Injector.dll` instalado contra o de origem (`~/Downloads/injector`) |
+| `injector_build` | O `build` do recibo deste boot contra o `headSha` do `manifest.json` de origem (`injector fetch`) |
 | `logs_size` | Logs `DS2*.log` da instalação; `warning` acima de 256 MB |
 | `game_processes` | Exatamente um `DarkSoulsII.exe` no prefixo da conta |
 | `memprobe` | Uma consulta real de `locate`: `data.state`, `data.reason`, `data.latencyMs`; `warning` acima de 1500 ms |
