@@ -16,6 +16,7 @@ mod control;
 mod death;
 mod doctor;
 mod hook_request;
+mod hooks;
 mod memory;
 mod output;
 mod observe;
@@ -106,7 +107,15 @@ enum Command {
         session: bool,
     },
     /// Whether the two instances share a session and their peers exchange data
-    Session,
+    Session {
+        #[command(subcommand)]
+        action: Option<SessionAction>,
+    },
+    /// The injector's request-driven hooks
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
     /// The local character, from the game's memory: HP, souls, hollowing, deaths, role, bonfire
     Character {
         /// 1, 2, or both
@@ -148,7 +157,11 @@ enum Command {
         seamless: bool,
     },
     /// Stops the server and the second instance
-    Down,
+    Down {
+        /// Stop instance 2 even in a live session (costs an illegal disconnect)
+        #[arg(long)]
+        force: bool,
+    },
     /// Restarts the server and puts every open instance back in the world
     ///
     /// The game is not closed: it saves, drops to the title screen and comes
@@ -278,6 +291,31 @@ enum Command {
 }
 
 #[derive(Subcommand)]
+enum SessionAction {
+    /// Ends the session without an illegal disconnect: the guest dies in observe mode
+    ///
+    /// The host's `copias` goes off and the guest's death hook to observe, the
+    /// guest is killed, and the command waits until neither channel shows the
+    /// session. Both settings are put back afterwards. The guest pays a real
+    /// death: souls and hollowing.
+    End {
+        /// How long to wait for the session to go, after the death
+        #[arg(long, default_value_t = 60)]
+        seconds: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum HooksAction {
+    /// Puts Session, Backread, Trace and Death back the way a fresh arrival has them
+    Reset {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ScenarioAction {
     /// Validate the complete scenario without executing any steps
     Validate { scenario: String },
@@ -308,6 +346,9 @@ enum SaveAction {
         /// Close the game first, instead of refusing while it is open
         #[arg(long)]
         stop: bool,
+        /// With --stop, close it even in a live session (costs an illegal disconnect)
+        #[arg(long, requires = "stop")]
+        force: bool,
     },
     /// What is in the store, and where each live save is
     List,
@@ -418,6 +459,13 @@ enum ServerAction {
     Restart,
     /// Shows the server's state
     Status,
+    /// Waits until the server's sign cache holds this many signs, by its Sign poll lines
+    Wait {
+        #[arg(long)]
+        signs: u64,
+        #[arg(long, default_value_t = 60)]
+        seconds: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -470,10 +518,16 @@ enum GameAction {
         instance: String,
     },
     /// Stops an instance and waits until its prefix is free
+    ///
+    /// Refuses with `session_live` while the instance is in a session: a killed
+    /// client is an illegal disconnect. `session end` first, or `--force`.
     Stop {
         /// 1, 2, or both
         #[arg(long, default_value = "both")]
         instance: String,
+        /// Stop even in a live session (costs an illegal disconnect)
+        #[arg(long)]
+        force: bool,
     },
     /// Walks one instance from the title screen into the world
     Enter {
@@ -557,11 +611,12 @@ fn main() {
     // Read-only observation and the pad daemon do not monopolize the control lock.
     let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
     let exclusive = !reads_only && !matches!(&cli.command,
-        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session | Command::Players |
+        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session { action: None } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
         Command::Death { action: DeathAction::Status | DeathAction::Profile { action: ProfileAction::Show }, .. } |
         Command::Pad { action: PadAction::Start { foreground: true, .. } | PadAction::Status { .. } } |
+        Command::Server { action: ServerAction::Status | ServerAction::Wait { .. } } |
         Command::Save { action: SaveAction::List });
     let result = (|| {
         let _lock = if exclusive { Some(control::Lock::acquire(&paths::state_dir().join("control.lock"))?) } else { None };
@@ -604,16 +659,24 @@ fn run(command: Command) -> Result<(), String> {
         Command::Doctor => doctor(&environment),
         Command::Observe { instance, character, session } =>
             observe::command(&environment, &accounts(&instance)?, observe::Include { character, session }),
-        Command::Session => session::command(&environment),
+        Command::Session { action: None } => session::command(&environment),
+        Command::Session { action: Some(SessionAction::End { seconds }) } =>
+            session::end(&environment, std::time::Duration::from_secs(seconds)).map(|_| ()),
+        Command::Hooks { action: HooksAction::Reset { instance } } => hooks_reset(&environment, &accounts(&instance)?),
         Command::Character { instance } => character_command(&environment, &accounts(&instance)?),
         Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
         Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),
         Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless } => {
             up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog, auto_rematch, seamless)
         }
-        Command::Down => {
+        Command::Down { force } => {
             let stopped_game = if environment.installs.iter().any(|i| i.account == 2) {
-                game::stop_instance(&environment, 2).map(|_| ())
+                // Nothing goes down when the session is live: the server would
+                // take the session with it just the same.
+                match game::stop_instances(&environment, &[2], stop_guard(force)) {
+                    Err(e) if e.starts_with("session_live:") => return Err(e),
+                    other => other.map(|_| ()),
+                }
             } else { Ok(()) };
             let stopped_server = server::down();
             println!("  segunda instância: {}", yes_no(stopped_game.is_ok()));
@@ -677,6 +740,7 @@ fn run(command: Command) -> Result<(), String> {
                 print_server(&server::status(&environment));
                 Ok(())
             }
+            ServerAction::Wait { signs, seconds } => server::wait_signs(signs, std::time::Duration::from_secs(seconds)),
         },
         Command::Game { action } => match action {
             GameAction::Identity { instance, steam_id } => {
@@ -716,9 +780,9 @@ fn run(command: Command) -> Result<(), String> {
                 }
                 Ok(())
             }
-            GameAction::Stop { instance } => {
-                for account in accounts(&instance)? {
-                    match game::stop_instance(&environment, account)? {
+            GameAction::Stop { instance, force } => {
+                for (account, stopped) in game::stop_instances(&environment, &accounts(&instance)?, stop_guard(force))? {
+                    match stopped {
                         0 => println!("  instância {account}: já estava parada"),
                         n => println!("  instância {account}: {n} processo(s) encerrado(s)"),
                     }
@@ -788,8 +852,8 @@ fn run(command: Command) -> Result<(), String> {
             SaveAction::Backup { instance, label } => {
                 save::backup(&environment, &instance, label.as_deref())
             }
-            SaveAction::Restore { label, instance, stop } => {
-                save::restore(&environment, &instance, &label, stop)
+            SaveAction::Restore { label, instance, stop, force } => {
+                save::restore(&environment, &instance, &label, stop.then(|| stop_guard(force)))
             }
             SaveAction::List => save::list(&environment),
         },
@@ -807,6 +871,38 @@ fn run(command: Command) -> Result<(), String> {
         (_, Err(e)) => Err(format!("artifact_error: {e}")),
         _ => Ok(()),
     }
+}
+
+/// Passes only when every installed hook echoed its reset on every instance.
+fn hooks_reset(environment: &Environment, accounts: &[u8]) -> Result<(), String> {
+    let mut report = Vec::new();
+    let mut failures = Vec::new();
+    for &account in accounts {
+        let install = install_for(environment, account)?;
+        if observe::processes(environment, account).is_empty() {
+            return Err(format!("instance_stopped: conta {account}"));
+        }
+        let results = hooks::reset(install)?;
+        for r in &results {
+            println!("  conta {account}: {} {}{}", r.hook, r.outcome,
+                r.error.as_ref().map(|e| format!(" — {e}")).or_else(|| (!r.warnings.is_empty()).then(|| format!(" — {}", r.warnings.join("; ")))).unwrap_or_default());
+            if let Some(e) = &r.error { failures.push(format!("conta {account} {}: {e}", r.hook)); }
+        }
+        report.push(serde_json::json!({"instance": account, "hooks": results}));
+    }
+    output::data(serde_json::json!({"instances": report}));
+    match failures.first() {
+        None => Ok(()),
+        Some(_) if failures.iter().all(|f| f.contains("request_not_consumed") || f.contains("no_answer") || f.contains("probe_busy")) => {
+            output::outcome("inconclusive");
+            Err(format!("hooks_unanswered: {}", failures.join("; ")))
+        }
+        Some(_) => Err(format!("hooks_not_reset: {}", failures.join("; "))),
+    }
+}
+
+fn stop_guard(force: bool) -> game::StopGuard {
+    if force { game::StopGuard::Force } else { game::StopGuard::Refuse }
 }
 
 /// Turns `1`, `2` or `both` into the accounts to act on.

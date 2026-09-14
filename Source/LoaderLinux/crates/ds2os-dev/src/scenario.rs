@@ -15,9 +15,33 @@ struct Scenario {
     /// Games must already be stopped. Preserve originals, restore baseline,
     /// execute steps, stop owned clients and restore originals even on failure.
     baseline: Option<String>,
+    /// `reset` puts the request-driven hooks of every running declared instance
+    /// back to a fresh arrival's state before the steps, and again after them
+    /// when there is no baseline to stop the games. `keep` (the default) leaves
+    /// whatever the previous test set.
+    #[serde(default)]
+    hook_state: HookState,
     steps: Vec<Step>,
 }
 fn default_timeout() -> u64 { 300 }
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HookState { Reset, #[default] Keep }
+
+/// Resets the hooks of each running declared instance; stopped ones start fresh anyway.
+fn reset_hooks(env: &Environment, accounts: &[u8], phase: &str) -> Result<(), String> {
+    for &account in accounts {
+        if observe::processes(env, account).is_empty() { continue; }
+        let install = crate::install_for(env, account)?;
+        let results = crate::hooks::reset(install)?;
+        output::event("scenario_hooks_reset", json!({"phase": phase, "instance": account, "results": results}));
+        if let Some(failed) = results.iter().find(|r| r.outcome == "failed") {
+            return Err(format!("hooks_not_reset: conta {account} {}: {}", failed.hook, failed.error.clone().unwrap_or_default()));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -158,8 +182,9 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
                 "baseline": output::fingerprint(&save::snapshot_path(*i, label)),
                 "original": output::fingerprint(&save::snapshot_path(*i, &rescue))})).collect();
             std::fs::write(output::dir().join("fixtures.json"), serde_json::to_vec_pretty(&snapshots).unwrap()).map_err(|e| e.to_string())?;
-            save::restore(env, selection, label, false)?;
+            save::restore(env, selection, label, None)?;
         }
+        if scenario.hook_state == HookState::Reset { reset_hooks(env, &scenario.instances, "before")?; }
         for (index, step) in scenario.steps.iter().enumerate() {
             deadline.remaining()?;
             output::event("step_started", json!({"index": index, "step": format!("{step:?}")}));
@@ -170,6 +195,7 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
             result?;
             completed += 1;
         }
+        if scenario.hook_state == HookState::Reset && scenario.baseline.is_none() { reset_hooks(env, &scenario.instances, "after")?; }
         Ok(())
     })();
     if result.is_err() { capture(env, "failure"); }
@@ -177,7 +203,7 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
     let cleanup = if cleanup_needed {
         output::event("cleanup_started", json!({"restore": rescue}));
         let _ = crate::pad::send_until(1, "neutral", Duration::from_secs(6));
-        let result = save::restore(env, selection, &rescue, true);
+        let result = save::restore(env, selection, &rescue, Some(crate::game::StopGuard::Cleanup));
         output::event("cleanup_finished", json!({"ok": result.is_ok(), "error": result.as_ref().err()}));
         result
     } else { Ok(()) };
@@ -294,5 +320,16 @@ mod tests {
         assert!(validate(&serde_json::from_value(value.clone()).unwrap()).is_err());
         value["steps"] = json!([{"action":"assert","instance":1,"pointer":"/state","equals":"unknown"}]);
         assert!(validate(&serde_json::from_value(value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn hook_state_defaults_to_keep_and_rejects_anything_else() {
+        let mut value = builtin();
+        let kept: Scenario = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(kept.hook_state, HookState::Keep);
+        value["hookState"] = json!("reset");
+        assert_eq!(serde_json::from_value::<Scenario>(value.clone()).unwrap().hook_state, HookState::Reset);
+        value["hookState"] = json!("clean");
+        assert!(serde_json::from_value::<Scenario>(value).is_err());
     }
 }

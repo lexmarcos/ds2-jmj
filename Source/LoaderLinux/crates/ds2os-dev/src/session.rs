@@ -22,7 +22,7 @@
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::env::{Environment, Install};
 use crate::hook_request;
@@ -133,6 +133,13 @@ pub fn parse_channel(appended: &str) -> Result<Option<Channel>, String> {
 
 pub fn channel(install: &Install, timeout: Duration) -> Result<Channel, String> {
     hook_request::exchange(&install.game_dir, CHANNEL, "status\n", timeout, parse_channel)
+}
+
+/// Whether this instance's channel shows a session with two members seen in
+/// the last five seconds. One sample, no controller scan: the host's controller
+/// lingers at `0x10` minutes after a session ends, and that must not block a stop.
+pub fn live(install: &Install, timeout: Duration) -> Result<bool, String> {
+    channel(install, timeout).map(|c| fresh_session(&c).is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -358,6 +365,99 @@ pub fn command(env: &Environment) -> Result<(), String> {
     match assessment.p2p_session_verified {
         Some(_) => Ok(()),
         None => { crate::output::outcome("inconclusive"); Err(format!("session_unverified: {}", assessment.problems.join("; "))) }
+    }
+}
+
+/// Server lines that say a player left a session. Informational: the server
+/// logs only the first of each message type per connection, so silence here
+/// proves nothing.
+fn leave_lines(text: &str) -> Vec<String> {
+    text.lines().filter(|l| l.contains("LeaveSession") || l.contains("LeaveGuestPlayer")).map(str::to_owned).collect()
+}
+
+/// Ends the session between the two instances the legal way, measured 14/09:
+/// the host stops refusing the copy's death (`copias off`), the guest's hook
+/// goes to observe, and the guest dies the game's own death. The game tears the
+/// session down itself, so nobody is charged an illegal disconnect.
+///
+/// Passes when both channels show no live session in two samples 2.5 s apart,
+/// then puts the host's `copias` and the guest's mode back as they were.
+/// Costs the guest what a death costs in observe mode: souls and hollowing.
+pub fn end(env: &Environment, timeout: Duration) -> Result<Value, String> {
+    let (assessment, _) = observe(env, Duration::from_secs(30))?;
+    let with = |role: Role| assessment.instances.iter().filter(|v| v.role == role).map(|v| v.instance).collect::<Vec<_>>();
+    let (hosts, guests) = (with(Role::Host), with(Role::Guest));
+    if assessment.instances.iter().all(|v| v.members.is_empty()) {
+        let data = json!({"ended": false, "reason": "no_session", "assessment": assessment});
+        crate::output::data(data.clone());
+        crate::output::line(format_args!("nenhuma sessão viva nas duas instâncias; nada a terminar"));
+        return Ok(data);
+    }
+    let (&[host], &[guest]) = (hosts.as_slice(), guests.as_slice()) else {
+        crate::output::data(json!({"assessment": assessment}));
+        crate::output::outcome("inconclusive");
+        return Err(format!("session_unverified: papéis {:?}; problemas {:?}",
+            assessment.instances.iter().map(|v| (v.instance, v.role)).collect::<Vec<_>>(), assessment.problems));
+    };
+    let install = |account: u8| env.installs.iter().find(|i| i.account == account).ok_or_else(|| format!("instance_missing: conta {account}"));
+    let (host_install, guest_install) = (install(host)?, install(guest)?);
+    let host_copies = crate::death::status(host_install, Duration::from_secs(5))?.features.get("copias").copied()
+        .ok_or("malformed_answer: status do host sem copias")?;
+    let guest_mode = crate::death::status(guest_install, Duration::from_secs(5))?.mode;
+    let server_log = crate::paths::server_log();
+    let server_from = std::fs::metadata(&server_log).map(|m| m.len()).unwrap_or(0);
+    let started = Instant::now();
+
+    let attempt = (|| -> Result<(Value, u128), String> {
+        crate::death::send(host_install, &[crate::death::Order::feature("copias", false)?], Duration::from_secs(5))?;
+        crate::death::send(guest_install, &[crate::death::Order::Mode(crate::death::Mode::Observe)], Duration::from_secs(5))?;
+        let kill = crate::death::kill(env, guest, true, Duration::from_secs(15))?;
+        let deadline = Instant::now() + timeout;
+        let mut quiet_since: Option<Instant> = None;
+        loop {
+            crate::control::check()?;
+            let over = [host_install, guest_install].iter().all(|i| live(i, Duration::from_secs(3)) == Ok(false));
+            match (over, quiet_since) {
+                (true, Some(since)) if since.elapsed() >= SAMPLE_GAP => return Ok((kill, started.elapsed().as_millis())),
+                (true, None) => quiet_since = Some(Instant::now()),
+                (false, _) => quiet_since = None,
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("session_still_live: o convidado morreu e os canais ainda mostram a sessão após {}s", timeout.as_secs()));
+            }
+            crate::control::sleep(Duration::from_millis(500))?;
+        }
+    })();
+
+    // Back as they were, whatever happened; each confirmed by its echo.
+    let restored_host = crate::death::Order::feature("copias", host_copies)
+        .and_then(|order| crate::death::send(host_install, &[order], Duration::from_secs(10)));
+    let restored_guest = crate::death::send(guest_install, &[crate::death::Order::Mode(guest_mode)], Duration::from_secs(10));
+    let server_lines = crate::logs::read_lines_from(&server_log, server_from).map(|(t, _)| leave_lines(&t)).unwrap_or_default();
+    let mut notes = Vec::new();
+    if server_lines.is_empty() {
+        notes.push("server_census_silent: LogFirstMessageOfEachType só registra a primeira mensagem de cada tipo por conexão".to_owned());
+    }
+    let mut data = json!({"host": host, "guest": guest, "before": {"hostCopias": host_copies, "guestMode": guest_mode},
+        "restored": {"hostCopias": restored_host.as_ref().err(), "guestMode": restored_guest.as_ref().err()},
+        "serverLines": server_lines, "notes": notes});
+    match attempt {
+        Ok((kill, ms)) => {
+            data["ended"] = json!(true);
+            data["endedAfterMs"] = json!(ms);
+            data["kill"] = kill;
+            crate::output::data(data.clone());
+            restored_host.map_err(|e| format!("restore_failed: copias do host: {e}"))?;
+            restored_guest.map_err(|e| format!("restore_failed: modo do convidado: {e}"))?;
+            crate::output::line(format_args!("sessão terminada em {:.1}s: conta {guest} morreu em observe, conta {host} liberou a cópia", ms as f64 / 1000.0));
+            Ok(data)
+        }
+        Err(e) => {
+            data["ended"] = json!(false);
+            crate::output::data(data);
+            Err(e)
+        }
     }
 }
 

@@ -417,6 +417,95 @@ cada instância; `data.assessment.instances[]` traz `role` (`host`, `guest`,
 (`true` ou `false`) e `inconclusive` com `null`. O pedido de canal usa um
 `DS2_Channel.lock` do harness, como `DS2_Death`.
 
+### Terminar a sessão: `session end`
+
+```bash
+ds2os-dev session end --json
+```
+
+Matar um cliente com a sessão viva é uma desconexão ilegal, e o jogo conta
+isso no save. `session end` termina a sessão do jeito que o jogo aceita,
+receita medida em 14/09:
+
+1. `session` decide quem é host e quem é convidado. Se nenhum canal mostra
+   membros, termina `passed` com `data.ended: false`, `reason: no_session`.
+   Papéis incompletos são `inconclusive` (`session_unverified`).
+2. Guarda o `copias` do host e o modo do convidado. Depois desliga `copias` no
+   host, põe o convidado em `observe` e mata o convidado (`kill --real-death`).
+3. Passa quando os canais **das duas** instâncias ficam sem sessão viva em
+   duas leituras com pelo menos 2,5 s entre elas. O prazo é `--seconds`,
+   padrão 60 (`session_still_live` ao vencer). Não depende do controlador do
+   host, que continua em `0x10` por minutos.
+4. Devolve `copias` e o modo aos valores de antes, mesmo em falha, cada um
+   confirmado pelo eco (`restore_failed` se não voltar).
+
+O convidado paga uma morte de verdade: almas no chão e hollow. Queime uma
+efígie antes da próxima marca. `data.serverLines` traz as linhas
+`LeaveSession` e `LeaveGuestPlayer` do servidor, apenas como informação: o
+servidor só registra a primeira mensagem de cada tipo por conexão, e sem elas
+vem a nota `server_census_silent`. Medido: sessão terminada em 19,5 s, com as
+duas linhas no servidor.
+
+### O guarda de `session_live`
+
+`game stop`, `down` e `save restore --stop` perguntam ao canal de cada
+instância aberta, antes de fechar **qualquer** uma delas, se há sessão viva
+(membros vistos há até 5 s). Com sessão, recusam com `session_live` e não
+mexem em nada. O servidor também não cai no `down`. `--force` fecha mesmo
+assim e registra o evento `stop` com `phase: forced_with_session`.
+
+Canal que não responde (jogo iniciando, travado, DLL sem o hook) **não**
+bloqueia. A parada segue com o evento `phase: session_check_unknown`. A
+limpeza de um cenário com `baseline` também não recusa: o save é restaurado
+logo depois, e a desconexão vai embora com ele. Isso fica registrado como o
+evento `cleanup_kill_with_session`.
+
+## Os hooks de volta ao estado de chegada: `hooks reset`
+
+```bash
+ds2os-dev hooks reset --instance both --json
+```
+
+Um teste que recusa um motivo de sessão, força um mapa, arma um breakpoint ou
+muda a cobrança da morte deixa isso no jogo aberto, e o próximo teste herda.
+`hooks reset` desfaz cada item e só passa com o eco do hook. Hook ausente do
+recibo deste boot fica `skipped`, e recibo ausente é `receipt_missing`.
+
+| Hook | Pedido | Confirmação |
+| --- | --- | --- |
+| `DS2 Seamless Session` | `clear`, `role any`, `status` | `=== recusando a mascara 00000000, papel -1 ===` |
+| `DS2 Backread` | `unfocus`, `clear`, `status` | `pedido 00000000` e `foco 00000000` no cabeçalho do status |
+| `DS2 Trace` | `wpclear`, `clear`, `report` | `=== limpo ===` e depois `=== 0 armados, ... ===` (`wpclear` não escreve nada sem vigia armada, então não é esperado) |
+| `DS2 Death Intercept` | `observe`, as dez cobranças no padrão de boot (todas ligadas menos `mancha_online`), o `death profile` salvo por cima, `status` | modo e cobranças do status iguais ao esperado |
+
+O resultado é o estado que um `game enter` deixa. Isso inclui o perfil de
+morte, porque a chegada o aplica.
+
+O que não dá para desfazer vem escrito. O `DS2_Backread` não tem verbo que
+solte um `keep` antes do prazo, então mapas ainda com `forcado` diferente de
+zero voltam em `data.forced` com o aviso `keeps_remain`. Numa sessão, esses
+são os keeps da cópia remota e são esperados. Hooks que não responderam dão
+`inconclusive` (`hooks_unanswered`). Hooks que responderam outra coisa dão
+`failed` (`hooks_not_reset`).
+
+## Os signs do servidor: `server wait --signs`
+
+```bash
+ds2os-dev server wait --signs 0 --seconds 90 --json
+```
+
+Um cliente morto deixa o sign no cache do servidor até a conexão expirar, e
+esse sign parece real. `server wait` lê as linhas `Sign poll` que o servidor
+escreve **depois** de o comando começar e passa quando a mais recente mostra
+`N signs cached`. Esse número é o cache inteiro, não o de um jogador.
+`data.byPlayer` guarda o último poll de cada um.
+
+A linha só existe com `DS2_StickySigns` ligado. O servidor limita a uma por
+jogador a cada 10 s, e na prática aparece a cada ~30 s por jogador. Nenhum
+poll dentro do prazo dá `inconclusive`, nunca `passed`. Poll com outro número
+no fim do prazo dá `failed` (`signs_remain`). O comando é só leitura e roda ao
+lado de um controlador.
+
 ## Cenários
 
 ```bash
@@ -440,6 +529,7 @@ Formato de arquivo:
   "name": "meu-teste",
   "instances": [1, 2],
   "timeoutSeconds": 300,
+  "hookState": "keep",
   "steps": [
     {"action": "observe"},
     {"action": "wait", "instance": 2, "pointer": "/state", "equals": "world", "seconds": 30},
@@ -452,6 +542,13 @@ O arquivo inteiro é validado antes dos passos. Campos desconhecidos, contas
 não declaradas, valores inválidos e cenários sem assertions são recusados.
 `instances` aceita `[1]`, `[2]` ou `[1,2]`; são permitidos até 200 passos e
 `timeoutSeconds` de 1 a 3600.
+
+`hookState` é `keep` (padrão) ou `reset`. Com `reset`, o `hooks reset` roda
+nas instâncias declaradas que estiverem abertas antes do primeiro passo. Sem
+`baseline`, roda de novo depois do último passo, porque com `baseline` os
+jogos são fechados na limpeza. Instância parada é pulada, já que volta limpa
+ao iniciar. Cada reset gera o evento `scenario_hooks_reset`. O padrão é `keep`
+para não mudar os cenários que já existem.
 
 | `action` | Campos adicionais |
 | --- | --- |
@@ -491,7 +588,8 @@ ds2os-dev save restore majula-ready --instance both --stop --json
 `both` exige as duas instalações. Labels aceitam letras ASCII, números,
 underscore e hífen; não inclua `conta1-` nem `.ds3os` ao restaurar. A listagem
 JSON devolve o `label` exato. Um backup não sobrescreve um label existente.
-O save retail `.sl2` não é usado.
+O save retail `.sl2` não é usado. `restore --stop` passa pelo guarda de
+`session_live` (ver "A sessão"); `--force` só vale junto com `--stop`.
 
 As cópias passam por arquivo temporário, `sync_all` e rename; uma falha de
 cópia não trunca o save anterior. `restore` guarda uma cópia de resgate antes

@@ -260,7 +260,7 @@ pub fn restore(
     environment: &Environment,
     instance: &str,
     label: &str,
-    stop_first: bool,
+    stop_first: Option<crate::game::StopGuard>,
 ) -> Result<(), String> {
     validate_label(label)?;
     let chosen = installs(environment, instance)?;
@@ -277,20 +277,17 @@ pub fn restore(
         }
     }
 
-    for install in &chosen {
-        let running = !crate::observe::processes(environment, install.account).is_empty();
-
-        if running {
-            if !stop_first {
-                return Err(format!(
-                    "conta {}: o jogo está aberto, e ele reescreve o save ao sair. \
-Feche com `ds2os-dev game stop --instance {}` ou repita com --stop",
-                    install.account, install.account
-                ));
-            }
-            println!("  conta {}: fechando o jogo antes de restaurar", install.account);
-            crate::game::stop_instance(environment, install.account)?;
-        }
+    let running: Vec<u8> = chosen.iter().map(|i| i.account)
+        .filter(|account| !crate::observe::processes(environment, *account).is_empty()).collect();
+    if let Some(&account) = running.first() {
+        let Some(guard) = stop_first else {
+            return Err(format!(
+                "conta {account}: o jogo está aberto, e ele reescreve o save ao sair. \
+Feche com `ds2os-dev game stop --instance {account}` ou repita com --stop"
+            ));
+        };
+        println!("  fechando o jogo antes de restaurar: conta(s) {running:?}");
+        crate::game::stop_instances(environment, &running, guard)?;
     }
 
     // Confirm every destination before changing any live save.

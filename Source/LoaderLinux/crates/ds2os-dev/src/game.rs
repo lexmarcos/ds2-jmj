@@ -420,26 +420,82 @@ fn trim_slash(path: &str) -> String {
     path.trim_end_matches('/').to_owned()
 }
 
-/// Stops one instance and does not return until its prefix is free.
-pub fn stop_instance(environment: &Environment, account: u8) -> Result<usize, String> {
-    let prefix = compat_data(environment, account)?;
+/// What a stop does when the instance is in a live session.
+///
+/// Killing a client mid-session is an illegal disconnect, and the game counts
+/// them in the save until the character can do nothing multiplayer at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopGuard {
+    /// Refuse with `session_live`; the default for every command.
+    Refuse,
+    /// `--force`: stop anyway, and say so in events.
+    Force,
+    /// A scenario's cleanup with a baseline: the save is restored afterwards,
+    /// so the strike is thrown away with it. Recorded as `cleanup_kill_with_session`.
+    Cleanup,
+}
 
-    let mut pids = instance_pids(&prefix);
+/// The decision, from what the channel said. A channel that does not answer
+/// does not block: that is a game starting, hung, or on a DLL without the hook,
+/// and a stop that refuses exactly when the game is unresponsive is useless.
+/// Returns the event phase to record, if any.
+pub fn stop_verdict(account: u8, live: &Result<bool, String>, guard: StopGuard) -> Result<Option<&'static str>, String> {
+    match (live, guard) {
+        (Ok(false), _) => Ok(None),
+        (Ok(true), StopGuard::Refuse) => Err(format!(
+            "session_live: a conta {account} está numa sessão, e fechar o jogo agora custa um strike no save; \
+termine com `ds2os-dev session end` ou passe --force")),
+        (Ok(true), StopGuard::Force) => Ok(Some("forced_with_session")),
+        (Ok(true), StopGuard::Cleanup) => Ok(Some("cleanup_kill_with_session")),
+        (Err(_), _) => Ok(Some("session_check_unknown")),
+    }
+}
+
+fn running_pids(environment: &Environment, account: u8) -> Result<Vec<u32>, String> {
+    let mut pids = instance_pids(&compat_data(environment, account)?);
     if let Some(pid) = proc::running(&paths::instance_pid(account), "Injector.exe") {
         pids.push(pid);
     }
-    if pids.is_empty() {
-        return Ok(0);
-    }
+    Ok(pids)
+}
 
-    let stopped = pids.len();
-    for pid in &pids {
-        proc::stop(*pid);
+/// Asks every running instance in `accounts` about its session before any of
+/// them is touched, so `--instance both` never closes one and then refuses the other.
+fn guard_stops(environment: &Environment, accounts: &[u8], guard: StopGuard) -> Result<(), String> {
+    for &account in accounts {
+        if running_pids(environment, account)?.is_empty() { continue; }
+        let Some(install) = environment.installs.iter().find(|i| i.account == account) else { continue };
+        let live = crate::session::live(install, std::time::Duration::from_secs(3));
+        let verdict = stop_verdict(account, &live, guard);
+        let phase = match &verdict { Ok(phase) => *phase, Err(_) => Some("refused_session_live") };
+        if let Some(phase) = phase {
+            let kind = if phase == "cleanup_kill_with_session" { phase } else { "stop" };
+            crate::output::event(kind, serde_json::json!({"instance": account, "phase": phase,
+                "live": live.as_ref().ok(), "error": live.as_ref().err()}));
+        }
+        verdict?;
     }
-    if !proc::wait_gone(&pids, std::time::Duration::from_secs(30)) {
-        return Err(format!(
-            "a instância {account} não morreu; um processo dela ainda segura o prefixo"
-        ));
+    Ok(())
+}
+
+/// Stops each instance and does not return until its prefix is free. Refuses
+/// all of them, before stopping any, when one is in a live session (see `StopGuard`).
+pub fn stop_instances(environment: &Environment, accounts: &[u8], guard: StopGuard) -> Result<Vec<(u8, usize)>, String> {
+    guard_stops(environment, accounts, guard)?;
+    let mut stopped = Vec::new();
+    for &account in accounts {
+        let pids = running_pids(environment, account)?;
+        if !pids.is_empty() {
+            for pid in &pids {
+                proc::stop(*pid);
+            }
+            if !proc::wait_gone(&pids, std::time::Duration::from_secs(30)) {
+                return Err(format!(
+                    "a instância {account} não morreu; um processo dela ainda segura o prefixo"
+                ));
+            }
+        }
+        stopped.push((account, pids.len()));
     }
     Ok(stopped)
 }
@@ -485,4 +541,25 @@ pub fn timer_log(environment: &Environment) -> Option<PathBuf> {
 
 pub fn exists(path: &Path) -> bool {
     path.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_live_session_refuses_unless_forced_or_cleaned_up() {
+        let live = Ok(true);
+        let error = stop_verdict(2, &live, StopGuard::Refuse).unwrap_err();
+        assert!(error.starts_with("session_live:"), "{error}");
+        assert_eq!(stop_verdict(2, &live, StopGuard::Force), Ok(Some("forced_with_session")));
+        assert_eq!(stop_verdict(2, &live, StopGuard::Cleanup), Ok(Some("cleanup_kill_with_session")));
+    }
+
+    #[test]
+    fn no_session_stops_quietly_and_an_unanswered_channel_does_not_block() {
+        assert_eq!(stop_verdict(1, &Ok(false), StopGuard::Refuse), Ok(None));
+        let silent = Err("request_not_consumed: nada leu DS2_Channel.req".to_owned());
+        assert_eq!(stop_verdict(1, &silent, StopGuard::Refuse), Ok(Some("session_check_unknown")));
+    }
 }

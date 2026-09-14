@@ -49,6 +49,9 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `up` / `down` | `up` requires both installations and confirms arrival; `down` stops the server and second instance |
 | `reload` | restarts the server and puts everyone back in the world, without closing the game |
 | `server up\|down\|restart\|status` | the local server on its own |
+| `server wait --signs N` | passes on a `Sign poll` line written after it started saying `N signs cached`; no poll is inconclusive |
+| `session end` | ends the session the legal way (host `copias off`, guest dies in observe), waits for both channels to drop it, restores both settings |
+| `hooks reset --instance both` | Session, Backread, Trace and Death back to a fresh arrival's state, each confirmed by its echo; scenarios opt in with `"hookState": "reset"` |
 | `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations |
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
@@ -257,7 +260,11 @@ measured and cleared before the game finally said what was wrong — and it only
 said it on the client's own screen, never in any log.
 
 So: **`game stop` while a session is live costs a strike.** End the session
-first (a death, the timer). If a character suddenly cannot place a sign, look
+first: `ds2os-dev session end`. `game stop`, `down` and `save restore --stop`
+ask each open instance's channel first and refuse with `session_live`, before
+stopping any of them. `--force` overrides. A channel that does not answer does
+not block. A scenario's baseline cleanup kills anyway, because the save is
+restored right after, and records `cleanup_kill_with_session`. If a character suddenly cannot place a sign, look
 at its screen before measuring anything.
 
 **A co-op test can cost a strike, and the guest is who pays.** Measured
@@ -314,8 +321,8 @@ says whether the machine can form a session at all.
 
 **Quit Game is refused while a PvP session is live**, on both sides. The menu
 entry highlights and A does nothing, so `game leave` sits there pressing
-buttons until it times out. End the session first: a death, the timer, or
-`game stop`.
+buttons until it times out. End the session first: `session end`, a death or
+the timer.
 
 `game focus <n>`, `pad seq --focus <n>` and `game shot` all mean the **instance**,
 resolved by the owning process. They used to index the window list, which put
@@ -509,7 +516,7 @@ the connection times out the sign is still in the cache: the other player polls
 it, sees it on the ground, and can touch it. The summon then fails because
 nobody is waiting behind it, which reads as a summoning bug and is not one.
 After stopping an instance, wait for the server to say `0 signs cached` before
-believing anything about signs.
+believing anything about signs: `ds2os-dev server wait --signs 0`.
 
 **Two Steam accounts on one machine cannot make a third player.** Anything
 about three or more players in a session is untestable here, and the honest
