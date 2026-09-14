@@ -186,8 +186,26 @@ errors are counted there: `Entry.cpp`, `ReplaceServerPortHook.cpp`, and
 `<atomic>` — latent, it compiles only because MSVC pulls the header in.
 
 Measured 14/09: the receipt's `build` came back as the pushed commit on both
-instances after `injector fetch` → `up`. `fetch` has not yet waited out a run
-still in progress, nor met a failed run.
+instances after `injector fetch` → `up`. Later the same day `fetch` waited
+four minutes on run 34903919120 while it built, then downloaded it. It has not
+yet met a failed run.
+
+### The timer patch log throttle
+
+`DS2_TimerParamPatch.log` now writes the first 100 breakpoint hits, every
+`write_failed`, and then one line a minute carrying `suppressed_since_last`
+(injector 858f4cd2). The build is installed, but the throttle has not been
+seen working: the breakpoint only fires while a phantom timer runs, and
+instance 2 idle in the world for fifteen minutes wrote nothing but its
+`installed` line. The proof is a co-op session of a few minutes, then
+`suppressed_since_last=` lines a minute apart after the first 100 hits.
+
+### `save prune` on the real store
+
+`save prune` was run for real only against a copy of the store (same names
+and dates, tiny files): 57 snapshots became 28, three rescues kept per account
+and `conta2-antes-de-nivel1` left alone as a chosen label. The real store,
+36 rescues and about 230 MB, has only been through `--dry-run`.
 
 ## Understood incompletely
 

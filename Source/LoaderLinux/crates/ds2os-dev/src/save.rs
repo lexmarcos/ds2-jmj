@@ -238,17 +238,58 @@ pub fn list(environment: &Environment) -> Result<(), String> {
     let snapshots: Vec<_> = names.iter().filter_map(|name| {
         let stem = name.strip_suffix(".ds3os")?;
         let (account, label) = stem.strip_prefix("conta")?.split_once('-')?;
-        Some(serde_json::json!({"instance": account.parse::<u8>().ok()?, "label": label, "path": store().join(name)}))
+        Some(serde_json::json!({"instance": account.parse::<u8>().ok()?, "label": label, "rescue": crate::hygiene::is_rescue(name), "path": store().join(name)}))
     }).collect();
     crate::output::data(serde_json::json!({"live": live, "snapshots": snapshots}));
 
     if names.is_empty() {
         println!("  nenhum ainda; `ds2os-dev save backup` faz o primeiro");
     }
-    for name in names {
+    let (rescues, chosen): (Vec<&String>, Vec<&String>) = names.iter().partition(|name| crate::hygiene::is_rescue(name));
+    for name in chosen {
         println!("  {name}");
     }
+    for install in &environment.installs {
+        let prefix = format!("conta{}-antes-de-", install.account);
+        let mine: Vec<&&String> = rescues.iter().filter(|n| n.starts_with(&prefix)).collect();
+        if let Some(newest) = mine.iter().max_by_key(|n| std::fs::metadata(store().join(n.as_str())).and_then(|m| m.modified()).ok()) {
+            println!("  conta {}: {} cópia(s) de resgate antes-de-*, a mais nova {newest}; `save prune` apaga as antigas", install.account, mine.len());
+        }
+    }
     Ok(())
+}
+
+/// This invocation's evidence directory name, as printed after "evidências:".
+fn run_id() -> String {
+    crate::output::dir().file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| validate_label(n).is_ok())
+        .unwrap_or_else(stamp)
+}
+
+/// Removes the rescue copies `restore` leaves beyond the `keep` newest of each account.
+pub fn prune(environment: &Environment, instance: &str, pattern: &str, keep: usize, dry_run: bool) -> Result<(), String> {
+    crate::hygiene::validate_pattern(pattern)?;
+    let chosen = installs(environment, instance)?;
+    let all = crate::hygiene::snapshots(&store());
+    let mut report = Vec::new();
+    let mut failures = Vec::new();
+    for install in &chosen {
+        let (delete, kept) = crate::hygiene::prune_plan(&all, install.account, pattern, keep);
+        let mut removed = Vec::new();
+        for snapshot in &delete {
+            if dry_run { continue; }
+            match std::fs::remove_file(store().join(&snapshot.name)) {
+                Ok(()) => removed.push(snapshot.name.clone()),
+                Err(e) => failures.push(format!("{}: {e}", snapshot.name)),
+            }
+        }
+        let bytes: u64 = delete.iter().map(|s| s.bytes).sum();
+        println!("  conta {}: {} {} ({} MB), {} mantida(s)", install.account,
+            if dry_run { "apagaria" } else { "apagou" }, if dry_run { delete.len() } else { removed.len() }, bytes >> 20, kept.len());
+        for s in &delete { println!("    {} {}", if dry_run { "-" } else { "x" }, s.name); }
+        report.push(serde_json::json!({"instance": install.account, "delete": delete, "removed": removed, "kept": kept, "bytes": bytes}));
+    }
+    crate::output::data(serde_json::json!({"pattern": pattern, "keep": keep, "dryRun": dry_run, "accounts": report, "errors": failures}));
+    if failures.is_empty() { Ok(()) } else { Err(format!("prune_failed: {}", failures.join("; "))) }
 }
 
 /// Puts a snapshot back over the live save.
@@ -304,8 +345,9 @@ Feche com `ds2os-dev game stop --instance {account}` ou repita com --stop"
         })?;
 
         // The undo needs an undo. This is cheap and it is the only thing
-        // standing between a wrong label and a lost character.
-        let rescue = snapshot_path(install.account, &format!("antes-de-{label}-{}", stamp()));
+        // standing between a wrong label and a lost character. Named after the
+        // run that made it, so its evidence directory says why.
+        let rescue = snapshot_path(install.account, &format!("antes-de-{label}-{}", run_id()));
         copy(&live, &rescue)?;
 
         let bytes = copy(&source, &live)?;

@@ -45,6 +45,48 @@ lê configuração e DLL no lançamento do processo; mudar o arquivo com o jogo
 aberto não atualiza os hooks carregados. Use um relançamento para aplicar uma
 nova DLL ou configuração. `reload` serve para alterações do servidor.
 
+## Higiene: logs, resgates, órfãos do Wine e capturas
+
+**Logs dos hooks.** O injector não gira os próprios logs; o do timer chegou a
+412 MB. `game prepare` (e portanto `up`) renomeia todo `DS2*.log` acima de
+8 MB para `<nome>.1` na instalação cujo jogo está **fechado**, substituindo o
+`.1` anterior (uma geração só). Com o jogo aberto nada é movido e o item sai
+como `skipped_running`. Cada instalação aparece no evento `logs_rotated`
+(`name`, `bytes`, `action`). Um log girado durante a própria execução aparece
+no índice de logs como `absent`.
+
+**Cópias de resgate.** `save restore` guarda o save substituído como
+`antes-de-<label>-<runId>`, com o id da execução que o fez (o diretório de
+evidências). As antigas tinham um carimbo `AAAAMMDD-HHMMSS` no lugar.
+
+```bash
+ds2os-dev save prune --keep 5 --dry-run    # o que sairia
+ds2os-dev save prune --keep 5              # apaga
+```
+
+`prune` apaga, por conta, as cópias de resgate além das `--keep` mais novas
+por data de modificação. Só conta como resgate um nome
+`conta<N>-antes-de-<label>-` seguido de carimbo ou runId: um label escolhido que
+começa com `antes-de-` (como `antes-de-nivel1`) nunca sai. `--pattern` tem de
+começar com `antes-de-` (`pattern_not_rescue`). `save list` mostra os labels
+escolhidos e resume os resgates por conta; no JSON cada snapshot tem `rescue`.
+
+**Órfãos do Wine.** `up`, quando nenhum `DarkSoulsII.exe` está aberto, encerra
+por pid os órfãos que `doctor` lista em `wine_orphans` (SIGTERM, SIGKILL
+depois de 3 s, e só conta como encerrado quando o pid não é mais aquele
+processo) e registra `orphans_cleared` com as conexões X11 antes e depois.
+Órfão é `xalia.exe` num prefixo sem jogo, ou `winedevice.exe` num prefixo
+**sem `services.exe`**. Um `winedevice.exe` com a sessão Wine viva hospeda os
+drivers dela, entre eles o `winebus.sys` do controle, e o `services.exe` não o
+traz de volta: em 14/09 a primeira versão desta limpeza matou os dois do
+prefixo 1 (vivo desde 13/09, com o Steam principal pendurado nele) e o jogo
+lançado em seguida ficou no "PRESS START" sem ver o pad.
+
+**Capturas.** `game shot --scale 0.5` grava em meia resolução (média de cada
+bloco 2×2; linha/coluna ímpar descartada); o padrão de `game shot` e de
+`pad seq --shot` continua `1`. Nos cenários o padrão é meia escala;
+`"screenshots": "full"` grava na resolução da janela.
+
 ## O injector do CI: `injector fetch`, `check` e `status`
 
 `Injector.dll` só compila com MSVC, então só existe no CI
@@ -215,7 +257,7 @@ outra notação pela API).
 | `api_identity` | A API lista a conta; no mundo sem registro é `problem` (offline ou outra conta) |
 | `extra_game_processes` | Nenhum `DarkSoulsII.exe` fora dos prefixos das instâncias |
 | `pad` | O pad está no ar; jogo aberto sem pad é `warning` |
-| `wine_orphans` | `xalia.exe`/`winedevice.exe` de prefixos sem jogo |
+| `wine_orphans` | `xalia.exe` de prefixos sem jogo e `winedevice.exe` de prefixos sem `services.exe` |
 | `x11_clients` | Conexões ao X11 em `/proc/net/unix`; `warning` a partir de 200 (o Xorg recusa acima de 256) |
 
 `config_drift` é a armadilha de `up`, que reescreve `Injector.config` com as
@@ -768,6 +810,7 @@ Formato de arquivo:
   "instances": [1, 2],
   "timeoutSeconds": 300,
   "hookState": "keep",
+  "screenshots": "half",
   "steps": [
     {"action": "observe"},
     {"action": "wait", "instance": 2, "pointer": "/state", "equals": "world", "seconds": 30},

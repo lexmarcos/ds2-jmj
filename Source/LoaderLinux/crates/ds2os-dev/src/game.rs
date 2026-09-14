@@ -28,6 +28,8 @@ pub struct Prepared {
     pub launch_options: String,
     pub injector_config: PathBuf,
     pub copied: Vec<String>,
+    /// Hook logs above 8 MB moved to `.1`, or left because the game is open.
+    pub rotated: Vec<crate::hygiene::Rotated>,
     pub timer_seconds: f64,
     pub timer_patch: bool,
 }
@@ -60,6 +62,9 @@ pub fn prepare(
         .injector_source
         .clone()
         .ok_or("não achei Injector.dll; rode `ds2os-dev doctor`")?;
+
+    let running = compat_data(environment, install.account).map(|p| !instance_pids(&p).is_empty()).unwrap_or(false);
+    let rotated = crate::hygiene::rotate_logs(&game_dir, crate::hygiene::ROTATE_ABOVE, running);
 
     let mut copied = Vec::new();
     for name in BINARIES {
@@ -112,6 +117,7 @@ pub fn prepare(
         game_dir,
         injector_config,
         copied,
+        rotated,
         timer_seconds,
         timer_patch,
     })

@@ -21,6 +21,9 @@ struct Scenario {
     /// whatever the previous test set.
     #[serde(default)]
     hook_state: HookState,
+    /// `half` (the default) captures at 2:1, `full` at the window's resolution.
+    #[serde(default)]
+    screenshots: crate::screen::Scale,
     steps: Vec<Step>,
 }
 fn default_timeout() -> u64 { 300 }
@@ -199,17 +202,17 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
             // Byte offsets of every log, so each step's own lines can be cut out afterwards.
             let cursors = output::log_cursors(env);
             output::event("step_started", json!({"index": index, "step": format!("{step:?}"), "logBytes": output::log_sizes(&cursors)}));
-            let result = execute(env, step, &scenario.instances, deadline);
+            let result = execute(env, step, &scenario.instances, deadline, scenario.screenshots);
             output::event("step_finished", json!({"index": index, "ok": result.is_ok(), "error": result.as_ref().err(), "logBytes": output::log_sizes(&cursors)}));
             // Evidence failure is recorded separately from the assertion verdict.
-            capture(env, &format!("step-{index}"));
+            capture(env, &format!("step-{index}"), scenario.screenshots);
             result?;
             completed += 1;
         }
         if scenario.hook_state == HookState::Reset && scenario.baseline.is_none() { reset_hooks(env, &scenario.instances, "after")?; }
         Ok(())
     })();
-    if result.is_err() { capture(env, "failure"); }
+    if result.is_err() { capture(env, "failure", scenario.screenshots); }
     // Cleanup has its own bounded process-stop operations and runs after cancellation too.
     let cleanup = if cleanup_needed {
         output::event("cleanup_started", json!({"restore": rescue}));
@@ -228,12 +231,12 @@ pub fn run(env: &Environment, source: &str) -> Result<(), String> {
     result
 }
 
-fn capture(env: &Environment, name: &str) {
+fn capture(env: &Environment, name: &str, scale: crate::screen::Scale) {
     let dir = output::dir().join(name);
-    if let Err(e) = crate::shot_into(env, Some(dir)) { output::event("capture_error", json!(e)); }
+    if let Err(e) = crate::shot_into(env, Some(dir), scale) { output::event("capture_error", json!(e)); }
 }
 
-fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline) -> Result<(), String> {
+fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline, scale: crate::screen::Scale) -> Result<(), String> {
     match step {
         Step::Launch { instance } => {
             if !crate::pad::running(1) { return Err("pad_unavailable: inicie o pad antes de launch".into()); }
@@ -261,7 +264,7 @@ fn execute(env: &Environment, step: &Step, accounts: &[u8], deadline: Deadline) 
         Step::Assert { instance, pointer, equals } => assertion(env, *instance, pointer, equals, None, deadline),
         Step::Wait { instance, pointer, equals, seconds } => assertion(env, *instance, pointer, equals, Some(Duration::from_secs(*seconds)), deadline),
         Step::Observe => { let value = observe::collect_until(env, accounts, deadline); output::event("observation", json!(value)); Ok(()) },
-        Step::Screenshot => crate::shot_into(env, Some(output::dir().join("screenshots"))),
+        Step::Screenshot => crate::shot_into(env, Some(output::dir().join("screenshots")), scale),
         Step::Kill { instance } => crate::death::kill(env, *instance, false, deadline.remaining()?.min(Duration::from_secs(15)))
             .map(|data| output::event("kill", data)),
         Step::Teleport { instance, x, y, z } => crate::teleport::teleport(env, *instance, [*x, *y, *z])

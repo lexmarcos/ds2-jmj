@@ -46,19 +46,19 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `scenario validate <file\|world-ready> --json` | validates the entire scenario without executing steps |
 | `scenario run <file\|world-ready> --json` | assertions, step evidence and optional save baseline/cleanup |
 | `game identity --instance N <SteamID64>` | binds an instance to its expected account; required for `enter` and scenarios |
-| `up` / `down` | `up` requires both installations and confirms arrival; `down` stops the server and second instance |
+| `up` / `down` | `up` requires both installations and confirms arrival, and with no game open ends the Wine orphans first; `down` stops the server and second instance |
 | `reload` | restarts the server and puts everyone back in the world, without closing the game |
 | `server up\|down\|restart\|status` | the local server on its own |
 | `server wait --signs N` | passes on a `Sign poll` line written after it started saying `N signs cached`; no poll is inconclusive |
 | `session end` | ends the session the legal way (host `copias off`, guest dies in observe), waits for both channels to drop it, restores both settings |
 | `hooks reset --instance both` | Session, Backread, Trace and Death back to a fresh arrival's state, each confirmed by its echo; scenarios opt in with `"hookState": "reset"` |
-| `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations |
+| `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations; with that game closed, rotates any `DS2*.log` above 8 MB to `.1` |
 | `injector fetch` | waits for the CI run that built HEAD's injector sources, downloads it into `~/Downloads/injector` (previous kept as `injector.prev`), writes `manifest.json`, cancels `ci.yml`; says `needsPrepare`/`needsRelaunch`, never installs |
 | `injector check [files] \| --all \| --self-test` | mingw **syntax** check of injector `.cpp` changed against HEAD, counting only errors HEAD's version lacks; not an MSVC build |
 | `injector status` | the manifest, each installation's DLL and the `build` commit each running game's receipt announces |
 | `game launch\|stop --instance 1\|2\|both` | starts or stops an instance, through Proton, without Steam |
 | `game enter\|leave --instance <1\|2>` | walks the menus from the title into the world, and back out |
-| `game focus <1\|2>` / `game shot` | window focus and per-window PNG capture |
+| `game focus <1\|2>` / `game shot [--scale 0.5]` | window focus and per-window PNG capture; scenarios capture at half scale unless `"screenshots": "full"` |
 | `players --json` | API records; unsupported souls/death/session counters are `null` |
 | `watch` | deaths and what they cost, respawns, warps, session end requests, channel members, crashes, signs and each `RequestNotify*`, from every hook log and the server, plus API presence |
 | `timeline --last 10m \| --since HH:MM \| --run <id>` | server, hook and harness logs merged, ordered and classified; hook logs without a clock only appear with `--run` |
@@ -75,6 +75,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `backread --instance N load\|focus\|unfocus\|clear\|keep\|status` | the backread hook's orders, each confirmed by its echo, status included |
 | `game options` | the line to paste into Steam's launch options |
 | `game watch` | asks the injector to watch the area address for a few seconds |
+| `save prune --keep N [--dry-run]` | deletes each account's `antes-de-*` rescue copies beyond the newest N; never a label somebody chose |
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |
 | `steam2 init\|run\|show` | the second Steam client, which gives instance 2 its own account |
 | `logs <server\|instance2\|injector\|timer\|cli\|death\|backread\|channel\|crash\|trace\|session\|seamless\|respawn\|rematch\|memprobe>` | with `--instance N`, `-g <pattern>`, `-n <lines>`, `-f` |
@@ -194,15 +195,20 @@ explains it. The connections are not the harness's: each Wine prefix leaves
 `winedevice.exe` behind when a game stops, and they pile up across launches —
 22 hours' worth were still connected when this first bit.
 
-With both games stopped, they are orphans and safe to clear. `doctor` lists
-them under `wine_orphans`, with the pids to kill, and counts the connections
-under `x11_clients`. Match the process name, not the command line: `pkill -f`
-also matches the shell running it, and kills that first.
+**`winedevice.exe` is not always an orphan, and killing the wrong one costs
+the gamepad.** It hosts the Wine session's drivers — `winebus.sys` among them,
+which is how the game sees the virtual pad — and `services.exe` does not start
+it again. A prefix's Wine session can outlive its game: prefix 1's has run
+since 13/09 with the main Steam client hanging off it. On 14/09 killing its two
+`winedevice.exe` with no game open left the next game at "PRESS START", deaf to
+every press, while account 2 on the same pad walked in. `sc query winebus`
+said `STOPPED`, exit 1067. So a `winedevice.exe` is an orphan only when its
+prefix has no `services.exe`; `xalia.exe` with no game in its prefix always is.
 
-```
-pkill -x xalia.exe ; pkill -x winedevice.exe
-ss -x | grep -c X11-unix        # was 201, then 171
-```
+`doctor` lists exactly those under `wine_orphans`, with the pids, and counts the
+connections under `x11_clients`; `up` ends them when no game is open. By hand,
+kill by pid, never `pkill -x winedevice.exe`, and never `pkill -f`, which
+matches the shell running it too.
 
 Two smaller rules, both learned by losing an afternoon:
 

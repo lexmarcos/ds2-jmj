@@ -17,6 +17,7 @@ mod death;
 mod doctor;
 mod hook_request;
 mod hooks;
+mod hygiene;
 mod injector;
 mod memory;
 mod output;
@@ -481,6 +482,21 @@ enum SaveAction {
     },
     /// What is in the store, and where each live save is
     List,
+    /// Removes the rescue copies `restore` leaves (antes-de-*) beyond the newest N of each account
+    Prune {
+        /// How many to keep per account
+        #[arg(long, default_value_t = 5)]
+        keep: usize,
+        /// Only rescue copies: must start with antes-de-
+        #[arg(long, default_value = "antes-de-")]
+        pattern: String,
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+        /// Say what would go, without deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -700,6 +716,9 @@ enum GameAction {
         /// Where to write them; defaults to the harness log directory
         #[arg(long)]
         out: Option<PathBuf>,
+        /// 1 for the window's resolution, 0.5 for half (a quarter of the bytes)
+        #[arg(long, default_value_t = 1.0)]
+        scale: f32,
     },
 }
 
@@ -1010,7 +1029,7 @@ fn run(command: Command) -> Result<(), String> {
                 println!("  dump da estrutura pedido; sai no DS2_AreaProbe.log");
                 Ok(())
             }
-            GameAction::Shot { out } => shot(&environment, out),
+            GameAction::Shot { out, scale } => shot(&environment, out, screen::Scale::parse(scale)?),
             GameAction::Focus { window } => {
                 let target = focus_target(&environment, window)?;
                 screen::focus(&target)?;
@@ -1028,6 +1047,7 @@ fn run(command: Command) -> Result<(), String> {
                 save::restore(&environment, &instance, &label, stop.then(|| stop_guard(force)))
             }
             SaveAction::List => save::list(&environment),
+            SaveAction::Prune { keep, pattern, instance, dry_run } => save::prune(&environment, &instance, &pattern, keep, dry_run),
         },
         Command::Logs { which, instance, lines, grep, follow } => {
             let path = log_path(&environment, which, instance)
@@ -1268,7 +1288,7 @@ fn pad_command(environment: &Environment, action: PadAction) -> Result<(), Strin
             }
 
             if shot {
-                shot_into(environment, None)?;
+                shot_into(environment, None, screen::Scale::Full)?;
             }
             Ok(())
         }
@@ -1606,11 +1626,11 @@ fn focus_target(environment: &Environment, instance: usize) -> Result<screen::Ga
 
 /// Writes one PNG per game window. Naming them by index keeps the paths stable
 /// within an execution; a unique suffix preserves every capture.
-fn shot(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
-    shot_into(environment, out)
+fn shot(environment: &Environment, out: Option<PathBuf>, scale: screen::Scale) -> Result<(), String> {
+    shot_into(environment, out, scale)
 }
 
-fn shot_into(environment: &Environment, out: Option<PathBuf>) -> Result<(), String> {
+fn shot_into(environment: &Environment, out: Option<PathBuf>, scale: screen::Scale) -> Result<(), String> {
     let dir = out.unwrap_or_else(output::dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let instances = drive::open_instances(environment);
@@ -1620,7 +1640,7 @@ fn shot_into(environment: &Environment, out: Option<PathBuf>) -> Result<(), Stri
     for account in instances {
         let capture = drive::window_for(environment, account).and_then(|window| {
             let path = dir.join(format!("shot-{account}-{}.png", output::id()));
-            screen::capture(&window, &path)
+            screen::capture(&window, &path, scale)
         });
         match capture {
             Ok(path) => { println!("conta {account}: {}", path.display()); captures.push(serde_json::json!({"instance": account, "path": path})); },
@@ -1729,6 +1749,14 @@ fn prepare(
         if !prepared.copied.is_empty() {
             println!("    copiado {}", prepared.copied.join(", "));
         }
+        for r in &prepared.rotated {
+            match r.action.as_str() {
+                "rotated" => println!("    girado  {} ({} MB) -> {}.1", r.name, r.bytes >> 20, r.name),
+                "skipped_running" => println!("    log     {} tem {} MB e ficou: o jogo está aberto", r.name, r.bytes >> 20),
+                other => println!("    log     {} não girou: {other}", r.name),
+            }
+        }
+        output::event("logs_rotated", serde_json::json!({"instance": prepared.account, "logs": prepared.rotated}));
         if force_zone {
             println!("    zona    FORCADA para 103110 (multiplayer em qualquer lugar)");
         }
@@ -1801,6 +1829,20 @@ fn up(
         println!("  já no ar");
     } else {
         pad_command(environment, PadAction::Start { index: 1, foreground: false })?;
+    }
+
+    // A day of launches leaves xalia.exe/winedevice.exe connected to X11 until
+    // Xorg refuses the next client. With no game open at all they are orphans.
+    if proc::game_pids().is_empty() {
+        let orphans = hygiene::wine_orphans(&[]);
+        if !orphans.is_empty() {
+            let cleared = hygiene::clear_orphans(orphans);
+            println!("\nórfãos do Wine");
+            println!("  encerrados {}{}, conexões X11 {} -> {}", cleared.ended.len(),
+                if cleared.survived.is_empty() { String::new() } else { format!(", sobreviveram {}", cleared.survived.len()) },
+                cleared.x11_before.map_or("?".into(), |n| n.to_string()), cleared.x11_after.map_or("?".into(), |n| n.to_string()));
+            output::event("orphans_cleared", serde_json::json!(cleared));
+        }
     }
 
     println!("\nservidor");

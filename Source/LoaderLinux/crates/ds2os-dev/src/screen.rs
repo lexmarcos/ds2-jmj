@@ -207,14 +207,61 @@ fn active_window<C: x11rb::connection::Connection>(conn: &C, root: u32) -> Optio
     first
 }
 
+/// How much of the window's resolution a capture keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scale {
+    Full,
+    /// Every 2×2 block averaged into one pixel: a quarter of the bytes, and
+    /// menus and prompts still legible.
+    #[default]
+    Half,
+}
+
+impl Scale {
+    pub fn parse(value: f32) -> Result<Self, String> {
+        match value {
+            v if v == 1.0 => Ok(Scale::Full),
+            v if v == 0.5 => Ok(Scale::Half),
+            other => Err(format!("invalid_scale: {other}; use 1 ou 0.5")),
+        }
+    }
+}
+
 /// Grabs one window and writes it as a PNG.
-pub fn capture(window: &GameWindow, out: &Path) -> Result<PathBuf, String> {
+pub fn capture(window: &GameWindow, out: &Path, scale: Scale) -> Result<PathBuf, String> {
     let id = u32::from_str_radix(window.id.trim_start_matches("0x"), 16)
         .map_err(|_| format!("id de janela inválido: {}", window.id))?;
 
     let image = grab(id)?;
+    let image = match scale { Scale::Full => image, Scale::Half => halve(&image) };
     write_png(&image, out)?;
     Ok(out.to_path_buf())
+}
+
+/// Averages each 2×2 block. An odd last row or column is dropped, so the
+/// result is exactly half, rounded down, and never empty.
+fn halve(image: &Image) -> Image {
+    let (width, height) = ((image.width / 2).max(1), (image.height / 2).max(1));
+    let source_width = image.width as usize;
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for row in 0..height as usize {
+        for column in 0..width as usize {
+            for channel in 0..4 {
+                let mut sum = 0u32;
+                let mut count = 0u32;
+                for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let (y, x) = (row * 2 + dy, column * 2 + dx);
+                    if y < image.height as usize && x < source_width {
+                        sum += image.pixels[(y * source_width + x) * 4 + channel] as u32;
+                        count += 1;
+                    }
+                }
+                pixels.push(((sum + count / 2) / count) as u8);
+            }
+        }
+    }
+    Image { width, height, pixels }
 }
 
 fn grab(window: u32) -> Result<Image, String> {
@@ -328,4 +375,27 @@ fn write_png(image: &Image, out: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .write_image_data(&image.pixels)
         .map_err(|e| format!("não consegui escrever o PNG: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn half_scale_averages_each_block() {
+        // 5×3: the odd last column and row are dropped.
+        let mut pixels = Vec::new();
+        for row in 0..3u8 {
+            for column in 0..5u8 {
+                pixels.extend([row * 10 + column, 100, if (row + column) % 2 == 0 { 255 } else { 0 }, 255]);
+            }
+        }
+        let half = halve(&Image { width: 5, height: 3, pixels });
+        assert_eq!((half.width, half.height), (2, 1));
+        // Block (0,0): reds 0,1,10,11 -> 5.5 rounds to 6; blue 255,0,0,255 -> 128.
+        assert_eq!(&half.pixels[0..4], &[6, 100, 128, 255]);
+        assert_eq!(&half.pixels[4..8], &[8, 100, 128, 255]);
+        assert!(Scale::parse(0.5) == Ok(Scale::Half) && Scale::parse(1.0) == Ok(Scale::Full));
+        assert!(Scale::parse(0.3).unwrap_err().starts_with("invalid_scale:"));
+    }
 }

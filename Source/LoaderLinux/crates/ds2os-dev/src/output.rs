@@ -126,7 +126,12 @@ pub fn capture_logs(cursors: &[LogCursor]) -> Result<(), String> {
     let mut index = Vec::new();
     for cursor in cursors {
         let result = (|| -> std::io::Result<Value> {
-            let mut file = std::fs::File::open(&cursor.path)?;
+            // Rotated away during the run (`game prepare`): nothing of it belongs here.
+            let mut file = match std::fs::File::open(&cursor.path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound =>
+                    return Ok(json!({"source": cursor.path, "absent": true, "fromByte": cursor.offset})),
+                other => other?,
+            };
             let meta = file.metadata()?;
             let rotated = meta.ino() != cursor.inode || meta.len() < cursor.offset;
             let start = if rotated { 0 } else { cursor.offset };

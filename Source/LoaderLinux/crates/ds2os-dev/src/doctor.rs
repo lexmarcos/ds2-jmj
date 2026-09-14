@@ -407,37 +407,24 @@ fn pad_check(running: bool, games: bool) -> Check {
 /// Every Wine prefix leaves `xalia.exe` and `winedevice.exe` behind when a game
 /// stops, and they hold X11 connections until the server refuses new ones.
 fn wine_orphans(every_game: &[u32]) -> Check {
-    let mut orphans: Vec<(u32, String, Option<String>)> = Vec::new();
-    let game_prefixes: Vec<String> = every_game.iter().filter_map(|pid| proc::env_of(*pid, "WINEPREFIX"))
-        .map(|p| p.trim_end_matches('/').to_owned()).collect();
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else { continue };
-        let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) else { continue };
-        let comm = comm.trim();
-        if comm != "xalia.exe" && comm != "winedevice.exe" { continue; }
-        let prefix = proc::env_of(pid, "WINEPREFIX").map(|p| p.trim_end_matches('/').to_owned());
-        if prefix.as_ref().is_some_and(|p| game_prefixes.contains(p)) { continue; }
-        orphans.push((pid, comm.to_owned(), prefix));
-    }
-    orphans.sort();
+    let orphans = crate::hygiene::wine_orphans(every_game);
     if orphans.is_empty() {
-        return Check::new("wine_orphans", None, Status::Ok, "nenhum xalia.exe/winedevice.exe sem jogo");
+        return Check::new("wine_orphans", None, Status::Ok, "nenhum xalia.exe sem jogo nem winedevice.exe sem services.exe");
     }
-    let pids: Vec<String> = orphans.iter().map(|(pid, _, _)| pid.to_string()).collect();
+    let pids: Vec<String> = orphans.iter().map(|o| o.pid.to_string()).collect();
     // By pid: `pkill -f xalia.exe` also matches the shell that runs it, and
     // kills that shell first.
-    Check::new("wine_orphans", None, Status::Warning, format!("{} processo(s) do Wine de prefixos sem jogo", orphans.len()))
-        .fix(format!("kill {}", pids.join(" ")))
-        .data(json!(orphans.iter().map(|(pid, name, prefix)| json!({"pid": pid, "name": name, "winePrefix": prefix})).collect::<Vec<_>>()))
+    Check::new("wine_orphans", None, Status::Warning, format!("{} processo(s) do Wine órfãos (xalia.exe sem jogo, winedevice.exe sem services.exe)", orphans.len()))
+        .fix(format!("kill {} (ou `ds2os-dev up`, que os encerra quando nenhum jogo está aberto)", pids.join(" ")))
+        .data(json!(orphans))
 }
 
 /// Xorg refuses clients past 256 by default, and the only symptom is
 /// `Maximum number of clients reached` from whatever connects next.
 fn x11_clients() -> Check {
-    let Ok(sockets) = std::fs::read_to_string("/proc/net/unix") else {
+    let Some(count) = crate::hygiene::x11_connections() else {
         return Check::new("x11_clients", None, Status::Skipped, "/proc/net/unix ilegível");
     };
-    let count = sockets.lines().filter(|line| line.contains("/tmp/.X11-unix/X")).count();
     if count >= 200 {
         Check::new("x11_clients", None, Status::Warning, format!("{count} conexões X11; o Xorg recusa acima de 256"))
             .fix("feche os órfãos do Wine (veja wine_orphans)").data(json!({"connections": count}))
