@@ -628,7 +628,7 @@ quest.
 
 ---
 
-## M8 — fogueira e viagem — **descanso em sessão feito em 15/09**
+## M8 — fogueira e viagem — **feito em 15/09, com dois jogadores**
 
 **Feito 15/09**: `DS2_BonfireInSessionHook` (com `--seamless`). O dono do
 mundo descansa na fogueira com fantasmas no mundo, e a sessão fica. Em sessão
@@ -684,45 +684,63 @@ O inimigo morto de novo antes do descanso estava de volta, 550/550 na mesma
 posição, **nos dois** clientes; a caixa apareceu na tela do Samuel e fechou com
 A; `p2pSessionVerified: true` o tempo todo.
 
+**Viagem com votação — feita 15/09.** O host escolhe a fogueira na lista de
+viagem; `DS2_BonfireInSessionHook` segura a escolha **na lista**
+(`FeGroupTestBonfireTransitionList` slot `+0x80`, `FUN_1400d5170`) e manda
+`TravelVote` pelo canal; cada convidado recebe a caixa sim/não do jogo
+(`FUN_1404fe1c0`, a mesma de `FeSubStateCommonWindow`) com "The host wants to
+travel to another bonfire. Travel together?", e a resposta volta ao host
+(anúncio de tipo `0x20`).
+
+- **Não**, ou sem resposta em 30 s: o host recebe "Travel canceled: a player
+  declined." (ou "...not every player answered.") e continua na lista, de pé,
+  com o registro de renascimento intacto.
+- **Todos sim**: `TravelLeave`; cada convidado sai da sessão pelo caminho que
+  a viagem do host já usava — `+0x120 = 1` no `NetSummonJoinMultiplayCtrl`,
+  que o estado 7 (`FUN_1402c3830`) transforma em fim de sessão motivo 3 —, o
+  host espera o grupo sair (1,5 s sem membros), a escolha segue, e o party
+  junta todos na fogueira nova com a chegada de outro mapa do M3.
+
+Medido com o build `3235c402` (Chico host, Samuel convidado):
+
+    16:28:24.347  Chico   escolha de fogueira segurada na lista; votacao 2
+    16:28:24.361  Samuel  votacao 2 aberta (caixa 10)
+    16:28:28.445  Samuel  votacao 2 respondida sim
+    16:28:28.479  Samuel  saio da sessao para o host viajar (+0x120 0 -> 1)
+    16:28:30.328  Chico   convidados fora da sessao em 366 ms; a escolha segue
+    16:29:47.974  Samuel  chegada de outro mapa: levando para fogueira do host (The Far Fire)
+    16:30:02      p2pSessionVerified: true, os dois em Majula, sem morte
+
+Recusa medida às 16:31:16 (resposta em 6 s) e sem resposta às 16:27:34.
+
+Três tentativas que **não** funcionaram, para não repetir: segurar o warp
+(`FUN_1401c2a80` motivo 2) — a transição de carregamento já tinha começado e o
+host ficou sentado sem menu; segurar a fase 1 da viagem (`FUN_140184a10`,
+`*(*(ctx+0x70)+0x70)+0x40`) — o personagem já estava na animação de viagem e
+ficou congelado nela; e o host viajar com o fantasma ainda no mundo — o jogo
+do host **fechou duas vezes** (`c0000005` em `+0x3f510f`, `FUN_1403f4f60`, um
+personagem já liberado dentro do `CharacterManager`), e numa delas foi o do
+Chico, que perdeu 10 pontos de desconexão (40 → 50).
+
+**A saída pela viagem não conta desconexão ilegal (medido, com controle).**
+Contador em `*(*(*0x141616cf8+0x30)+0x68)+0x1c0` (`MultiPlayPenaltyCtrl`,
+vftable `0x1410d0f00`): `+0x08` armado, `+0x0a` pontos, `+0x0c` punição
+restante; no save em `+0x488` bit 0, `+0x47a` e `+0x47c` (`FUN_14024fe40`).
+Entrar numa sessão arma; um fim legal desarma sem somar; um cliente que some
+armado soma `+0x1c`/`+0x20` do parâmetro (10), bloqueio em `+0x22` (100),
+punição de 36000 s. Nas quatro saídas por viagem medidas (13:53, 15:23,
+15:33 e 16:28) o convidado foi de armado 1 para 0 com os pontos iguais (Samuel
+10, Chico 40/50); o **controle** foi o crash do host às 13:53, que custou 0 →
+10 ao Samuel. Os pontos antigos são de desconexões anteriores.
+
 **Falta:**
 
 - o convidado não é curado pelo descanso do host (726/854 antes e depois);
   o design não diz se deveria;
-- a caixa é modal: o convidado precisa apertar A; um aviso sem botão não foi
-  procurado;
-- ~~viagem pelo menu em sessão~~ **medida 15/09**, e o grupo já chega junto
-  sem código novo, pela soma de M2 e M3. Samuel viajou de Heide's Ruin para
-  The Far Fire (Majula) com o Chico na sessão:
-
-      12:31:06  Samuel  RequestNotifyLeaveGuestPlayer (a viagem desfaz a sessão)
-      12:31:08  Chico   RequestNotifyLeaveSession; warp motivo 4 trocado pela
-                        última fogueira (M2), "Disconnected from multiplayer session."
-      12:31:27  Chico   party: placa no chão, em Heide
-      12:32:21  Chico   chegada de outro mapa: vim de 0a1f0000, o host está em
-                        0a040000 → fogueira do host, teleportado
-      12:32:27  p2pSessionVerified: true, os dois na The Far Fire
-
-  75 s de ponta a ponta, sem tecla e sem morte.
-
-  **Desconexão ilegal: a saída pela viagem não conta (medido, com controle).**
-  O contador é o `MultiPlayPenaltyCtrl` em
-  `*(*(*0x141616cf8+0x30)+0x68)+0x1c0` (vftable `0x1410d0f00`): `+0x08` armado
-  (byte, gravado no save em `+0x488` bit 0 por `FUN_14024fe40`), `+0x0a`
-  pontos (`uint16`, save `+0x47a`), `+0x0c` tempo restante da punição (`float`).
-  Entrar numa sessão arma; um fim de sessão legal desarma sem somar; um cliente
-  que some armado soma `+0x1c`/`+0x20` do parâmetro (10) e o bloqueio vem em
-  `+0x22` (100 pontos), com 36000 s de punição. Parâmetro lido em
-  `*(*(*(*0x141616cf8+0x40)+0x10)+0xd8)`, linha `+0x198`.
-
-      13:51:13  Chico  armado=1 pontos=40   (sessão com o Samuel em Majula)
-      13:53:14  Chico  armado=0 pontos=40   (o host viajou; a saída desarmou sem somar)
-
-  O controle aconteceu sem querer: o jogo do Samuel **fechou** no carregamento
-  dessa viagem (`c0000005` em `+0x3f510f`, `FUN_1403f4f60`, um personagem com
-  `+0xc8` já liberado dentro do `CharacterManager`, no mesmo instante em que a
-  sessão caía), e ao voltar ele tinha **0 → 10 pontos**. Os 40 do Chico são de
-  desconexões antigas. Saves de antes de mexer mais na viagem:
-  `m8-antes-viagem`.
+- a caixa do aviso e a da votação são modais: o convidado precisa apertar;
+- o convidado não é avisado **para onde** o host vai (o mapa não está na
+  escolha segurada);
+- três ou mais jogadores (uma conta Steam a mais);
 - descanso com um invasor no mundo: o hook não distingue.
 
 - descansar reseta o mundo para todos, com aviso antes

@@ -247,8 +247,12 @@ Measured 15/09 with Samuel hosting and Chico's phantom beside him at Heide's
 Ruin: with `DS2_BonfireInSessionHook` the host sits, the bonfire menu opens
 and the session stays verified for a minute after the menu closes. Traveling
 from that menu (Heide's Ruin → The Far Fire) ends the session, and the party
-rejoins the guest at the host's new bonfire in 75 s with no input — measured
-once, one pair of maps. Not measured: what the guest sees of the world reset,
+rejoins the guest at the host's new bonfire in 75 s with no input. With the
+vote (build `3235c402`) the travel waits in the list for every guest's Yes, the
+guests leave legally, and the party rejoins at the new bonfire; decline and
+timeout leave the host in the list. The guest's world reset and the rest
+notice were measured once each. Travel costs no penalty points (four leaves
+measured). Not measured: three or more players,
 leveling or attuning in it, burning a Bonfire Ascetic with a phantom present,
 resting with an invader in the world, a guest trying to rest (it is not
 offered the prompt), and any bonfire but Heide's Ruin.
