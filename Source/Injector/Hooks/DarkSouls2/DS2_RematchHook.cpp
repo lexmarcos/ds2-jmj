@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -196,6 +197,12 @@ namespace
         }
 
         void* Manager = s_manager.load();
+        if (Manager == nullptr)
+        {
+            // Armed by hand, before anyone summoned: the party hook has the
+            // same manager from the game's own per-frame call.
+            Manager = DS2_PartyHook_SignManager();
+        }
         if (Manager == nullptr)
         {
             Append("  revanche pedida, mas ninguem invocou ainda: sem o manager nao da\n");

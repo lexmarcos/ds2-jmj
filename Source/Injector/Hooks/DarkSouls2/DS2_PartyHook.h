@@ -20,6 +20,11 @@
 ///
 /// The order runs on the game's thread, inside a detour of a sign-manager
 /// method the game already calls every frame.
+/// The NetSvrSummonSignManager, as the game last handed it to the detour, or
+/// null before the first frame in the world. Other hooks that summon need it
+/// without waiting for the player to summon by hand.
+void* DS2_PartyHook_SignManager();
+
 class DS2_PartyHook : public Hook
 {
 public:

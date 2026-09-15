@@ -161,6 +161,15 @@ namespace
 #endif
 }
 
+void* DS2_PartyHook_SignManager()
+{
+#ifdef _WIN32
+    return s_manager.load();
+#else
+    return nullptr;
+#endif
+}
+
 bool DS2_PartyHook::Install(Injector& injector)
 {
 #ifdef _WIN32
