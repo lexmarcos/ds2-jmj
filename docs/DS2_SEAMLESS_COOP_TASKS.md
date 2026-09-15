@@ -526,13 +526,30 @@ Tirar da entrada tudo que hoje é cerimônia:
 
 ---
 
-## M4 — estado de mundo autoritativo
+## M4 — estado de mundo autoritativo — **começado em 15/09**
 
 Portas, alavancas, elevadores, atalhos, illusory walls e mecanismos de Pharros
-abertos pelo host aparecem abertos para quem entrou. Nada disso foi
-investigado ainda. O trabalho vizinho mais próximo é
-[DS2_FOG_GATES.md](DS2_FOG_GATES.md), que já achou a classe e o teste por
-quadro das barreiras de área.
+abertos pelo host aparecem abertos para quem entrou. O trabalho vizinho mais
+próximo é [DS2_FOG_GATES.md](DS2_FOG_GATES.md), que já achou a classe e o teste
+por quadro das barreiras de área.
+
+**Medido 15/09** ([DS2_WORLD_STATE.md](DS2_WORLD_STATE.md)): o jogo já faz a
+metade das flags. O convidado recebe **todas** as event flags do host ao entrar
+(de mapa e globais, provado com bits ligados só na memória do host), não as
+leva para casa, e em sessão o host propaga cada mudança pelo pacote P2P `0x20`
+(`FUN_140474a60` → `FUN_14051e6b0`), enquanto o convidado só consegue mudar as
+de mapa (`FUN_14025cdb0`).
+
+**Falta:**
+
+1. **Acionar um mecanismo de verdade** e ver se o estado dele é flag: uma
+   alavanca ou porta que um dos dois ainda não abriu, puxada pelo host antes e
+   durante a sessão, com `25cec0`/`25ce10` no traço e o `EventFlagManager`
+   lido nos dois. Se for, o M4 é teste e não código.
+2. **O que não for flag** (`MapObjStateActComponent` guarda estado por objeto):
+   achar onde o convidado o recebe, ou não recebe.
+3. **Mecanismo acionado pelo convidado** no mundo do host: a flag de mapa passa
+   pelo filtro; falta ver o objeto.
 
 ---
 
