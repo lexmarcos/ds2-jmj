@@ -35,6 +35,9 @@ pub fn injector_config() -> InjectorConfig {
         DS2ForcedZoneId: 103110,
         DS2PatchPhantomTimers: true,
         DS2PhantomTimerSeconds: 4000.0,
+        // After a duel, the host summons the same opponent's next sign of the
+        // same type by itself. Only that pair: a stranger's sign is ignored.
+        DS2AutoRematch: true,
 
         DS2ProbeArea: false,
         DS2WatchAreaReads: false,
