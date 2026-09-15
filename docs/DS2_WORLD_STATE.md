@@ -91,17 +91,29 @@ byte para dizer em qual cópia o mapa que sai é descartado (`FUN_140186480`).
   `FUN_1402b9ad0` e `FUN_1402c2fa0` — métodos virtuais vizinhos do construtor
   do warp de entrada (`FUN_1402c2a80`).
 
-Medido numa entrada (15/09, 08:45, traço em `474570` e `474590`): o host passou
+Medido numa entrada (15/09, 08:36, traço em `474570` e `474590`): o host passou
 por `FUN_140474570` vindo de `+0x2bfbfc` (`FUN_1402bf8f0`) e o convidado por
 `FUN_140474590` vindo de `+0x2c3080` (`FUN_1402c2fa0`), os dois com
 `r8 = 0a1f0000`, o mapa de Heide. Um hit de cada, e nenhum `0x20`.
 
-`FUN_1402c2fa0`, quando `+0xf8 == 4`, importa do mesmo blob mais coisas do que
-flags: `+0x3108` as flags, `+0x3b18` para `*(*0x1416148f0+0x70)+0x28` (o
-gerenciador que `FUN_14047a430` enche com ids de `0x98bd90` a `0x98e49f`),
-`+0x59ec` (16 bytes) para `+0x58`, `+0x3000`/`+0x3004` para
-`*(*0x1416148f0+0x38)+0x1f8`, e `+0x4018`. É o lugar natural para procurar o
-estado de objetos de mapa que não for flag.
+`FUN_1402c2fa0`, quando `+0xf8 == 4`, importa do mesmo blob tudo o que o design
+chama de mundo do host. Os destinos, nomeados pela RTTI da vftable lida na
+memória (`ctx = *0x1416148f0`):
+
+| blob | destino | classe |
+| --- | --- | --- |
+| `+0x3108` | `*(ctx+0x70)+0x20` | `EventFlagManager` — as flags, medido acima |
+| `+0x3b18` | `*(ctx+0x70)+0x28` | `EventValueManager` (`FUN_14047a350`); `FUN_14047a430` o enche com as flags `10010000`–`10019999` |
+| `+0x59ec`, 16 bytes | `*(ctx+0x70)+0x58` | `EventBonfireManager` (`FUN_14017ea40`) |
+| `+0x3000` / `+0x3004` | `*(ctx+0x38)+0x1f8` | `MapStateActManager` (`FUN_1401f3000`, `FUN_1401f30e0`) — estado de objetos de mapa |
+| `+0x4018` | `*(ctx+0x40)+0x10` | `EnemyGeneratorDeadCounter` (`FUN_1401f69e0`) — o despawn de inimigos |
+
+`*(ctx+0x70)` é o `EventManager`; `+0x10` nele é o `EventTaskManager`.
+
+Ou seja, a entrada do jogo original já é **um instantâneo autoritativo do
+host**: flags, valores de evento, fogueiras, estado de objetos e mortes de
+inimigos. O que o M4 precisa medir é quanto disso chega ao objeto na tela e o
+que muda **depois** da entrada, que só o `0x20` (flags) cobre até onde se viu.
 
 ## O que ainda não se sabe
 
@@ -113,8 +125,9 @@ estado de objetos de mapa que não for flag.
   medidas, então não há hit de `25cec0` para mostrar.
 - **O que o convidado vê de uma alavanca que ele mesmo puxa** no mundo do host:
   uma flag de mapa passa pelo filtro, mas o objeto pode ter outra trava.
-- **O resto do instantâneo de entrada** (abaixo): o que são o gerenciador em
-  `+0x28` e os blocos em `+0x3000`, `+0x4018` e `+0x59ec`.
+- **Mudanças depois da entrada fora das flags.** `MapStateActManager`,
+  `EnemyGeneratorDeadCounter` e `EventBonfireManager` chegam no instantâneo;
+  não se sabe se têm pacote próprio durante a sessão.
 - **O lado oposto do design.** "O que vocês fizerem juntos é salvo para todos"
   (um chefe morto na sessão fica morto no mundo do convidado) é exatamente o
   que o jogo **não** faz: o mundo do convidado volta como estava. Isso é

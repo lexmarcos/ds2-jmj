@@ -541,6 +541,12 @@ leva para casa, e em sessão o host propaga cada mudança pelo pacote P2P `0x20`
 (`FUN_140474a60` → `FUN_14051e6b0`), enquanto o convidado só consegue mudar as
 de mapa (`FUN_14025cdb0`).
 
+A cópia na entrada é um **instantâneo** que o host exporta e o convidado importa
+no warp (`FUN_1402bf8f0` → `FUN_1402c2fa0`, medido), e além das flags traz
+`EventValueManager`, `EventBonfireManager`, `MapStateActManager` (estado de
+objetos de mapa) e `EnemyGeneratorDeadCounter` (despawn). `ds2os-dev flags`
+lê e compara as flags das duas contas.
+
 **Falta:**
 
 1. **Acionar um mecanismo de verdade** e ver se o estado dele é flag: uma
