@@ -32,6 +32,8 @@ ao servidor. Ausência de erro não prova nada.
 | Todo warp do jogo mapeado e interceptável | `DS2_SeamlessCoopHook`, `+0x1c2a80` | [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) |
 | Morte de convidado vai para a última fogueira | motivo 4/força 0 → `FUN_14044fde0` | medido com o interruptor ligado e desligado |
 | **M0 — o harness anda sozinho** | `DS2_NavHook` + `ds2os-dev where` / `goto` | 9 m da fogueira até o outro personagem, escada acima, em 17 passos |
+| **M3 — sem efígie**, placa branca | `DS2_HollowSummonHook` (`+0x2a1b1e`), com `--seamless` | Samuel e Chico hollow (estado 1): `Summoning sign` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` (14/09) |
+| **M3 — sem Soul Memory**, placa branca | `DisableSoulMemoryMatching` em `DS2_WhiteSoapstoneMatchingParameters` e `DS2_SmallWhiteSoapstoneMatchingParameters` | com tiers que separam 5130 de 2551: `refused by matching 1` desligado, `sent 1` e a invocação com ele ligado (14/09) |
 
 ---
 
@@ -458,7 +460,27 @@ mapa e o ponto do host.
 
 ---
 
-## M3 — entrar uma vez, sem ritual
+## M3 — entrar uma vez, sem ritual — **começado em 14/09**
+
+**Feito:** efígie e Soul Memory não travam mais a entrada por placa branca
+(ver a tabela "Feito" e "Sem efígie" em [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)).
+**Falta:** a entrada sem soapstone, e os resíduos listados abaixo.
+
+Medido antes de mexer: **o convidado hollow põe a placa branca** (`Sign created:
+type 1` com estado 1) — a trava estava só no **host**, que hollow recebia a
+placa do servidor e não ganhava o prompt "Touch Summon Sign". O `CLAUDE.md`
+dizia que hollow não põe placa branca; o bloqueio de 12/09 que gerou isso era a
+desconexão ilegal.
+
+Resíduos da efígie e da Soul Memory, não medidos:
+
+- `FUN_1402a1bf0` recusa o **uso de item** de alguns tipos quando hollow (a
+  tabela `0x1410d64f4` com 1): provavelmente orb e soapstone vermelhas. Não
+  mexido — PvP não é entrada de co-op;
+- a Small White Sign Soapstone só teve a configuração aberta, não uma placa
+  medida;
+- a VPS continua com a Soul Memory ligada: a config fica em `Saved/`, fora do
+  git, e o padrão do código não mudou.
 
 Tirar da entrada tudo que hoje é cerimônia:
 

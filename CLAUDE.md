@@ -238,13 +238,19 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
-**A hollow character cannot use the Cracked Red Eye Orb — nor place a white
-summon sign.** X does nothing at all — no animation, no message, nothing
-reaching the server, not even a `RequestCreateSign` — and it reads exactly
-like a dead button. Standing on a bonfire does **not** block the item; that
-was the first guess and it was wrong. Dying **in your own world** hollows you;
-dying as an invader in someone else's world does not, so a duel loss costs no
-effigy.
+**A hollow character cannot use the Cracked Red Eye Orb**: X does nothing at
+all — no animation, no message, nothing reaching the server — and it reads
+exactly like a dead button. Standing on a bonfire does **not** block the item;
+that was the first guess and it was wrong. Dying **in your own world** hollows
+you; dying as an invader in someone else's world does not, so a duel loss
+costs no effigy.
+
+**A hollow guest *can* place a white sign** (measured 14/09: `Sign created:
+type 1` in hollow state 1). What hollowing blocked was the **host**: its client
+received the sign and never offered "Touch Summon Sign". With `--seamless`,
+`DS2_HollowSummonHook` removes that, and a summon between two hollow characters
+reaches `RequestNotifyJoinSession`. Without `--seamless`, the host still needs
+the effigy.
 
 **So burn a Human Effigy before every staging, rather than checking first** —
 and burn it through **Inventory**, not the belt: `ds2os-dev human --instance

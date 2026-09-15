@@ -218,6 +218,16 @@ honestly (`still_hollow`), but the presses may have used another item first.
 Whether the remembered tab explains the `game leave` that got stuck in the
 Item box on 14/09 (T5) is a hypothesis, not a measurement.
 
+### M3: hollow and Soul Memory, beyond the white sign
+
+Measured 14/09 with Samuel and Chico, both hollow, at Heide's bonfire: a white
+sign summon with the host's hollow filter patched, and with Soul Memory
+matching off across artificial tiers. Not measured: the Small White Sign
+Soapstone (config opened, no sign placed), the red signs and orbs (their
+item-use gate in `FUN_1402a1bf0` is untouched), whether the patched filter's
+other refusal (`FUN_1402aabf0() == 8`) ever bites, a host in another area than
+the sign, and the VPS, which still matches by Soul Memory.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway

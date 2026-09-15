@@ -275,6 +275,24 @@ a vigia encerrou. Agora a página da última vigia fica guardada, e uma escrita 
 falta nela com a página já gravável é só repetida. A DLL anterior ao commit
 `trace: a vigia de escrita nao derruba mais o jogo` ainda tem a corrida.
 
+### Quem **lê** este endereço: `wpr`
+
+```
+wpr <endereço absoluto em hex> <bytes> [segundos, padrão 3, máximo 20]
+```
+
+A mesma vigia com a página **inacessível** em vez de só-leitura: leituras e
+escritas do alvo aparecem, `leu em` ou `escreveu em`. Serve para achar quem
+consulta uma flag quando todo mundo passa por um getter que a listagem não
+mostra. Faltas de leitura em outras páginas continuam indo para o jogo antes do
+lock, como as do passeio pela pilha.
+
+Custa mais: numa página de heap ao lado do personagem, 850 mil faltas em 20 s,
+e o jogo aguentou. **Zero instruções não prova nada sem o controle**: em 14/09 o
+estado de hollow não teve leitor nenhum em 20 s, e o controle — o HP
+(`chr+0x168`), 9 instruções em 5 s — mostrou que a vigia estava vendo. Quem
+lia era o nível, em `PlayerParam+0x1ac`.
+
 ## A telemetria de posição não acompanha teleporte
 
 `DS2_Nav.txt` (e portanto `where` e o `goto`) lê a posição de

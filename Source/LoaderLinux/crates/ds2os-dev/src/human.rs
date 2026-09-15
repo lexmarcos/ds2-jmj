@@ -39,7 +39,11 @@ pub const OPEN: [(&str, u64); 6] = [("press start", 1200), ("dpad right", 400), 
     ("dpad right", 500), ("press a", 500)];
 pub const CONFIRM: (&str, u64) = ("press a", 0);
 /// Grid → categories → tab bar, tab back to Equipment, close.
-pub const CLOSE: [(&str, u64); 4] = [("press b", 400), ("press b", 400), ("dpad left", 400), ("press b", 900)];
+pub const CLOSE: [(&str, u64); 4] = [("press b", 600), ("press b", 600), ("dpad left", 500), ("press b", 900)];
+/// The item's use takes the menu a moment; a B sent right after the bytes flip
+/// was swallowed once (14/09), the left then moved the category row instead of
+/// the tab, and the menu stayed open on Inventory.
+pub const SETTLE_MS: u64 = 1500;
 /// After a failure the cursor's place is unknown; only back out.
 pub const BACK_OUT: [(&str, u64); 3] = [("press b", 400), ("press b", 400), ("press b", 900)];
 
@@ -97,6 +101,7 @@ pub fn human(env: &Environment, instance: u8, timeout: Duration) -> Result<Value
         }
     }
     let verdict = judge(&before, after.as_ref());
+    deadline.sleep(Duration::from_millis(SETTLE_MS))?;
     walk(env, instance, if verdict == Verdict::Human { &CLOSE } else { &BACK_OUT }, deadline)?;
 
     let data = json!({"instance": instance, "verdict": verdict, "before": summary(&before),

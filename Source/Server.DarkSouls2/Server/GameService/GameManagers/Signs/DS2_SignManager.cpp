@@ -449,6 +449,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
 
     int RemainingSignCount = (int)Request->max_signs();
 
+    // Signs the matching rules (Soul Memory tiers, per sign type) kept out of
+    // this response. Logged with the poll: a sign that never shows up is either
+    // not cached, not matched, or not rendered, and only this tells the middle
+    // one apart.
+    int RefusedByMatching = 0;
+
     // Signs already put in this response. The sticky pass sweeps every area, so
     // without this it could offer a sign the normal pass has already sent.
     std::unordered_set<uint32_t> SentSignIds;
@@ -502,12 +508,17 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
 
         DS2_CellAndAreaId LocationId = { Area.cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
-        std::vector<std::shared_ptr<SummonSign>> AreaSigns = LiveCache.GetRecentSet(LocationId, GatherCount, [this, &Player, &Request](const std::shared_ptr<SummonSign>& Sign) { 
-            return CanMatchWith(
+        std::vector<std::shared_ptr<SummonSign>> AreaSigns = LiveCache.GetRecentSet(LocationId, GatherCount, [this, &Player, &Request, &RefusedByMatching](const std::shared_ptr<SummonSign>& Sign) { 
+            bool Matches = CanMatchWith(
                 Request->matching_parameter(), 
                 static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters.get()), 
                 Sign->Type
             );
+            if (!Matches)
+            {
+                RefusedByMatching++;
+            }
+            return Matches;
         });
 
         for (std::shared_ptr<SummonSign>& Sign : AreaSigns)
@@ -541,10 +552,11 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
         if (double& Last = LastStickyLogTime[Player.GetPlayerId()]; Now - Last > 10.0)
         {
             Last = Now;
-            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s.",
+            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s, sent %zu, refused by matching %d (soul memory %u).",
                 Request->online_area_id(), OnlineActivityArea, Request->search_areas_size(),
                 Request->search_areas_size() > 0 ? (uint64_t)Request->search_areas(0).cell_id() : 0ull,
-                RemainingSignCount, LiveCache.GetTotalEntries(), StickyEligible ? "eligible" : "skipped");
+                RemainingSignCount, LiveCache.GetTotalEntries(), StickyEligible ? "eligible" : "skipped",
+                SentSignIds.size(), RefusedByMatching, (unsigned)Request->matching_parameter().soul_memory());
         }
     }
 

@@ -1857,3 +1857,76 @@ devolvidos a `pre-passo6`.
 Depois dos renasceres do Chico em outro mapa o HP ficou em 853 de 854, tanto
 às 12:02 (fogueira acima da morte) quanto às 13:36 (abaixo). Não é a queda, e
 não foi investigado.
+
+## Sem efígie (M3, 14/09)
+
+### Onde a efígie travava
+
+Medido com os dois personagens hollow (nível 3, estado 1) na fogueira de Heide:
+
+| quem | o que faz hollow | prova |
+| --- | --- | --- |
+| convidado | põe a White Sign Soapstone | `Sign 1002 created: type 1` |
+| host | **recebe** a placa do servidor | o poll dele passa de `room for 20` a `19` |
+| host | **não** ganha o prompt | só "Rest at bonfire" e "Pick up item" no Y; humano (efígie pelo `human`), "Touch Summon Sign" no mesmo lugar |
+
+A trava é do cliente do host, depois da entrega.
+
+### Como foi achada
+
+Nenhuma instrução lia o estado de hollow (`*(chr+0xb0)+0x3e`) em 20 s ao lado
+da placa — uma vigia de leitura nova (`wpr`, ver
+[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)), com o controle
+positivo de 9 instruções lendo o HP em 5 s. O **nível**
+(`PlayerParam+0x1ac`) era lido por quatro, duas delas dois getters de uma
+linha:
+
+```c
+bool FUN_1402ab0e0(void) { return FUN_140203db0(PlayerParam(local)->hollow) != 0; }  // hollow
+bool FUN_1402ab120(void) { return FUN_140203db0(PlayerParam(local)->hollow) == 0; }  // humano
+```
+
+O primeiro é chamado a cada quadro por `FUN_1402a1980`, a partir do
+`SummonSignSetCtrl` (retorno `+0x212a01` → `+0x2a1b23`), que recusa a placa
+quando o papel dela na tabela `0x1410c0050` é 2 ou 3 e o jogador local está
+hollow:
+
+```
++0x2a1b1e  e8 bd 95 00 00   call FUN_1402ab0e0
++0x2a1b23  84 c0            test al,al
++0x2a1b25  75 20            jne  (recusa)
+```
+
+Os outros usuários dos getters ficaram como estão: `FUN_140297f20` (caso 8)
+informa "humano" ao servidor, `FUN_1402a1bf0` trava itens de alguns tipos, e
+`FUN_140272120` / `FUN_1402af7e0` usam o "humano" em elegibilidade de invocação
+automática.
+
+### O patch e o resultado
+
+`DS2_HollowSummonHook` troca o `call` por `xor eax,eax` + nop de três bytes,
+conferindo `e8 bd 95 00 00` antes. Instala junto do `DS2SeamlessCoop`. O nível,
+o HP máximo e a aparência continuam os do hollow.
+
+| quando | host | resultado |
+| --- | --- | --- |
+| byte original | hollow | sem prompt |
+| poke ao vivo (MemProbe, bytes esperados) | hollow | prompt; `Summoning sign 1003` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` |
+| DLL `716f0c5b`, recibo `DS2 Hollow Summon: true` | hollow | idem, com a placa 1000 e Soul Memory fora de tier (abaixo) |
+
+Nas duas sessões o fim foi o `session end`.
+
+## Sem Soul Memory (M3, 14/09)
+
+O servidor já filtra por tier em `DS2_SignManager::CanMatchWith`, e o poll agora
+diz o que filtrou: `sent N, refused by matching M (soul memory S)`. Samuel tem
+5130 e Chico 2551, o mesmo tier padrão, então o controle usou tiers de
+propósito: `2999` à frente da lista da placa branca, 0 tiers abaixo e acima.
+
+| `DisableSoulMemoryMatching` | poll do Samuel com a placa do Chico no cache | na tela do host hollow (com o hook) |
+| --- | --- | --- |
+| `false` | `sent 0, refused by matching 1 (soul memory 5130)` | sem prompt |
+| `true` | `sent 1, refused by matching 0` | prompt, e a invocação chegou ao servidor |
+
+A configuração local ficou com os tiers padrão e `DisableSoulMemoryMatching`
+ligado na White e na Small White Sign Soapstone; a vermelha continua com tiers.
