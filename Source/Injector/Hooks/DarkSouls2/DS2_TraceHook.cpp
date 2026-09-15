@@ -69,8 +69,14 @@ namespace
     // a type tag at out[0] and out[2].
     constexpr size_t kEsdQueryOffset = 0x456a90;
     constexpr uint8_t kEsdQueryPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xc0 };
+    // FUN_14045c6a0 is the same shape, and the map event scripts
+    // (FUN_140471ae0, FUN_140473ac0) call it directly, not through the
+    // dispatcher; ids it answers are marked "i".
+    constexpr size_t kEsdInnerOffset = 0x45c6a0;
+    constexpr uint8_t kEsdInnerPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xac, 0x24 };
     using EsdQuery_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
     EsdQuery_p s_original_esd = nullptr;
+    EsdQuery_p s_original_esd_inner = nullptr;
     std::atomic<bool> s_esd_on{ false };
     std::chrono::steady_clock::time_point s_esd_deadline;
     std::string s_esd_label;
@@ -82,15 +88,15 @@ namespace
     std::mutex s_esd_mutex;
     std::map<int32_t, EsdSeen> s_esd_seen;
 
-    uint64_t EsdQueryHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    uint64_t EsdRecord(EsdQuery_p Original, int32_t Mark, void* This, uint32_t* Out, void** Arguments, void* P4)
     {
         if (!s_esd_on.load(std::memory_order_relaxed))
         {
-            return s_original_esd(This, Out, Arguments, P4);
+            return Original(This, Out, Arguments, P4);
         }
         using Id_p = int32_t(*)(void*);
-        const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
-        const uint64_t Result = s_original_esd(This, Out, Arguments, P4);
+        const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments) ^ Mark;
+        const uint64_t Result = Original(This, Out, Arguments, P4);
         const uint32_t Value = Out[0];
         const uint32_t Tag = Out[2];
         std::scoped_lock Lock(s_esd_mutex);
@@ -102,6 +108,18 @@ namespace
             Seen.Values.push_back(Pair);
         }
         return Result;
+    }
+
+    // The outer dispatcher's ids as they are; the inner one's with the top
+    // bit set, so the two stay apart in the report.
+    uint64_t EsdQueryHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        return EsdRecord(s_original_esd, 0, This, Out, Arguments, P4);
+    }
+
+    uint64_t EsdInnerHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        return EsdRecord(s_original_esd_inner, (int32_t)0x80000000, This, Out, Arguments, P4);
     }
 
     // The image is about 28 MB. This only has to be an upper bound, for
@@ -817,7 +835,10 @@ namespace
             {
                 Values += StringFormat(" %08x/%u", Value, Tag);
             }
-            Text += StringFormat("  esd %s %08x (%d) x%llu:%s\n", Label.c_str(), (uint32_t)Id, Id, (unsigned long long)Entry.Count, Values.c_str());
+            const bool Inner = (Id & (int32_t)0x80000000) != 0;
+            const int32_t Plain = Id & 0x7fffffff;
+            Text += StringFormat("  esd %s %s %08x (%d) x%llu:%s\n", Label.c_str(), Inner ? "i" : "e", (uint32_t)Plain, Plain,
+                (unsigned long long)Entry.Count, Values.c_str());
         }
         Append(Text);
     }
@@ -871,9 +892,16 @@ bool DS2_TraceHook::Install(Injector& injector)
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourAttach(&(PVOID&)s_original_esd, EsdQueryHook);
+        const bool Inner = memcmp((const void*)(s_base + kEsdInnerOffset), kEsdInnerPrologue, sizeof(kEsdInnerPrologue)) == 0;
+        if (Inner)
+        {
+            s_original_esd_inner = (EsdQuery_p)(s_base + kEsdInnerOffset);
+            DetourAttach(&(PVOID&)s_original_esd_inner, EsdInnerHook);
+        }
         if (DetourTransactionCommit() != NO_ERROR)
         {
             s_original_esd = nullptr;
+            s_original_esd_inner = nullptr;
             Error("[DS2Trace] nao consegui instalar o espiao de EzState");
         }
     }
@@ -902,8 +930,13 @@ void DS2_TraceHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_esd, EsdQueryHook);
+        if (s_original_esd_inner != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_esd_inner, EsdInnerHook);
+        }
         DetourTransactionCommit();
         s_original_esd = nullptr;
+        s_original_esd_inner = nullptr;
     }
     if (s_handler != nullptr)
     {
