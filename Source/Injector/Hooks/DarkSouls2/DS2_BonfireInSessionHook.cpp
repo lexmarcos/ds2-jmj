@@ -134,17 +134,27 @@ namespace
     constexpr float kNearBonfire = 3.0f;
 
     // The prompt itself is refused in FUN_140453ce0, the event action entries:
-    // an entry of type 13 or 14 (the bonfire's "Rest at bonfire", text 0x6d
-    // and 0x6e) is dropped while the context says the player is in someone
-    // else's world (ctx vftable +0x58, FUN_1405135f0), before the distance is
-    // even checked. Measured 15/09: with that `jne` gone the guest got the
-    // prompt, sat, healed 400 -> 914, and its rest reset the host's world.
-    // Patched only while the local player is a white phantom, so an invader
-    // still gets nothing.
-    constexpr size_t kPromptGate = 0x453dd8;
-    constexpr uint8_t kPromptGateExpected[] = { 0x0f, 0x85, 0x3e, 0x02, 0x00, 0x00 };
-    constexpr uint8_t kPromptGatePatch[] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
-    constexpr uint8_t kPromptGateBefore[] = { 0xe8, 0x1a, 0xf8, 0x0b, 0x00, 0x84, 0xc0 };
+    // an entry of type 13 or 14 is dropped while the context says the player
+    // is in someone else's world (ctx vftable +0x58, FUN_1405135f0), before
+    // the distance is even checked. Type 14 is "Rest at bonfire": the guest's
+    // entry at a lit bonfire was 0x0e, and with the gate's `jne` gone that
+    // entry became the prompt, the guest sat and healed 400 -> 914 (15/09).
+    // Type 13 is left behind the gate (most likely lighting an unlit bonfire,
+    // not measured): `sub eax,0xd ; cmp eax,1 ; ja` becomes `cmp eax,0`, so
+    // only 13 reaches the gate. Patched only while the local player is a
+    // white phantom, so an invader still gets nothing.
+    //
+    //   +0x453db0  mov eax,[rbx+0x8c] ; sub eax,0xd ; cmp eax,<1> ; ja +0x453dde
+    //   +0x453dd1  call FUN_1405135f0 ; test al,al ; jne +0x45401c
+    constexpr size_t kPromptGate = 0x453dbb;
+    constexpr uint8_t kPromptGateExpected[] = { 0x01 };
+    constexpr uint8_t kPromptGatePatch[] = { 0x00 };
+    constexpr size_t kPromptGateBeforeAt = 0x453db0;
+    constexpr uint8_t kPromptGateBefore[] = { 0x8b, 0x83, 0x8c, 0x00, 0x00, 0x00, 0x83, 0xe8, 0x0d, 0x83, 0xf8 };
+    constexpr size_t kPromptGateAfterAt = 0x453dbc;
+    constexpr uint8_t kPromptGateAfter[] = { 0x77, 0x20 };
+    constexpr size_t kPromptGateCallAt = 0x453dd1;
+    constexpr uint8_t kPromptGateCall[] = { 0xe8, 0x1a, 0xf8, 0x0b, 0x00, 0x84, 0xc0, 0x0f, 0x85, 0x3e, 0x02, 0x00, 0x00 };
 
     // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
     // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
@@ -823,8 +833,10 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_guest_rest_ready = (Matches(Base + kInnerScriptOffset, kInnerScriptPrologue, sizeof(kInnerScriptPrologue)) ||
                               *(const uint8_t*)(Base + kInnerScriptOffset) == 0xe9) &&
             Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue)) &&
-            Matches(Base + kPromptGate - sizeof(kPromptGateBefore), kPromptGateBefore, sizeof(kPromptGateBefore)) &&
-            Matches(Base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected));
+            Matches(Base + kPromptGateBeforeAt, kPromptGateBefore, sizeof(kPromptGateBefore)) &&
+            Matches(Base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected)) &&
+            Matches(Base + kPromptGateAfterAt, kPromptGateAfter, sizeof(kPromptGateAfter)) &&
+            Matches(Base + kPromptGateCallAt, kPromptGateCall, sizeof(kPromptGateCall));
         s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
         s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
         s_bonfire_lit = (BonfireLit_p)(Base + kBonfireLitOffset);
