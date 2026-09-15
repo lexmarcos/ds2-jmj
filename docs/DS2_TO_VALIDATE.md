@@ -245,8 +245,10 @@ any area pair besides Majula → Heide. The VPS server has no party pass.
 
 Measured 15/09 with Samuel hosting and Chico's phantom beside him at Heide's
 Ruin: with `DS2_BonfireInSessionHook` the host sits, the bonfire menu opens
-and the session stays verified for a minute after the menu closes. Not
-measured: what the guest sees of the world reset, travel from that menu,
+and the session stays verified for a minute after the menu closes. Traveling
+from that menu (Heide's Ruin → The Far Fire) ends the session, and the party
+rejoins the guest at the host's new bonfire in 75 s with no input — measured
+once, one pair of maps. Not measured: what the guest sees of the world reset,
 leveling or attuning in it, burning a Bonfire Ascetic with a phantom present,
 resting with an invader in the world, a guest trying to rest (it is not
 offered the prompt), and any bonfire but Heide's Ruin.

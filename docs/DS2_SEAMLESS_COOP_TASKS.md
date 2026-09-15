@@ -667,8 +667,22 @@ Ao entrar no estado 2 o job roda `FUN_14017fd70` (`FUN_140417210`,
 - o aviso antes ("A player is resting at a bonfire");
 - o convidado não é curado pelo descanso do host (726/854 antes e depois);
   o design não diz se deveria;
-- viagem pelo menu em sessão, com o grupo (item abaixo): o menu abre, mas
-  nenhuma viagem foi tentada;
+- ~~viagem pelo menu em sessão~~ **medida 15/09**, e o grupo já chega junto
+  sem código novo, pela soma de M2 e M3. Samuel viajou de Heide's Ruin para
+  The Far Fire (Majula) com o Chico na sessão:
+
+      12:31:06  Samuel  RequestNotifyLeaveGuestPlayer (a viagem desfaz a sessão)
+      12:31:08  Chico   RequestNotifyLeaveSession; warp motivo 4 trocado pela
+                        última fogueira (M2), "Disconnected from multiplayer session."
+      12:31:27  Chico   party: placa no chão, em Heide
+      12:32:21  Chico   chegada de outro mapa: vim de 0a1f0000, o host está em
+                        0a040000 → fogueira do host, teleportado
+      12:32:27  p2pSessionVerified: true, os dois na The Far Fire
+
+  75 s de ponta a ponta, sem tecla e sem morte. **Falta** a votação e o grupo
+  viajando **junto** (sem sair da sessão), o aviso na tela do convidado, e se
+  essa saída conta desconexão ilegal para o convidado (a saída foi pedida pelo
+  host e o Chico continuou pondo placa, o que sugere que não);
 - descanso com um invasor no mundo: o hook não distingue.
 
 - descansar reseta o mundo para todos, com aviso antes
