@@ -458,9 +458,9 @@ namespace
         return false;
     }
 
-    uint64_t InnerScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    // No C++ objects here: __try cannot sit in a function that unwinds.
+    bool AnswerNotGuest(uint32_t* Out, void** Arguments)
     {
-        const uint64_t Result = s_original_inner_script(This, Out, Arguments, P4);
         __try
         {
             if (Out != nullptr && Arguments != nullptr && Out[0] != 0)
@@ -470,15 +470,22 @@ namespace
                 if (Id == kQueryIsGuest && IsWhitePhantom() && NearBonfire())
                 {
                     Out[0] = 0;
-                    if (s_prompts_opened.fetch_add(1) == 0)
-                    {
-                        Append("convidado: perto da fogueira, a pergunta 'sou convidado?' do script respondeu nao\n");
-                    }
+                    return true;
                 }
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
+        }
+        return false;
+    }
+
+    uint64_t InnerScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        const uint64_t Result = s_original_inner_script(This, Out, Arguments, P4);
+        if (AnswerNotGuest(Out, Arguments) && s_prompts_opened.fetch_add(1) == 0)
+        {
+            Append("convidado: perto da fogueira, a pergunta 'sou convidado?' do script respondeu nao\n");
         }
         return Result;
     }
