@@ -81,7 +81,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `save prune --keep N [--dry-run]` | deletes each account's `antes-de-*` rescue copies beyond the newest N; never a label somebody chose |
 | `pad start\|press\|dpad\|trigger\|stick\|seq\|status` | a virtual gamepad over `/dev/uinput` |
 | `steam2 init\|run\|show` | the second Steam client, which gives instance 2 its own account |
-| `logs <server\|instance2\|injector\|timer\|cli\|death\|backread\|channel\|crash\|trace\|session\|seamless\|respawn\|rematch\|memprobe>` | with `--instance N`, `-g <pattern>`, `-n <lines>`, `-f` |
+| `logs <server\|instance2\|injector\|timer\|cli\|death\|backread\|channel\|crash\|trace\|session\|seamless\|respawn\|rematch\|carry\|memprobe>` | with `--instance N`, `-g <pattern>`, `-n <lines>`, `-f` |
 
 ### Contract for LLM-driven tests
 

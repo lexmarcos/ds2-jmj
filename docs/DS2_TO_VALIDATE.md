@@ -241,6 +241,18 @@ whose bonfire announcement never arrives (no channel, or the host never rested
 since boot), a host with its bonfire in a map other than where it stands, and
 any area pair besides Majula → Heide. The VPS server has no party pass.
 
+### M7: flags carried into the guest's save
+
+Measured 15/09 with one unused global flag (`109999`) set by the host's own
+setter in a session: it crossed as packet `0x20`, the guest kept it, set it in
+its own world after `session end`, and it survived a restart of the guest's
+process; a map flag set the same way did not follow the guest home. Not
+measured: a real boss kill (whether boss flags are global at all), a pickup or
+an NPC change in the host's world (if those are global, the guest's world gets
+them too, against M5 and M10), a guest that dies or quits before reaching home
+(`DS2_Carry.pending` should apply on the next arrival), a host that turns a
+global flag off, and any flag the host sends while loading a map.
+
 ### M4: the host's world at join
 
 Measured 15/09, both characters in Heide: a guest carries the host's event

@@ -575,7 +575,41 @@ Não investigado.
 
 ---
 
-## M7 — o que foi feito junto entra nos dois saves
+## M7 — o que foi feito junto entra nos dois saves — **mecanismo feito em 15/09**
+
+**Feito 15/09**: `DS2_ProgressCarryHook` (com `--seamless`). O convidado vigia o
+pacote P2P `0x20` (`FUN_14025ce10`), guarda as flags **globais** que o jogo
+aplicou vindas do host (as que `FUN_14025cdb0` só aceita do host) em
+`DS2_Carry.pending`, e ao voltar ao próprio mundo (papel 0, gerenciador sem a
+marca de mundo de outro, 5 s parado) as grava pelo setter do jogo
+(`FUN_140474a60`). Flags de mapa ficam no mundo do host. O progresso anterior
+do host chega no instantâneo de entrada, não no `0x20`, e por isso não passa.
+`DS2_Carry.req` aceita `flag <id> <0|1>`, `le <id>`, `status`, `limpa`.
+
+Medido com Samuel host e Chico convidado em Heide:
+
+    10:46:15.500  Samuel  flag 109999 <- 1 pelo setter do jogo: antes 0, depois 1
+    10:46:15.500  Samuel  flag 131000199 <- 1 pelo setter do jogo: antes 0, depois 1
+    10:46:15.520  Chico   recebida flag 109999 = 1 (papel 1): guardada para o meu mundo
+    10:46:15.520  Chico   recebida flag 131000199 = 1 (papel 1): flag de mapa: fica no mundo do host
+    (session end)
+    10:47:16.854  Chico   no meu mundo: flag 109999 <- 1 (antes 0, depois 1)
+
+`flags` com o Chico em casa: `109999` ligada, `131000199` desligada. Depois de
+reiniciar o processo do Chico (boot novo), `109999` continuava ligada: está no
+save. As duas flags foram desligadas de volta nos dois saves e conferidas
+depois de sair para o título e entrar.
+
+**Falta:**
+
+1. **Uma flag de chefe de verdade.** Que a morte de um chefe seja uma flag
+   global é hipótese; nenhum chefe foi morto numa sessão. Precisa de luta.
+2. **O que mais é global e não deveria passar**: se pegar um item no mundo do
+   host é flag global, o convidado perde o item no próprio mundo (vai contra o
+   M5); o mesmo vale para estado de NPC (M10). Sem medição, o hook passa tudo o
+   que é global.
+3. As flags `100100` e `100110`, que o host liga e manda ao carregar um mapa
+   (`FUN_1404747c0`), passam também; parecem inofensivas, não foram olhadas.
 
 Bosses mortos e quests feitas juntos passam para o save de quem entrou; o
 progresso **anterior** do host não passa. Esta é a segunda metade do problema

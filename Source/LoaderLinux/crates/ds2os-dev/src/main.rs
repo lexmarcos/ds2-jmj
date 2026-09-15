@@ -792,6 +792,8 @@ enum LogName {
     Respawn,
     /// DS2_Rematch.log
     Rematch,
+    /// DS2_Carry.log
+    Carry,
     /// DS2_MemProbe.log
     Memprobe,
     /// Every ds2os-dev command that was run
@@ -1774,6 +1776,7 @@ fn log_path(environment: &Environment, which: LogName, instance: u8) -> Option<P
         LogName::Seamless => beside_game("DS2_Seamless.log"),
         LogName::Respawn => beside_game("DS2_Respawn.log"),
         LogName::Rematch => beside_game("DS2_Rematch.log"),
+        LogName::Carry => beside_game("DS2_Carry.log"),
         LogName::Memprobe => beside_game("DS2_MemProbe.log"),
     }
 }

@@ -202,9 +202,9 @@ alavancas do host no próprio save, que é o que o design pede.
 - **Se portas, alavancas, elevadores e illusory walls são flags de mapa.**
   `MapObjStateActComponent` (vftable `0x1410c6d78`) pode guardar estado por
   objeto fora do `EventFlagManager`. Nenhum mecanismo real foi acionado ainda.
-- **Uma mudança feita durante a sessão.** O caminho de envio existe
-  (`FUN_140474a60` → `FUN_14051e6b0`), mas nenhuma flag mudou nas sessões
-  medidas, então não há hit de `25cec0` para mostrar.
+- ~~**Uma mudança de flag feita durante a sessão.**~~ Medida no M7 (15/09):
+  o setter do host (`DS2_Carry.req`, `flag <id> 1`) chegou ao convidado em
+  20 ms, global e de mapa. Falta um **objeto** mudando de estado ao vivo.
 - **O que o convidado vê de uma alavanca que ele mesmo puxa** no mundo do host:
   uma flag de mapa passa pelo filtro, mas o objeto pode ter outra trava.
 - **Mudanças depois da entrada fora das flags.** `MapStateActManager`,
