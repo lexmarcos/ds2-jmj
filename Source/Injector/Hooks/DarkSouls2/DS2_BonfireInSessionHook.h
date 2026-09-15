@@ -40,8 +40,11 @@
 /// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
 /// was sent and received.
 ///
-/// A white phantom rests too: the bonfire's event script is told the player
-/// is not a guest (query 130602), the rest heals the guest, and instead of
+/// A white phantom rests too: the event action entries stop dropping the
+/// bonfire's prompt for someone in another world (FUN_140453ce0, patched only
+/// while the local player is a white phantom), the bonfire's event script is
+/// told the player is not a guest (query 130602), the rest heals the guest
+/// (measured 15/09: 400 -> 914), and instead of
 /// resetting its own copy the guest tells the host, who shows "A player is
 /// resting at a bonfire.", resets its world and sends the reset to everyone.
 ///

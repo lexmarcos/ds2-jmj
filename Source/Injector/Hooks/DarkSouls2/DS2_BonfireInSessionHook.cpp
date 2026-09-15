@@ -133,6 +133,19 @@ namespace
     constexpr size_t kCharacterPosition = 0x90;
     constexpr float kNearBonfire = 3.0f;
 
+    // The prompt itself is refused in FUN_140453ce0, the event action entries:
+    // an entry of type 13 or 14 (the bonfire's "Rest at bonfire", text 0x6d
+    // and 0x6e) is dropped while the context says the player is in someone
+    // else's world (ctx vftable +0x58, FUN_1405135f0), before the distance is
+    // even checked. Measured 15/09: with that `jne` gone the guest got the
+    // prompt, sat, healed 400 -> 914, and its rest reset the host's world.
+    // Patched only while the local player is a white phantom, so an invader
+    // still gets nothing.
+    constexpr size_t kPromptGate = 0x453dd8;
+    constexpr uint8_t kPromptGateExpected[] = { 0x0f, 0x85, 0x3e, 0x02, 0x00, 0x00 };
+    constexpr uint8_t kPromptGatePatch[] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+    constexpr uint8_t kPromptGateBefore[] = { 0xe8, 0x1a, 0xf8, 0x0b, 0x00, 0x84, 0xc0 };
+
     // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
     // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
     // (+0x324); FUN_140500440(frontend, n) says it closed, FUN_1404ff940
@@ -289,6 +302,8 @@ namespace
     std::mutex s_log_mutex;
     uintptr_t s_base = 0;
     bool s_job_patched = false;
+    bool s_prompt_patched = false;
+    bool s_prompt_gate_broken = false;
     std::atomic<uint64_t> s_answered{ 0 };
 
     bool ReadByte(uintptr_t At, uint8_t& Out)
@@ -807,7 +822,9 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         // DS2_TraceHook's esd spy may have detoured it first (a jmp); Detours chains.
         s_guest_rest_ready = (Matches(Base + kInnerScriptOffset, kInnerScriptPrologue, sizeof(kInnerScriptPrologue)) ||
                               *(const uint8_t*)(Base + kInnerScriptOffset) == 0xe9) &&
-            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue));
+            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue)) &&
+            Matches(Base + kPromptGate - sizeof(kPromptGateBefore), kPromptGateBefore, sizeof(kPromptGateBefore)) &&
+            Matches(Base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected));
         s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
         s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
         s_bonfire_lit = (BonfireLit_p)(Base + kBonfireLitOffset);
@@ -869,6 +886,30 @@ void DS2_BonfireInSession_Tick()
     }
     const ULONGLONG Now = GetTickCount64();
     DS2_CoopChannel::Bonfire Said;
+
+    // The bonfire prompt's guest gate is open exactly while this player is a
+    // white phantom; each write checks the bytes it replaces.
+    if (s_guest_rest_ready && !s_prompt_gate_broken)
+    {
+        const bool Want = IsWhitePhantom();
+        if (Want != s_prompt_patched)
+        {
+            const uint8_t* From = Want ? kPromptGateExpected : kPromptGatePatch;
+            const uint8_t* To = Want ? kPromptGatePatch : kPromptGateExpected;
+            if (Matches(s_base + kPromptGate, From, sizeof(kPromptGateExpected)) &&
+                WriteCode(s_base + kPromptGate, To, sizeof(kPromptGateExpected)))
+            {
+                s_prompt_patched = Want;
+                Append(Want ? "convidado: a trava do 'Rest at bonfire' para convidados foi aberta\n"
+                            : "a trava do 'Rest at bonfire' para convidados foi restaurada\n");
+            }
+            else
+            {
+                s_prompt_gate_broken = true;
+                Append("a trava do 'Rest at bonfire' nao tem os bytes esperados; o convidado nao descansa\n");
+            }
+        }
+    }
 
     if (OwnsTheWorld())
     {
@@ -1145,6 +1186,11 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourTransactionCommit();
         s_original_rest = nullptr;
         s_original_reset = nullptr;
+    }
+    if (s_prompt_patched && Matches(s_base + kPromptGate, kPromptGatePatch, sizeof(kPromptGatePatch)))
+    {
+        WriteCode(s_base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected));
+        s_prompt_patched = false;
     }
     if (s_job_patched)
     {
