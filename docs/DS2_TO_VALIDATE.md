@@ -241,6 +241,20 @@ whose bonfire announcement never arrives (no channel, or the host never rested
 since boot), a host with its bonfire in a map other than where it stands, and
 any area pair besides Majula → Heide. The VPS server has no party pass.
 
+### M4: the host's world at join
+
+Measured 15/09, both characters in Heide: a guest carries the host's event
+flags in place of its own at join (a bit set only in the host's memory
+appeared on the guest, a bit set only on the guest disappeared), for map and
+global categories, and gets its own back at home. The join goes through the
+world snapshot (`FUN_1402bf8f0` export → `FUN_1402c2fa0` import), not packet
+`0x20`. Not measured: any real door, lever, elevator, illusory wall or Pharros
+mechanism; a flag changed **during** a session (the host cannot rest at a
+bonfire in one, "Cannot use bonfire"); `MapStateActManager`,
+`EnemyGeneratorDeadCounter` and `EventBonfireManager` beyond reading that the
+snapshot carries them; any map but Heide; a guest's own action on a mechanism
+in the host's world. See docs/DS2_WORLD_STATE.md.
+
 ### Entering without a soapstone
 
 Measured once, 14/09, with both characters hollow at the same bonfire: the
