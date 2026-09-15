@@ -259,7 +259,12 @@ the host; its own travel proposal opened the host's vote naming "The Far Fire
 (Majula)", a decline told the guest, and an accepted one made the guest leave
 legally and the host travel, with no penalty points and the party back
 together. A guest that leaves the host's question unanswered sees "Travel
-canceled: not every player answered." when it times out (build `74247cca`). Not measured: three or more players (a guest's rest notice relayed
+canceled: not every player answered." when it times out (build `74247cca`).
+The guest's rest resetting the world was measured by the log lines on both
+machines, not by an enemy coming back (that was measured for the host's rest).
+Only type 14 of the event action entries is let through for a white phantom
+(build `dec12dd2`, where the guest again sat and healed 400 -> 914); type 13, most likely lighting an unlit bonfire, stays
+refused and was never offered to a guest. Not measured: three or more players (a guest's rest notice relayed
 to the other guests), leveling or attuning in it, burning a Bonfire Ascetic
 with a phantom present, resting with an invader in the world, a proposal the
 host refuses as not lit or busy, whether query 130602's answer is still needed

@@ -104,9 +104,19 @@ objetos quebráveis voltam, invasões de NPC podem reiniciar, o estado de
 combate é limpo. O grupo deve ser avisado antes ("A player is resting at a
 bonfire").
 
-Fast travel move o grupo inteiro, com votação:
+Qualquer jogador descansa, não só o host, e o descanso de qualquer um
+reseta o mundo para todos. A cura é de quem sentou: o descanso do host **não**
+cura o convidado, e o convidado que quer a cura senta na fogueira (decidido
+15/09).
 
-    Travel to King's Gate?   A ✓  B ✓  C ✓   → party inteira viaja
+Fast travel move o grupo inteiro, com votação, e qualquer jogador pode
+propor. A pergunta diz para onde, com fogueira e área:
+
+    The host wants to travel to The Far Fire (Majula). Travel together?
+    A ✓  B ✓  C ✓   → party inteira viaja
+
+Uma proposta para uma fogueira que o host não acendeu é cancelada com aviso a
+quem propôs.
 
 Portas, alavancas, elevadores, atalhos, illusory walls e mecanismos de Pharros
 são sincronizados: o mundo da sessão tem um estado autoritativo. Quem usa a
