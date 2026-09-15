@@ -2099,3 +2099,27 @@ entregue de novo; `retoma` agora percorre a coleção do `SummonSignSetCtrl`
 com a marca `0x80000000`) e invoca a do parceiro. Medido: placa 1005 ignorada
 às 03:10:11 com o host pausado, invocada às 03:10:29 ao retomar, entrada de
 Majula com a queda recuperada e `p2pSessionVerified: true`.
+
+**A chegada, sem esperar cair.** Depender da queda amarrava a entrada ao modo
+`respawn` e a um ponto que por acaso fosse vazio. O hook de morte agora olha a
+chegada: quando o papel do jogador local passa de dono do mundo para outro, ele
+lembra o mapa de onde veio, espera o anúncio da fogueira do host pelo canal e,
+se o host está num mapa diferente, leva o convidado para lá (o mesmo
+`StartRecovery` da queda). Duas coisas medidas no caminho, que derrubaram as
+duas primeiras versões:
+
+- o controlador do jogador local **sobrevive** ao warp de entrada — nenhuma
+  linha "controlador do jogador local" na chegada —, então o gatilho é a troca
+  de papel, não um controlador novo;
+- no ponto de chegada não há parte sob os pés, e o mapa do streamer lê **0**;
+  exigir o mapa do host ali nunca casava. Mapa 0 ou o do host, com o anúncio
+  de outro mapa, bastam (depois de 30 quadros).
+
+    03:50:40  Samuel  host: invocando a placa 80000011 do parceiro
+    03:50:50  Chico   chegada de outro mapa: vim de 0a040000, o host esta em 0a1f0000, sob os pes 00000000
+    03:50:50  Chico   levando para fogueira do host (6.186, -18.517, 209.053) ... teleportado; anunciada ha 1590 ms
+    03:50:50  Chico   concluido em 2 quadros                      p2pSessionVerified: true, nenhuma morte
+
+Repetido às 03:53:50 depois de `session end` e `retoma`, igual. O controle, com
+o Chico levado a Heide por viagem de fogueira: entrada às 03:57:50 no mesmo
+mapa, sessão verificada, nenhuma linha de chegada.

@@ -230,13 +230,16 @@ the sign, and the VPS, which still matches by Soul Memory.
 
 ### Entering from another area
 
-Measured twice, Majula to Heide, 15/09: the guest's join lands on its own sign
-converted into the host's map, which there was empty space, and the death hook
-in `respawn` mode caught the fall and took it to the host's bonfire. A pair of
-maps where that point is inside geometry, or over ground far from the host,
-would leave the guest there — not falling, so not rescued. The fix that does
-not depend on falling is to rewrite the join destination; it needs the host's
-position on the guest before the warp, which nothing delivers yet.
+Measured twice, Majula to Heide, 15/09, in `observe`: the guest's join lands
+on its own sign converted into the host's map (empty space), and the death
+hook's arrival check (role owner → phantom, host announced in another map,
+map 0 or the host's under the feet) teleports it to the host's bonfire before
+it falls. Same-map control did not trigger. Not measured: a pair of maps where
+the converted point is over ground of a **third** map (the streamer would
+report neither 0 nor the host's map, and the check gives up after 30 s), a host
+whose bonfire announcement never arrives (no channel, or the host never rested
+since boot), a host with its bonfire in a map other than where it stands, and
+any area pair besides Majula → Heide. The VPS server has no party pass.
 
 ### Entering without a soapstone
 

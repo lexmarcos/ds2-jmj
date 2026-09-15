@@ -35,6 +35,7 @@ ao servidor. Ausência de erro não prova nada.
 | **M3 — sem efígie**, placa branca | `DS2_HollowSummonHook` (`+0x2a1b1e`), com `--seamless` | Samuel e Chico hollow (estado 1): `Summoning sign` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` (14/09) |
 | **M3 — sem soapstone e sem toque**, primeira metade | `DS2_PartyHook` (convidado: `placa 1`) + `DS2_RematchHook` (host: `alvo <jogador> <tipo>`), com `--seamless --auto-rematch` | nenhuma tecla nos dois: `Sign 1015 created` → `Summoning sign 1015` → `JoinGuestPlayer` → `JoinSession`, `p2pSessionVerified: true`, os dois hollow (14/09) |
 | **M3 — sem Soul Memory**, placa branca | `DisableSoulMemoryMatching` em `DS2_WhiteSoapstoneMatchingParameters` e `DS2_SmallWhiteSoapstoneMatchingParameters` | com tiers que separam 5130 de 2551: `refused by matching 1` desligado, `sent 1` e a invocação com ele ligado (14/09) |
+| **M3 — entrar uma vez, sem ritual** | `DS2PartyGuest`/`DS2PartyAccept`/`DS2PartyPassword` (`DS2_PartyHook`), passada de party no `DS2_SignManager`, chegada de outro mapa no `DS2_DeathInterceptHook`; `up --seamless --party` | senha, quatro casos; Majula → Heide sem tecla nem queda, `p2pSessionVerified: true` (15/09) |
 
 ---
 
@@ -461,7 +462,7 @@ mapa e o ponto do host.
 
 ---
 
-## M3 — entrar uma vez, sem ritual — **começado em 14/09**
+## M3 — entrar uma vez, sem ritual — **FEITO em 15/09**
 
 **Feito:** efígie e Soul Memory não travam mais a entrada por placa branca, e
 a entrada já acontece sem soapstone e sem toque quando os dois lados recebem a
@@ -481,12 +482,15 @@ ordem (ver "Sem efígie" e "Entrar sem soapstone" em
    senha que não é convidado invoca as placas brancas que chegam. Medidos a
    entrada só pela senha, senhas diferentes, host público contra placa com
    senha e host com senha contra placa pública.
-3. ~~**Longe um do outro.**~~ **Feito 15/09**, com uma dependência: o servidor
-   oferece ao poll com senha as placas do mesmo código de qualquer área, com a
-   posição reescrita para onde o host está; o host invoca; o convidado entra
-   num ponto errado do mapa do host (a própria placa convertida), cai, e o
-   modo `respawn` do M2 o leva à fogueira do host dentro da sessão. Medido
-   duas vezes de Majula (viagem de fogueira) para Heide.
+3. ~~**Longe um do outro.**~~ **Feito 15/09**: o servidor oferece ao poll com
+   senha as placas do mesmo código de qualquer área, com a posição reescrita
+   para onde o host está; o host invoca; o convidado entra num ponto errado do
+   mapa do host (a própria placa convertida, no vazio) e o hook de morte o
+   leva à fogueira do host ao chegar, antes de cair e em qualquer modo de
+   morte: papel de dono para fantasma, anúncio do host num mapa diferente do
+   de onde veio, nada sob os pés. Medido duas vezes de Majula para Heide em
+   `observe` (teleporte 10 s depois da invocação, `p2pSessionVerified: true`,
+   nenhuma morte), com o controle no mesmo mapa sem disparo.
 4. ~~**Uma revanche e uma entrada no mesmo hook.**~~ **Feito 15/09**: a
    entrada é toda do `DS2_PartyHook` (detour próprio do `AddSign`), medida com
    `DS2AutoRematch` desligado.
