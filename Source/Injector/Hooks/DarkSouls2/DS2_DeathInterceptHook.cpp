@@ -496,6 +496,7 @@ namespace
     uint32_t s_arrival_frames = 0;
     uint8_t s_last_local_role = 0xff;
     constexpr uint32_t kArrivalGiveUpFrames = 30 * 60;
+    constexpr uint32_t kArrivalSettleFrames = 30;
 
     // Waiting for the banner to end, to give the HUD back.
     struct BannerWait
@@ -1877,11 +1878,14 @@ namespace
                 {
                     s_arrival_frames = 0;   // the host is in the map the guest came from: nothing converted
                 }
-                else if (Announced && Map == Said.Map)
+                else if (Announced && (Map == Said.Map || Map == 0) && s_arrival_frames > kArrivalSettleFrames)
                 {
+                    // The landing point is empty space, so there is no part
+                    // under the guest and the streamer says map 0 (measured
+                    // 15/09): no footing and a host elsewhere is the arrival.
                     s_arrival_frames = 0;
-                    Append(StringFormat("%s  chegada de outro mapa: vim de %08x, o host esta em %08x\n",
-                        Clock().c_str(), s_owner_map, Map));
+                    Append(StringFormat("%s  chegada de outro mapa: vim de %08x, o host esta em %08x, sob os pes %08x\n",
+                        Clock().c_str(), s_owner_map, Said.Map, Map));
                     StartRecovery(Chr, "chegada de outro mapa");
                 }
                 else if (s_arrival_frames > kArrivalGiveUpFrames)
