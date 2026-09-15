@@ -18,10 +18,10 @@
 ///   placa <tipo>   places this player's own sign, as the soapstone would
 ///   status         what the sign manager holds
 ///
-/// The order runs on the game's thread, inside a detour of a sign-manager
-/// method the game already calls every frame.
-/// The NetSvrSummonSignManager, as the game last handed it to the detour, or
-/// null before the first frame in the world. Other hooks that summon need it
+/// The order runs on the game's thread, inside a detour of the
+/// SummonSignSetCtrl update the game calls every frame on host and guest.
+/// The NetSvrSummonSignManager, resolved the way the game's getter does and
+/// checked by its vftable, or null while it does not exist yet. Other hooks that summon need it
 /// without waiting for the player to summon by hand.
 void* DS2_PartyHook_SignManager();
 

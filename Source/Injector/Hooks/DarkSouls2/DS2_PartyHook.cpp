@@ -32,15 +32,13 @@ namespace
 
     // Version 1.03 Calibrations 2.02, both verified before anything is written.
     //
-    // NetSvrSummonSignManager, two neighbouring methods with the same shape
-    // (manager, sign type byte):
+    // The NetSvrSummonSignManager is reached the way the game's own getter
+    // does (FUN_1405132a0: *(*0x141616cf8 + 0x30) is the NetSvrManager), then
+    // its field +0x78, and it is believed only with its vftable. Measured the
+    // same on both instances, 14/09.
     //
-    //   +0x29fff0  "could this sign be placed now": maps the type through the
-    //              player's state (FUN_14029c9b0) and runs the usability check
-    //              FUN_1402a1bf0. The item code calls it every frame, from
-    //              +0x1a9176, with the manager in rcx — which is how the
-    //              manager is found here, and why this is the game thread.
-    //   +0x2a1410  "place it": the same mapping, then FUN_1402a2780, which
+    //   +0x2a1410  "place my sign": maps the type through the player's state
+    //              (FUN_14029c9b0), then FUN_1402a2780, which
     //              checks again, builds the cell and matching parameters,
     //              calls NetSvrSummonSignInterface::CreateSummonSign and keeps
     //              the sign at manager+0x18 (placed) / +0x24 (handle) / +0x40
@@ -49,17 +47,31 @@ namespace
     //
     // Traced 14/09: a real White Sign Soapstone use reached CreateSummonSign
     // from +0x2a2b98 (inside FUN_1402a2780), and the evaluation passes type 1.
-    constexpr size_t kCanPlaceOffset = 0x29fff0;
     constexpr size_t kPlaceOffset = 0x2a1410;
-    constexpr uint8_t kPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x20, 0x56, 0x57 };
+    constexpr uint8_t kPlacePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x20, 0x56, 0x57 };
+
+    // SummonSignSetCtrl's update, called every frame on host and guest alike
+    // (a re-armed breakpoint hit it in every half-second window on both). The
+    // orders run here, so they run on the game's thread. The evaluation the
+    // soapstone uses (+0x29fff0) was the first choice and never runs on a
+    // player without a soapstone in hand.
+    constexpr size_t kTickOffset = 0x2139d0;
+    constexpr uint8_t kTickPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57 };
+
+    constexpr size_t kNetSvrGlobal = 0x1616cf8;
+    constexpr size_t kNetSvrField = 0x30;
+    constexpr size_t kSummonSignField = 0x78;
+    constexpr size_t kSummonSignVftable = 0x10d61f8;
 
     constexpr size_t kPlacedOffset = 0x18;   // byte
     constexpr size_t kHandleOffset = 0x24;   // uint32
     constexpr size_t kTypeOffset = 0x40;     // byte
 
     using SignMethod_p = void(*)(void* Manager, uint64_t Type);
-    SignMethod_p s_original_can_place = nullptr;
+    using Tick_p = void(*)(void* Self);
+    Tick_p s_original_tick = nullptr;
     SignMethod_p s_place = nullptr;
+    uintptr_t s_base = 0;
 
     constexpr int kNothing = -1;
     std::atomic<void*> s_manager{ nullptr };
@@ -96,11 +108,45 @@ namespace
             Handle, (unsigned)Bytes[kTypeOffset]);
     }
 
-    // Runs on the game's thread, every frame.
-    void CanPlaceHook(void* Manager, uint64_t Type)
+    bool ReadPointer(uintptr_t At, uintptr_t& Out)
     {
-        s_original_can_place(Manager, Type);
+        __try
+        {
+            Out = *(const uintptr_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void* ResolveManager()
+    {
+        uintptr_t Global = 0, NetSvr = 0, Manager = 0, Vftable = 0;
+        if (!ReadPointer(s_base + kNetSvrGlobal, Global) || Global == 0) { return nullptr; }
+        if (!ReadPointer(Global + kNetSvrField, NetSvr) || NetSvr == 0) { return nullptr; }
+        if (!ReadPointer(NetSvr + kSummonSignField, Manager) || Manager == 0) { return nullptr; }
+        if (!ReadPointer(Manager, Vftable) || Vftable != s_base + kSummonSignVftable) { return nullptr; }
+        return (void*)Manager;
+    }
+
+    // Runs on the game's thread, every frame.
+    void TickHook(void* Self)
+    {
+        s_original_tick(Self);
+
+        if (s_pending_place.load() == kNothing && !s_pending_status.load())
+        {
+            return;
+        }
+        void* Manager = ResolveManager();
         s_manager.store(Manager);
+        if (Manager == nullptr)
+        {
+            // Stays pending: the manager exists once the player is online.
+            return;
+        }
 
         const int Wanted = s_pending_place.exchange(kNothing);
         if (Wanted != kNothing)
@@ -141,9 +187,9 @@ namespace
                     else if (Line.rfind("status", 0) == 0)
                     {
                         s_pending_status.store(true);
-                        if (s_manager.load() == nullptr)
+                        if (ResolveManager() == nullptr)
                         {
-                            Append(StringFormat("%s  === status: o manager ainda nao passou pelo hook ===\n", Clock().c_str()));
+                            Append(StringFormat("%s  === status: manager nao resolvido ainda (fica pendente) ===\n", Clock().c_str()));
                         }
                     }
                     else if (!Line.empty())
@@ -164,7 +210,7 @@ namespace
 void* DS2_PartyHook_SignManager()
 {
 #ifdef _WIN32
-    return s_manager.load();
+    return s_base == 0 ? nullptr : ResolveManager();
 #else
     return nullptr;
 #endif
@@ -174,24 +220,25 @@ bool DS2_PartyHook::Install(Injector& injector)
 {
 #ifdef _WIN32
     const uintptr_t Base = (uintptr_t)injector.GetBaseAddress();
-    const uintptr_t CanPlace = Base + kCanPlaceOffset;
+    const uintptr_t Tick = Base + kTickOffset;
     const uintptr_t Place = Base + kPlaceOffset;
 
-    if (!BytesMatch(CanPlace, kPrologue, sizeof(kPrologue)) || !BytesMatch(Place, kPrologue, sizeof(kPrologue)))
+    if (!BytesMatch(Tick, kTickPrologue, sizeof(kTickPrologue)) || !BytesMatch(Place, kPlacePrologue, sizeof(kPlacePrologue)))
     {
-        Error("[DS2_PartyHook] o codigo em +0x%zx ou +0x%zx nao e o esperado; recusando", kCanPlaceOffset, kPlaceOffset);
+        Error("[DS2_PartyHook] o codigo em +0x%zx ou +0x%zx nao e o esperado; recusando", kTickOffset, kPlaceOffset);
         return false;
     }
+    s_base = Base;
 
     s_log_path = injector.GetDllPath() / "DS2_Party.log";
     s_request_path = injector.GetDllPath() / "DS2_Party.req";
 
-    s_original_can_place = (SignMethod_p)CanPlace;
+    s_original_tick = (Tick_p)Tick;
     s_place = (SignMethod_p)Place;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
-    DetourAttach(&(PVOID&)s_original_can_place, CanPlaceHook);
+    DetourAttach(&(PVOID&)s_original_tick, TickHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_PartyHook] nao consegui instalar o detour");
@@ -215,13 +262,13 @@ void DS2_PartyHook::Uninstall()
     {
         s_thread.join();
     }
-    if (s_original_can_place != nullptr)
+    if (s_original_tick != nullptr)
     {
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
-        DetourDetach(&(PVOID&)s_original_can_place, CanPlaceHook);
+        DetourDetach(&(PVOID&)s_original_tick, TickHook);
         DetourTransactionCommit();
-        s_original_can_place = nullptr;
+        s_original_tick = nullptr;
     }
 #endif
 }
