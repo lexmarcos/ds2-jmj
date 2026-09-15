@@ -73,6 +73,9 @@ namespace
     constexpr uint8_t kKindLastEvent = 2 + DS2_CoopChannel::kHostEventCount - 1;
     // A guest's answer to a vote: Id the vote, Type 1 yes and 0 no.
     constexpr uint8_t kKindAnswer = 0x20;
+    // A guest's event: 0x28 + DS2_CoopChannel::GuestEvent.
+    constexpr uint8_t kKindFirstGuestEvent = 0x28;
+    constexpr uint8_t kKindLastGuestEvent = 0x28 + DS2_CoopChannel::kGuestEventCount - 1;
     constexpr uint8_t kWorldOwner = 0;                 // *(chr+0xb0)+0x3c
 
     constexpr ULONGLONG kAnnounceEveryMs = 2000;
@@ -161,6 +164,22 @@ namespace
     std::atomic<ULONGLONG> s_events_tick{ 0 };
     std::atomic<uint32_t> s_event_map[DS2_CoopChannel::kHostEventCount] = {};
     std::atomic<uint32_t> s_event_id[DS2_CoopChannel::kHostEventCount] = {};
+    std::atomic<int32_t> s_event_type[DS2_CoopChannel::kHostEventCount] = {};
+
+    // Guest events waiting to be sent (guest side) and received ones (host).
+    std::atomic<bool> s_guest_pending[DS2_CoopChannel::kGuestEventCount] = {};
+    std::atomic<uint32_t> s_guest_map[DS2_CoopChannel::kGuestEventCount] = {};
+    std::atomic<uint32_t> s_guest_id[DS2_CoopChannel::kGuestEventCount] = {};
+    struct HeardGuestEvent
+    {
+        uint64_t Count = 0;
+        uint32_t Map = 0;
+        uint32_t Id = 0;
+        uint64_t From = 0;
+        ULONGLONG Tick = 0;
+    };
+    HeardGuestEvent s_heard_guest[DS2_CoopChannel::kGuestEventCount];   // under s_net_mutex
+    uint64_t s_taken_guest[DS2_CoopChannel::kGuestEventCount] = {};
 
     // Votes: a guest's answer waiting to be sent, and the answers a host got.
     std::atomic<bool> s_answer_pending{ false };
@@ -335,6 +354,30 @@ namespace
         return false;
     }
 
+    // Under s_net_mutex: a member of a session this machine hosts.
+    bool IsMyGuestLocked(uint64_t Id, ULONGLONG Now)
+    {
+        const uint64_t Self = s_self.load();
+        for (const Members& Session : s_sessions)
+        {
+            if (Session.Session == 0 || Now - Session.Tick > kMembersFreshMs)
+            {
+                continue;
+            }
+            bool SelfIsHost = false, Has = false;
+            for (size_t i = 0; i < Session.Count; ++i)
+            {
+                SelfIsHost = SelfIsHost || (Session.Ids[i] == Self && Session.Host[i]);
+                Has = Has || (Session.Ids[i] == Id && Id != Self);
+            }
+            if (SelfIsHost && Has)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Returns true when this session's members are not what they were.
     bool Remember(const Members& Now)
     {
@@ -396,9 +439,35 @@ namespace
         memcpy(&Said, Data, sizeof(Said));
         const bool Event = Said.Kind >= kKindFirstEvent && Said.Kind <= kKindLastEvent;
         if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion ||
-            (Said.Kind != kKindBonfire && Said.Kind != kKindAnswer && !Event))
+            (Said.Kind != kKindBonfire && Said.Kind != kKindAnswer && !Event &&
+             !(Said.Kind >= kKindFirstGuestEvent && Said.Kind <= kKindLastGuestEvent)))
         {
             Refuse("nao e um anuncio desta versao", From, Size);
+            return;
+        }
+        if (Said.Kind >= kKindFirstGuestEvent && Said.Kind <= kKindLastGuestEvent)
+        {
+            bool Member = false;
+            {
+                std::scoped_lock Lock(s_net_mutex);
+                Member = IsMyGuestLocked(From, GetTickCount64());
+                if (Member)
+                {
+                    HeardGuestEvent& Entry = s_heard_guest[Said.Kind - kKindFirstGuestEvent];
+                    ++Entry.Count;
+                    Entry.Map = Said.Map;
+                    Entry.Id = Said.Id;
+                    Entry.From = From;
+                    Entry.Tick = GetTickCount64();
+                }
+            }
+            if (!Member)
+            {
+                Refuse("evento de quem nao e convidado desta sessao", From, Size);
+                return;
+            }
+            Append(StringFormat("%s  evento %u do convidado %016llx: mapa %08x id %08x\n", Clock().c_str(), (unsigned)Said.Kind,
+                (unsigned long long)From, Said.Map, Said.Id));
             return;
         }
         if (Said.Kind == kKindAnswer)
@@ -407,22 +476,7 @@ namespace
             bool Member = false;
             {
                 std::scoped_lock Lock(s_net_mutex);
-                const uint64_t Self = s_self.load();
-                const ULONGLONG Now = GetTickCount64();
-                for (const Members& Session : s_sessions)
-                {
-                    if (Session.Session == 0 || Now - Session.Tick > kMembersFreshMs)
-                    {
-                        continue;
-                    }
-                    bool SelfIsHost = false, Has = false;
-                    for (size_t i = 0; i < Session.Count; ++i)
-                    {
-                        SelfIsHost = SelfIsHost || (Session.Ids[i] == Self && Session.Host[i]);
-                        Has = Has || Session.Ids[i] == From;
-                    }
-                    Member = Member || (SelfIsHost && Has);
-                }
+                Member = IsMyGuestLocked(From, GetTickCount64());
                 if (Member)
                 {
                     bool Replaced = false;
@@ -587,7 +641,7 @@ namespace
             const uint32_t MapOverride = s_event_map[Index].load();
             const uint32_t IdOverride = s_event_id[Index].load();
             Event.Map = MapOverride != 0 ? MapOverride : Mine.Map;
-            Event.Type = Mine.Type;
+            Event.Type = s_event_type[Index].load();
             Event.Id = (MapOverride != 0 || IdOverride != 0) ? IdOverride : Mine.Id;
             {
                 std::scoped_lock Lock(s_announce_mutex);
@@ -712,6 +766,39 @@ namespace
 
         Receive(Net);
         Announce(Net, Now, Self);
+
+        // A guest's events go to the host of this session.
+        for (uint8_t Index = 0; Index < DS2_CoopChannel::kGuestEventCount; ++Index)
+        {
+            if (!s_guest_pending[Index].load())
+            {
+                continue;
+            }
+            uint64_t Host = 0;
+            for (size_t i = 0; i < Now.Count; ++i)
+            {
+                if (Now.Host[i] && Now.Ids[i] != Self)
+                {
+                    Host = Now.Ids[i];
+                }
+            }
+            if (Host == 0 || !s_guest_pending[Index].exchange(false))
+            {
+                continue;
+            }
+            Announcement Said = {};
+            memcpy(Said.Magic, kMagic, sizeof(kMagic));
+            Said.Version = kVersion;
+            Said.Kind = (uint8_t)(kKindFirstGuestEvent + Index);
+            Said.Role = kWorldOwner;   // passes the sender check; the kind says who it is from
+            Said.Map = s_guest_map[Index].load();
+            Said.Id = s_guest_id[Index].load();
+            const auto SendTo = (Send_p)VirtualAt(Net, kSendSlot);
+            const bool Sent = SendTo(Net, Host, &Said, sizeof(Said), kReliable, kChannel);
+            Sent ? ++s_sent : ++s_send_failed;
+            Append(StringFormat("%s  evento %u enviado ao host %016llx: mapa %08x id %08x%s\n", Clock().c_str(), (unsigned)Said.Kind,
+                (unsigned long long)Host, Said.Map, Said.Id, Sent ? "" : " (falhou)"));
+        }
 
         // A guest's answer goes to the host of this session.
         if (s_answer_pending.load())
@@ -911,11 +998,57 @@ void DS2_CoopChannel::GuestAnswers(uint32_t Vote, size_t& Yes, size_t& No)
 #endif
 }
 
-void DS2_CoopChannel::SendHostEvent(HostEvent Event, uint32_t Map, uint32_t Id)
+void DS2_CoopChannel::SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id)
+{
+#ifdef _WIN32
+    s_guest_map[(size_t)Event].store(Map);
+    s_guest_id[(size_t)Event].store(Id);
+    s_guest_pending[(size_t)Event].store(true);
+#endif
+}
+
+bool DS2_CoopChannel::TakeGuestEvent(GuestEvent Event, Bonfire& Out)
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_net_mutex);
+    const size_t Index = (size_t)Event;
+    const HeardGuestEvent& Entry = s_heard_guest[Index];
+    if (Entry.Count == s_taken_guest[Index])
+    {
+        return false;
+    }
+    s_taken_guest[Index] = Entry.Count;
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - Entry.Tick > kHostFreshMs)
+    {
+        return false;
+    }
+    Out.Map = Entry.Map;
+    Out.Type = 0;
+    Out.Id = Entry.Id;
+    Out.From = Entry.From;
+    Out.AgeMs = Now - Entry.Tick;
+    return true;
+#else
+    return false;
+#endif
+}
+
+uint64_t DS2_CoopChannel::SelfSteamId()
+{
+#ifdef _WIN32
+    return s_self.load();
+#else
+    return 0;
+#endif
+}
+
+void DS2_CoopChannel::SendHostEvent(HostEvent Event, uint32_t Map, uint32_t Id, int32_t Type)
 {
 #ifdef _WIN32
     s_event_map[(size_t)Event].store(Map);
     s_event_id[(size_t)Event].store(Id);
+    s_event_type[(size_t)Event].store(Type);
     const ULONGLONG Now = GetTickCount64();
     if (Now - s_events_tick.load() > kEventFreshMs)
     {

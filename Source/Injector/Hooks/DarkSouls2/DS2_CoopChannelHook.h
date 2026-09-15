@@ -87,20 +87,36 @@ namespace DS2_CoopChannel
     {
         RestStarted = 0,   // the host sat at a bonfire
         WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
-        TravelVote = 2,    // the host asks to travel; Id carries the vote number
-        TravelLeave = 3,   // everyone agreed: leave the session so the host can travel
+        TravelVote = 2,     // a vote to travel; Map/Type the bonfire, Id the vote (top bit: a guest proposed it)
+        TravelLeave = 3,    // everyone agreed: leave the session so the host can travel
+        TravelCanceled = 4, // Id the reason, Map/Type the bonfire
     };
-    constexpr uint8_t kHostEventCount = 4;
+    constexpr uint8_t kHostEventCount = 5;
 
     // Other members of a session this machine hosts, seen in the last few
     // seconds. 0 when it hosts nothing.
     size_t GuestCount();
-    // With Map/Id nonzero they replace the host's record in the event.
-    void SendHostEvent(HostEvent Event, uint32_t Map = 0, uint32_t Id = 0);
+    // With Map/Id nonzero they replace the host's record in the event; Type
+    // is passed through (0 by default).
+    void SendHostEvent(HostEvent Event, uint32_t Map = 0, uint32_t Id = 0, int32_t Type = 0);
     bool TakeHostEvent(HostEvent Event, Bonfire& Out);
 
     // A guest's answer to the host's vote, sent to the host of its session by
     // the next poll. The host counts the answers it received for one vote.
     void SendGuestAnswer(uint32_t Vote, bool Yes);
     void GuestAnswers(uint32_t Vote, size_t& Yes, size_t& No);
+
+    // Things a guest tells the host of its session, sent by the next poll. The
+    // host takes each received one once; Out.From is the guest.
+    enum class GuestEvent : uint8_t
+    {
+        RestStarted = 0,     // the guest sat at a bonfire in the host's world; Map/Id the bonfire
+        TravelPropose = 1,   // the guest picked a bonfire to travel to; Map/Id the bonfire
+    };
+    constexpr uint8_t kGuestEventCount = 2;
+    void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
+    bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
+
+    // This machine's SteamID64, 0 until the first poll.
+    uint64_t SelfSteamId();
 }

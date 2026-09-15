@@ -79,9 +79,63 @@ namespace
     constexpr int kTitleCategory = 0;
     constexpr int kTitleId = 0xcc;
     constexpr const wchar_t* kRestNotice = L"A player is resting at a bonfire.";
-    constexpr const wchar_t* kTravelQuestion = L"The host wants to travel to another bonfire. Travel together?";
     constexpr const wchar_t* kTravelDeclined = L"Travel canceled: a player declined.";
     constexpr const wchar_t* kTravelNoAnswer = L"Travel canceled: not every player answered.";
+    constexpr const wchar_t* kTravelBusy = L"Travel canceled: another travel vote is running.";
+
+    // Names for the travel question, from the game's own text: bonfires in
+    // category 0x12 by bonfire id (FUN_1400d5800, the travel list), areas in
+    // category 5 by area id (FUN_14002f630), the area id being the map's
+    // first two numbers: 0x0a1f0000 (m10_31) is 10310000, read from the travel
+    // list's own entries on 15/09.
+    constexpr int kBonfireNames = 0x12;
+    constexpr int kAreaNames = 5;
+
+    // The bonfire table, EventBonfireManager = *(*(ctx+0x70)+0x58):
+    //   FUN_14017c110(&index, id) + FUN_14017c230(&index, &map): a bonfire's map
+    //   FUN_14017e6f0(manager, id): lit in the world the player stands in
+    //   *(manager+8) the loaded MapObjBonfireComponents, next at +0x60, entity at +0x08
+    constexpr size_t kBonfireIndexOffset = 0x17c110;
+    constexpr uint8_t kBonfireIndexPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x8b, 0x05, 0xd4, 0x87, 0x49, 0x01, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kBonfireMapOffset = 0x17c230;
+    constexpr uint8_t kBonfireMapPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x05, 0xb3, 0x86, 0x49, 0x01, 0x48, 0x8b, 0xda };
+    constexpr size_t kBonfireLitOffset = 0x17e6f0;
+    constexpr uint8_t kBonfireLitPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0xc2, 0x0a, 0x00, 0x00 };
+    constexpr size_t kBonfireManager = 0x58;
+    constexpr size_t kBonfireList = 0x08;
+    constexpr size_t kBonfireNext = 0x60;
+    constexpr size_t kComponentEntity = 0x08;
+    constexpr size_t kEntityPosition = 0x70;
+
+    // A travel the game itself starts, the way FUN_14017fdb0 does once a
+    // bonfire is picked: FUN_1401843b0(&request, id, 2) builds it,
+    // FUN_140184830(*(*(ctx+0x70)+0x70), &request) starts it, and
+    // FUN_14044fe30(*(ctx+0x70), {map, 0, spawn}) makes it the respawn point.
+    constexpr size_t kTravelBuildOffset = 0x1843b0;
+    constexpr uint8_t kTravelBuildPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x60 };
+    constexpr size_t kTravelStartOffset = 0x184830;
+    constexpr uint8_t kTravelStartPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x60, 0x8b, 0x02, 0x48, 0x8b, 0xd9, 0x89, 0x01 };
+    constexpr size_t kRecordSetOffset = 0x44fe30;
+    constexpr uint8_t kRecordSetPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x60, 0x83, 0x7a, 0x04, 0x01 };
+    constexpr size_t kTravelObject = 0x70;
+    constexpr size_t kTravelBonfireOffset = 0xd4eb0;   // FUN_1400d4eb0(list): the bonfire id under the cursor
+    constexpr uint8_t kTravelBonfirePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0x82, 0xd2, 0xf4, 0xff };
+
+    // A guest never gets "Rest at bonfire": the bonfire's event script asks
+    // query 130602 (FUN_140513440, "in a session as a guest") and stops there
+    // - measured 15/09 with the esd spy, the guest's script evaluated nothing
+    // else. The two map event evaluators that ask it (EventEzStateObjCtrl slot
+    // +8, FUN_140471ae0, the object at +200; EventEzStatePointCtrl slot +8,
+    // FUN_140473ac0, its point at +200 -> +0x40) answer "no" when the script
+    // belongs to a bonfire.
+    constexpr size_t kObjScriptOffset = 0x471ae0;
+    constexpr uint8_t kObjScriptPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0x98 };
+    constexpr size_t kPointScriptOffset = 0x473ac0;
+    constexpr uint8_t kPointScriptPrologue[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xec, 0x70 };
+    constexpr int32_t kQueryIsGuest = 130602;
+    constexpr size_t kScriptTarget = 200;
+    constexpr size_t kPointPosition = 0x40;
+    constexpr float kPointNearBonfire = 3.0f;
 
     // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
     // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
@@ -115,7 +169,6 @@ namespace
     constexpr size_t kEventManager = 0x70;
     constexpr size_t kQueueState = 0x54;
     constexpr int32_t kQueueBonfireMenu = 10;
-    constexpr const wchar_t* kTravelPickAgain = L"Everyone agreed. Pick the bonfire again to travel.";
     constexpr size_t kMenuQueue = 0x50;
     constexpr ULONGLONG kLeaveSettleMs = 1500;
     constexpr ULONGLONG kLeaveGiveUpMs = 20000;
@@ -136,6 +189,18 @@ namespace
     constexpr size_t kLocalCharacter = 0xd0;
     constexpr size_t kRoles = 0xb0;
     constexpr size_t kRole = 0x3c;
+    constexpr uint8_t kRoleOwner = 0;
+    constexpr uint8_t kRoleWhitePhantom = 1;
+
+    // Why a travel vote ended without travelling, as TravelCanceled carries it.
+    enum class Cancel : uint32_t
+    {
+        Declined = 1,
+        NoAnswer = 2,
+        NotLit = 3,
+        Busy = 4,
+        Stuck = 5,
+    };
 
     using SessionUp_p = uint64_t(*)(void* Session);
     SessionUp_p s_original = nullptr;
@@ -159,13 +224,37 @@ namespace
     bool s_votes_ready = false;
     using Pick_p = void(*)(void* List);
     Pick_p s_original_pick = nullptr;
+    using BonfireIndex_p = uint32_t*(*)(uint32_t* Out, uint16_t Id);
+    using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
+    using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
+    using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
+    using TravelStart_p = void(*)(void* Travel, uint8_t* Request);
+    using RecordSet_p = void(*)(void* Record, int32_t* Fields);
+    using TravelBonfire_p = uint16_t(*)(void* List);
+    using Script_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
+    BonfireIndex_p s_bonfire_index = nullptr;
+    BonfireMap_p s_bonfire_map = nullptr;
+    BonfireLit_p s_bonfire_lit = nullptr;
+    TravelBuild_p s_travel_build = nullptr;
+    TravelStart_p s_travel_start = nullptr;
+    RecordSet_p s_record_set = nullptr;
+    TravelBonfire_p s_travel_bonfire = nullptr;
+    Script_p s_original_obj_script = nullptr;
+    Script_p s_original_point_script = nullptr;
+    bool s_guest_rest_ready = false;
+    std::atomic<uint64_t> s_prompts_opened{ 0 };
 
     // Host side, game thread only.
     struct HeldTravel
     {
         bool Active = false;
         bool Pass = false;
-        void* List = nullptr;
+        void* List = nullptr;          // the host's own list, when the host picked
+        uint64_t Proposer = 0;         // the guest who picked, otherwise
+        uint16_t Bonfire = 0;
+        uint32_t Map = 0;
+        bool HostAnswered = false;
+        bool HostYes = false;
         uint32_t Vote = 0;
         size_t Guests = 0;
         ULONGLONG Since = 0;
@@ -180,10 +269,26 @@ namespace
     struct OpenVote
     {
         bool Active = false;
+        bool Host = false;
         uint32_t Vote = 0;
         int32_t Number = 0;
     };
     OpenVote s_open_vote;
+
+    // Guest side, game thread only: what this guest proposed and answered.
+    struct Proposal
+    {
+        bool Active = false;
+        uint16_t Bonfire = 0;
+        ULONGLONG Since = 0;
+    };
+    Proposal s_proposal;
+    uint32_t s_answered_vote = 0;
+    bool s_answered_yes = false;
+
+    // Text handed to the game's message boxes; they are kept, not copied.
+    wchar_t s_question[512] = {};
+    wchar_t s_message[512] = {};
     std::atomic<bool> s_events_ready{ false };
     std::filesystem::path s_log_path;
     std::mutex s_log_mutex;
@@ -217,14 +322,209 @@ namespace
         }
     }
 
-    bool OwnsTheWorld()
+    void Append(const std::string& Text);
+    void ShowMessage(const wchar_t* Text);
+    void WorldResetHook();
+
+    // 0xff without a local character.
+    uint8_t LocalRole()
     {
         uintptr_t Context = 0, Character = 0, Roles = 0;
         uint8_t Role = 0xff;
-        return ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+        if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
             ReadPointer(Context + kLocalCharacter, Character) && Character != 0 &&
             ReadPointer(Character + kRoles, Roles) && Roles != 0 &&
-            ReadByte(Roles + kRole, Role) && Role == 0;
+            ReadByte(Roles + kRole, Role))
+        {
+            return Role;
+        }
+        return 0xff;
+    }
+
+    bool OwnsTheWorld()
+    {
+        return LocalRole() == kRoleOwner;
+    }
+
+    bool IsWhitePhantom()
+    {
+        return LocalRole() == kRoleWhitePhantom;
+    }
+
+    uintptr_t BonfireManager()
+    {
+        uintptr_t Context = 0, Events = 0, Manager = 0;
+        if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kEventManager, Events) && Events != 0 &&
+            ReadPointer(Events + kBonfireManager, Manager))
+        {
+            return Manager;
+        }
+        return 0;
+    }
+
+    // 0xffffffff when the bonfire is not in the table.
+    uint32_t MapOfBonfire(uint16_t Id)
+    {
+        if (s_bonfire_index == nullptr || BonfireManager() == 0)
+        {
+            return 0xffffffff;
+        }
+        uint32_t Index = 0, Map = 0xffffffff;
+        s_bonfire_index(&Index, Id);
+        s_bonfire_map(&Index, &Map);
+        return Map;
+    }
+
+    const wchar_t* TextOrEmpty(int Category, int Id)
+    {
+        const wchar_t* Text = s_text != nullptr ? s_text(Category, Id) : nullptr;
+        __try
+        {
+            if (Text == nullptr || Text[0] == 0 || Text[0] > 0xffff || Text[0] == L'?')
+            {
+                return L"";
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return L"";
+        }
+        return Text;
+    }
+
+    // "Heide's Ruin (Heide's Tower of Flame)", or a plain "another bonfire".
+    std::wstring PlaceName(uint16_t Bonfire, uint32_t Map)
+    {
+        const wchar_t* Name = TextOrEmpty(kBonfireNames, Bonfire);
+        const int Area = Map == 0xffffffff || Map == 0 ? 0 : (int)(((Map >> 24) & 0xff) * 1000000 + ((Map >> 16) & 0xff) * 10000);
+        const wchar_t* AreaName = Area != 0 ? TextOrEmpty(kAreaNames, Area) : L"";
+        std::wstring Out = Name[0] != 0 ? Name : L"another bonfire";
+        if (AreaName[0] != 0)
+        {
+            Out += L" (";
+            Out += AreaName;
+            Out += L")";
+        }
+        return Out;
+    }
+
+    std::string Narrow(const std::wstring& Text)
+    {
+        std::string Out;
+        for (wchar_t C : Text)
+        {
+            Out += C < 0x80 ? (char)C : '?';
+        }
+        return Out;
+    }
+
+    bool HostHasLit(uint16_t Bonfire)
+    {
+        const uintptr_t Manager = BonfireManager();
+        return s_bonfire_lit != nullptr && Manager != 0 && (s_bonfire_lit((void*)Manager, Bonfire) & 1) != 0;
+    }
+
+    // Whether a script's object or point is one of the loaded bonfires.
+    bool ScriptAtBonfire(uintptr_t Target, bool IsPoint)
+    {
+        const uintptr_t Manager = BonfireManager();
+        uintptr_t Component = 0;
+        if (Manager == 0 || Target == 0 || !ReadPointer(Manager + kBonfireList, Component))
+        {
+            return false;
+        }
+        float Point[3] = {};
+        if (IsPoint)
+        {
+            for (size_t i = 0; i < sizeof(Point); ++i)
+            {
+                uint8_t B = 0;
+                if (!ReadByte(Target + kPointPosition + i, B)) { return false; }
+                ((uint8_t*)Point)[i] = B;
+            }
+        }
+        for (int Guard = 0; Component != 0 && Guard < 64; ++Guard)
+        {
+            uintptr_t Entity = 0;
+            if (!ReadPointer(Component + kComponentEntity, Entity))
+            {
+                return false;
+            }
+            if (!IsPoint && Entity == Target)
+            {
+                return true;
+            }
+            if (IsPoint && Entity != 0)
+            {
+                float At[3] = {};
+                memcpy(At, (const void*)(Entity + kEntityPosition), sizeof(At));
+                const float Dx = At[0] - Point[0], Dy = At[1] - Point[1], Dz = At[2] - Point[2];
+                if (Dx * Dx + Dy * Dy + Dz * Dz <= kPointNearBonfire * kPointNearBonfire)
+                {
+                    return true;
+                }
+            }
+            if (!ReadPointer(Component + kBonfireNext, Component))
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    uint64_t ScriptQuery(Script_p Original, bool IsPoint, void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        const uint64_t Result = Original(This, Out, Arguments, P4);
+        if (Out == nullptr || Arguments == nullptr || !IsWhitePhantom())
+        {
+            return Result;
+        }
+        using Id_p = int32_t(*)(void*);
+        const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
+        uintptr_t Target = 0;
+        if (Id == kQueryIsGuest && Out[0] != 0 && ReadPointer((uintptr_t)This + kScriptTarget, Target) && ScriptAtBonfire(Target, IsPoint))
+        {
+            Out[0] = 0;
+            if (s_prompts_opened.fetch_add(1) == 0)
+            {
+                Append(StringFormat("convidado: o script da fogueira perguntou se sou convidado; respondi nao (%s)\n", IsPoint ? "ponto" : "objeto"));
+            }
+        }
+        return Result;
+    }
+
+    uint64_t ObjScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        return ScriptQuery(s_original_obj_script, false, This, Out, Arguments, P4);
+    }
+
+    uint64_t PointScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        return ScriptQuery(s_original_point_script, true, This, Out, Arguments, P4);
+    }
+
+    // The host's own travel, started by the game's functions. False when the
+    // bonfire is not in the table.
+    bool StartTravel(uint16_t Bonfire)
+    {
+        uintptr_t Context = 0, Events = 0, Travel = 0;
+        if (s_travel_build == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
+            !ReadPointer(Events + kTravelObject, Travel) || Travel == 0 || MapOfBonfire(Bonfire) == 0xffffffff)
+        {
+            return false;
+        }
+        uint8_t Request[0x40] = {};
+        s_travel_build(Request, Bonfire, 2);
+        int32_t Fields[3] = {};
+        memcpy(&Fields[0], Request + 0x08, 4);
+        memcpy(&Fields[2], Request + 0x18, 4);
+        s_travel_start((void*)Travel, Request);
+        s_record_set((void*)Events, Fields);
+        Append(StringFormat("host: viagem iniciada para a fogueira %04x (mapa %08x, ponto %08x)\n", (unsigned)Bonfire,
+            (uint32_t)Fields[0], (uint32_t)Fields[2]));
+        return true;
     }
 
     void Append(const std::string& Text)
@@ -242,6 +542,11 @@ namespace
     uint64_t RestStartHook(void* Manager, int32_t Bonfire)
     {
         const uint64_t Started = s_original_rest(Manager, Bonfire);
+        if ((uint8_t)Started != 0 && IsWhitePhantom())
+        {
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::RestStarted, MapOfBonfire((uint16_t)Bonfire), (uint32_t)Bonfire);
+            Append(StringFormat("convidado: descanso na fogueira %08x no mundo do host; aviso ao host\n", (uint32_t)Bonfire));
+        }
         if ((uint8_t)Started != 0 && OwnsTheWorld())
         {
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted);
@@ -252,6 +557,13 @@ namespace
 
     void WorldResetHook()
     {
+        if (!s_replaying && IsWhitePhantom())
+        {
+            // The host resets its world and the reset comes back to every
+            // guest, this one included: resetting here too would do it twice.
+            Append("convidado: o reinicio do meu descanso fica com o host\n");
+            return;
+        }
         s_original_reset();
         if (!s_replaying && OwnsTheWorld())
         {
@@ -271,9 +583,74 @@ namespace
         return nullptr;
     }
 
+    void OpenQuestion(uint32_t Vote, bool AsHost, const std::wstring& Place, bool GuestProposed)
+    {
+        void* FrontEnd = FrontEndOrNull();
+        if (FrontEnd == nullptr)
+        {
+            if (AsHost)
+            {
+                s_travel.HostAnswered = true;
+                s_travel.HostYes = false;
+            }
+            else
+            {
+                DS2_CoopChannel::SendGuestAnswer(Vote, false);
+            }
+            Append(StringFormat("votacao %u sem frontend; resposta nao\n", Vote));
+            return;
+        }
+        _snwprintf_s(s_question, _TRUNCATE, GuestProposed ? L"A player wants to travel to %ls. Travel together?"
+                                                          : L"The host wants to travel to %ls. Travel together?", Place.c_str());
+        s_open_vote = OpenVote();
+        s_open_vote.Active = true;
+        s_open_vote.Host = AsHost;
+        s_open_vote.Vote = Vote;
+        s_open_vote.Number = s_choice(FrontEnd, s_question, s_text(0, kYesText), s_text(0, kNoText), 1, 1, 1, 1);
+        Append(StringFormat("%s: votacao %u aberta para %s (caixa %d)\n", AsHost ? "host" : "convidado", Vote,
+            Narrow(Place).c_str(), s_open_vote.Number));
+    }
+
+    void BeginVote(void* List, uint64_t Proposer, uint16_t Bonfire, uint32_t Map)
+    {
+        const size_t Guests = DS2_CoopChannel::GuestCount();
+        s_travel = HeldTravel();
+        s_travel.Active = true;
+        s_travel.List = List;
+        s_travel.Proposer = Proposer;
+        s_travel.Bonfire = Bonfire;
+        s_travel.Map = Map;
+        s_travel.HostAnswered = Proposer == 0;   // the host picked: its pick is its yes
+        s_travel.HostYes = Proposer == 0;
+        s_travel.Vote = ++s_vote_counter;
+        s_travel.Guests = Guests;
+        s_travel.Since = GetTickCount64();
+        const uint32_t Carried = s_travel.Vote | (Proposer != 0 ? 0x80000000u : 0u);
+        DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Map, Carried, (int32_t)Bonfire);
+        const std::wstring Place = PlaceName(Bonfire, Map);
+        Append(StringFormat("host: votacao %u para %s (fogueira %04x, mapa %08x), %s, %zu convidado(s)\n", s_travel.Vote,
+            Narrow(Place).c_str(), (unsigned)Bonfire, Map, Proposer != 0 ? "proposta por um convidado" : "escolhida pelo host", Guests));
+        if (Proposer != 0)
+        {
+            OpenQuestion(s_travel.Vote, true, Place, true);
+        }
+    }
+
+    void TellCanceled(Cancel Why, const wchar_t* Text)
+    {
+        DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, s_travel.Map, (uint32_t)Why, (int32_t)s_travel.Bonfire);
+        ShowMessage(Text);
+    }
+
     void PickHook(void* List)
     {
-        if (List != nullptr && s_votes_ready && OwnsTheWorld())
+        if (List == nullptr || !s_votes_ready)
+        {
+            s_original_pick(List);
+            return;
+        }
+        const uint8_t Role = LocalRole();
+        if (Role == kRoleOwner)
         {
             if (s_travel.Pass)
             {
@@ -285,19 +662,32 @@ namespace
             {
                 return;   // a vote is running; the pick waits for it
             }
-            const size_t Guests = DS2_CoopChannel::GuestCount();
-            if (Guests != 0)
+            if (DS2_CoopChannel::GuestCount() != 0)
             {
-                s_travel = HeldTravel();
-                s_travel.Active = true;
-                s_travel.List = List;
-                s_travel.Vote = ++s_vote_counter;
-                s_travel.Guests = Guests;
-                s_travel.Since = GetTickCount64();
-                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, 0, s_travel.Vote);
-                Append(StringFormat("host: escolha de fogueira segurada na lista; votacao %u com %zu convidado(s)\n", s_travel.Vote, Guests));
+                const uint16_t Bonfire = s_travel_bonfire(List);
+                BeginVote(List, 0, Bonfire, MapOfBonfire(Bonfire));
                 return;
             }
+        }
+        else if (Role == kRoleWhitePhantom)
+        {
+            // A guest's pick never travels by itself: it is a proposal to
+            // the host, who travels if everyone agrees.
+            const ULONGLONG Now = GetTickCount64();
+            if (s_proposal.Active && Now - s_proposal.Since < kVoteTimeoutMs + 5000)
+            {
+                return;
+            }
+            const uint16_t Bonfire = s_travel_bonfire(List);
+            const uint32_t Map = MapOfBonfire(Bonfire);
+            s_proposal = Proposal();
+            s_proposal.Active = true;
+            s_proposal.Bonfire = Bonfire;
+            s_proposal.Since = Now;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelPropose, Map, Bonfire);
+            Append(StringFormat("convidado: proponho viajar para %s (fogueira %04x, mapa %08x)\n", Narrow(PlaceName(Bonfire, Map)).c_str(),
+                (unsigned)Bonfire, Map));
+            return;
         }
         s_original_pick(List);
     }
@@ -339,7 +729,8 @@ namespace
     {
         const uintptr_t Caller = (uintptr_t)_ReturnAddress();
         const uint64_t Answer = s_original(Session);
-        if ((uint8_t)Answer != 0 && (Caller == s_base + kRestReturn || Caller == s_base + kQueueReturn) && OwnsTheWorld())
+        const uint8_t Role = (uint8_t)Answer != 0 && (Caller == s_base + kRestReturn || Caller == s_base + kQueueReturn) ? LocalRole() : 0xff;
+        if (Role == kRoleOwner || (Role == kRoleWhitePhantom && s_guest_rest_ready))
         {
             s_answered.fetch_add(1, std::memory_order_relaxed);
             return Answer & ~(uint64_t)0xff;
@@ -419,7 +810,26 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             Matches(Base + kCloseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
             Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
             Matches(Base + kPickOffset, kPickPrologue, sizeof(kPickPrologue)) &&
-            *(const uintptr_t*)(Base + kTravelListVftable + kPickSlot) == Base + kPickOffset;
+            *(const uintptr_t*)(Base + kTravelListVftable + kPickSlot) == Base + kPickOffset &&
+            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue)) &&
+            Matches(Base + kBonfireMapOffset, kBonfireMapPrologue, sizeof(kBonfireMapPrologue)) &&
+            Matches(Base + kBonfireLitOffset, kBonfireLitPrologue, sizeof(kBonfireLitPrologue)) &&
+            Matches(Base + kTravelBuildOffset, kTravelBuildPrologue, sizeof(kTravelBuildPrologue)) &&
+            Matches(Base + kTravelStartOffset, kTravelStartPrologue, sizeof(kTravelStartPrologue)) &&
+            Matches(Base + kRecordSetOffset, kRecordSetPrologue, sizeof(kRecordSetPrologue)) &&
+            Matches(Base + kTravelBonfireOffset, kTravelBonfirePrologue, sizeof(kTravelBonfirePrologue));
+        s_guest_rest_ready = Matches(Base + kObjScriptOffset, kObjScriptPrologue, sizeof(kObjScriptPrologue)) &&
+            Matches(Base + kPointScriptOffset, kPointScriptPrologue, sizeof(kPointScriptPrologue)) &&
+            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue));
+        s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
+        s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
+        s_bonfire_lit = (BonfireLit_p)(Base + kBonfireLitOffset);
+        s_travel_build = (TravelBuild_p)(Base + kTravelBuildOffset);
+        s_travel_start = (TravelStart_p)(Base + kTravelStartOffset);
+        s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
+        s_travel_bonfire = (TravelBonfire_p)(Base + kTravelBonfireOffset);
+        s_original_obj_script = (Script_p)(Base + kObjScriptOffset);
+        s_original_point_script = (Script_p)(Base + kPointScriptOffset);
         s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
         s_closed = (ByNumber_p)(Base + kClosedOffset);
@@ -438,11 +848,16 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         {
             DetourAttach(&(PVOID&)s_original_pick, PickHook);
         }
+        if (s_guest_rest_ready)
+        {
+            DetourAttach(&(PVOID&)s_original_obj_script, ObjScriptHook);
+            DetourAttach(&(PVOID&)s_original_point_script, PointScriptHook);
+        }
         if (DetourTransactionCommit() == NO_ERROR)
         {
             s_events_ready.store(true);
-            Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso e votacao de viagem (%s) ===\n",
-                s_votes_ready ? "votacao pronta" : "sem votacao: a caixa sim/nao nao e a esperada"));
+            Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso, votacao de viagem (%s), descanso do convidado (%s) ===\n",
+                s_votes_ready ? "pronta" : "codigo inesperado", s_guest_rest_ready ? "pronto" : "codigo inesperado"));
         }
         else
         {
@@ -468,16 +883,57 @@ void DS2_BonfireInSession_Tick()
         return;
     }
     const ULONGLONG Now = GetTickCount64();
+    DS2_CoopChannel::Bonfire Said;
+
+    if (OwnsTheWorld())
+    {
+        if (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::RestStarted, Said))
+        {
+            const uint32_t Low = (uint32_t)Said.From;
+            ShowMessage(kRestNotice);
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said.Map, Said.Id, (int32_t)Low);
+            Append(StringFormat("host: o convidado %016llx descansou na fogueira %04x; aviso a todos e reinicio o mundo\n",
+                (unsigned long long)Said.From, Said.Id));
+            WorldResetHook();
+        }
+        if (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelPropose, Said))
+        {
+            const uint16_t Bonfire = (uint16_t)Said.Id;
+            const uint32_t Map = MapOfBonfire(Bonfire);
+            if (s_travel.Active)
+            {
+                const HeldTravel Running = s_travel;
+                s_travel.Map = Said.Map;
+                s_travel.Bonfire = Bonfire;
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said.Map, (uint32_t)Cancel::Busy, (int32_t)Bonfire);
+                s_travel.Map = Running.Map;
+                s_travel.Bonfire = Running.Bonfire;
+                Append(StringFormat("host: proposta de %016llx recusada: votacao %u em andamento\n", (unsigned long long)Said.From, s_travel.Vote));
+            }
+            else if (!HostHasLit(Bonfire) || Map == 0xffffffff)
+            {
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said.Map, (uint32_t)Cancel::NotLit, (int32_t)Bonfire);
+                Append(StringFormat("host: proposta de %016llx recusada: a fogueira %04x nao esta acesa no meu mundo\n",
+                    (unsigned long long)Said.From, (unsigned)Bonfire));
+            }
+            else
+            {
+                BeginVote(nullptr, Said.From, Bonfire, Map);
+            }
+        }
+    }
+
     if (s_travel.Active)
     {
         size_t Yes = 0, No = 0;
         DS2_CoopChannel::GuestAnswers(s_travel.Vote, Yes, No);
         const size_t Guests = DS2_CoopChannel::GuestCount();
-        if (No > 0)
+        if (No > 0 || (s_travel.HostAnswered && !s_travel.HostYes))
         {
             s_travel.Active = false;
-            ShowMessage(kTravelDeclined);
-            Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao); viagem cancelada\n", s_travel.Vote, Yes, No));
+            TellCanceled(Cancel::Declined, kTravelDeclined);
+            Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao, host %s); viagem cancelada\n", s_travel.Vote, Yes, No,
+                s_travel.HostYes ? "sim" : "nao"));
         }
         else if (s_travel.Leaving)
         {
@@ -487,7 +943,7 @@ void DS2_BonfireInSession_Tick()
                 if (Now - s_travel.LeaveSince > kLeaveGiveUpMs)
                 {
                     s_travel.Active = false;
-                            ShowMessage(kTravelStuck);
+                    TellCanceled(Cancel::Stuck, kTravelStuck);
                     Append(StringFormat("host: votacao %u: %zu convidado(s) ainda na sessao depois de %llu ms; viagem cancelada\n",
                         s_travel.Vote, Guests, (unsigned long long)(Now - s_travel.LeaveSince)));
                 }
@@ -499,34 +955,45 @@ void DS2_BonfireInSession_Tick()
             else if (Now - s_travel.GuestsGone >= kLeaveSettleMs)
             {
                 s_travel.Active = false;
-                s_travel.Pass = true;
-                const bool Open = ListStillOpen(s_travel.List);
+                const bool Open = s_travel.Proposer == 0 && ListStillOpen(s_travel.List);
                 Append(StringFormat("host: convidados fora da sessao em %llu ms; %s\n",
                     (unsigned long long)(s_travel.GuestsGone - s_travel.LeaveSince),
-                    Open ? "a escolha segue" : "a lista fechou; a proxima escolha passa"));
+                    Open ? "a escolha na lista segue" : "a viagem comeca por aqui"));
                 if (Open)
                 {
+                    s_travel.Pass = true;
                     PickHook(s_travel.List);
                 }
-                else
+                else if (!StartTravel(s_travel.Bonfire))
                 {
-                    ShowMessage(kTravelPickAgain);
+                    ShowMessage(kTravelStuck);
+                    Append(StringFormat("host: a fogueira %04x nao esta na tabela; nao viajei\n", (unsigned)s_travel.Bonfire));
                 }
             }
         }
-        else if (Guests == 0 || Yes >= Guests)
+        else if (s_travel.HostAnswered && (Guests == 0 || Yes >= Guests))
         {
             s_travel.Leaving = true;
             s_travel.LeaveSince = Now;
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelLeave);
-            Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu) em %llu ms; convidados saem da sessao\n",
+            Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; convidados saem da sessao\n",
                 s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since)));
         }
         else if (Now - s_travel.Since > kVoteTimeoutMs)
         {
             s_travel.Active = false;
-            ShowMessage(kTravelNoAnswer);
-            Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu); viagem cancelada\n", s_travel.Vote, Yes, Guests));
+            if (s_open_vote.Active && s_open_vote.Host)
+            {
+                if (void* FrontEnd = FrontEndOrNull())
+                {
+                    s_close(FrontEnd, 0);
+                    s_release(FrontEnd, 0);
+                }
+                s_open_vote.Active = false;
+            }
+            TellCanceled(Cancel::NoAnswer, kTravelNoAnswer);
+            Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu, host %s); viagem cancelada\n", s_travel.Vote,
+                Yes, Guests, s_travel.HostAnswered ? "respondeu" : "nao respondeu"));
         }
     }
 
@@ -544,9 +1011,22 @@ void DS2_BonfireInSession_Tick()
                 s_release(FrontEnd, 0);
             }
             s_open_vote.Active = false;
-            DS2_CoopChannel::SendGuestAnswer(s_open_vote.Vote, Yes);
-            Append(StringFormat("convidado: votacao %u respondida %s (botao %llu%s)\n", s_open_vote.Vote, Yes ? "sim" : "nao",
-                (unsigned long long)Button, Ours ? "" : ", a caixa foi trocada"));
+            if (s_open_vote.Host)
+            {
+                if (s_travel.Active && s_travel.Vote == s_open_vote.Vote)
+                {
+                    s_travel.HostAnswered = true;
+                    s_travel.HostYes = Yes;
+                }
+            }
+            else
+            {
+                DS2_CoopChannel::SendGuestAnswer(s_open_vote.Vote, Yes);
+                s_answered_vote = s_open_vote.Vote;
+                s_answered_yes = Yes;
+            }
+            Append(StringFormat("%s: votacao %u respondida %s (botao %llu%s)\n", s_open_vote.Host ? "host" : "convidado", s_open_vote.Vote,
+                Yes ? "sim" : "nao", (unsigned long long)Button, Ours ? "" : ", a caixa foi trocada"));
         }
     }
 
@@ -554,23 +1034,66 @@ void DS2_BonfireInSession_Tick()
     {
         return;
     }
-    DS2_CoopChannel::Bonfire Said;
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Said) && s_votes_ready)
     {
-        void* FrontEnd = FrontEndOrNull();
-        if (FrontEnd == nullptr)
+        const uint32_t Vote = Said.Id & 0x7fffffff;
+        const bool GuestProposed = (Said.Id & 0x80000000) != 0;
+        const uint16_t Bonfire = (uint16_t)Said.Type;
+        if (GuestProposed && s_proposal.Active && s_proposal.Bonfire == Bonfire)
         {
-            DS2_CoopChannel::SendGuestAnswer(Said.Id, false);
-            Append(StringFormat("convidado: votacao %u sem frontend; respondo nao\n", Said.Id));
+            // Our own proposal: our pick was our yes.
+            s_proposal.Active = false;
+            DS2_CoopChannel::SendGuestAnswer(Vote, true);
+            s_answered_vote = Vote;
+            s_answered_yes = true;
+            Append(StringFormat("convidado: votacao %u e a minha proposta; respondo sim\n", Vote));
         }
         else
         {
-            s_open_vote.Active = true;
-            s_open_vote.Vote = Said.Id;
-            s_open_vote.Number = s_choice(FrontEnd, kTravelQuestion, s_text(0, kYesText), s_text(0, kNoText), 1, 1, 1, 1);
-            Append(StringFormat("convidado: o host quer viajar para o mapa %08x; votacao %u aberta (caixa %d)\n",
-                Said.Map, Said.Id, s_open_vote.Number));
+            s_answered_vote = 0;
+            OpenQuestion(Vote, false, PlaceName(Bonfire, Said.Map), GuestProposed);
         }
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said))
+    {
+        const Cancel Why = (Cancel)Said.Id;
+        const uint16_t Bonfire = (uint16_t)Said.Type;
+        const bool Mine = s_proposal.Active && s_proposal.Bonfire == Bonfire;
+        if (s_open_vote.Active && !s_open_vote.Host)
+        {
+            if (void* FrontEnd = FrontEndOrNull())
+            {
+                s_close(FrontEnd, 0);
+                s_release(FrontEnd, 0);
+            }
+            s_open_vote.Active = false;
+        }
+        bool Show = false;
+        if (Why == Cancel::NotLit && Mine)
+        {
+            _snwprintf_s(s_message, _TRUNCATE, L"Travel canceled: the host has not lit %ls.", PlaceName(Bonfire, Said.Map).c_str());
+            Show = true;
+        }
+        else if (Why == Cancel::Busy && Mine)
+        {
+            wcsncpy_s(s_message, kTravelBusy, _TRUNCATE);
+            Show = true;
+        }
+        else if (Why == Cancel::Declined || Why == Cancel::NoAnswer || Why == Cancel::Stuck)
+        {
+            wcsncpy_s(s_message, Why == Cancel::Declined ? kTravelDeclined : Why == Cancel::NoAnswer ? kTravelNoAnswer : kTravelStuck, _TRUNCATE);
+            Show = Mine || s_answered_yes;
+        }
+        if (Mine)
+        {
+            s_proposal.Active = false;
+        }
+        if (Show)
+        {
+            ShowMessage(s_message);
+        }
+        Append(StringFormat("convidado: viagem cancelada pelo host (motivo %u, fogueira %04x)%s\n", (unsigned)Why, (unsigned)Bonfire,
+            Show ? "; aviso mostrado" : ""));
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelLeave, Said))
     {
@@ -599,7 +1122,8 @@ void DS2_BonfireInSession_Tick()
                 (void*)Session, Vftable == s_base + kJoinCtrlVftable ? "certa" : "outra", StateValue));
         }
     }
-    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said))
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said) &&
+        (uint32_t)Said.Type != (uint32_t)DS2_CoopChannel::SelfSteamId())
     {
         ShowMessage(kRestNotice);
         Append(StringFormat("convidado: o host descansou na fogueira %08x (mapa %08x, ha %llu ms); aviso mostrado\n",
@@ -628,6 +1152,11 @@ void DS2_BonfireInSessionHook::Uninstall()
         if (s_votes_ready)
         {
             DetourDetach(&(PVOID&)s_original_pick, PickHook);
+        }
+        if (s_guest_rest_ready)
+        {
+            DetourDetach(&(PVOID&)s_original_obj_script, ObjScriptHook);
+            DetourDetach(&(PVOID&)s_original_point_script, PointScriptHook);
         }
         DetourTransactionCommit();
         s_original_rest = nullptr;

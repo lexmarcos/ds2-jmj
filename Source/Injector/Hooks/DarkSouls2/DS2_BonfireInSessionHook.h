@@ -40,14 +40,20 @@
 /// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
 /// was sent and received.
 ///
-/// A bonfire picked in the travel list by the owner of the world while guests
-/// are in it is held there, before the pick reaches the game (FUN_1400d5170):
-/// every guest gets a Yes/No box; on a no, or no answer in 30 s, the host is
-/// told and the list stays open. When all say yes they leave the session the
-/// legal way (the end a host's travel causes, which costs no penalty), the
-/// pick goes through with the world empty, and the party joins them again at
-/// the new bonfire. A host that travelled with a phantom still in its world
-/// closed twice, and holding the travel any later froze the host (15/09).
+/// A white phantom rests too: the bonfire's event script is told the player
+/// is not a guest (query 130602), the rest heals the guest, and instead of
+/// resetting its own copy the guest tells the host, who shows "A player is
+/// resting at a bonfire.", resets its world and sends the reset to everyone.
+///
+/// Travel is a vote anyone can start. The host picking a bonfire, or a guest
+/// picking one (a proposal the host refuses if it has not lit that bonfire),
+/// opens a Yes/No box naming the bonfire and its area for everyone who did not
+/// pick. On a no, or no answer in 30 s, everyone is told. When all say yes the
+/// guests leave the session the legal way (the end a host's travel causes,
+/// which costs no penalty), the host travels - its own pick, or the game's
+/// travel functions for a guest's - and the party joins everyone again at the
+/// new bonfire. A host that travelled with a phantom still in its world closed
+/// twice, and holding the travel any later than the pick froze the host (15/09).
 class DS2_BonfireInSessionHook : public Hook
 {
 public:
