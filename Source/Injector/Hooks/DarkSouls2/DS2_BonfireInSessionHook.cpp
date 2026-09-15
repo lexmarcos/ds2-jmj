@@ -108,6 +108,12 @@ namespace
     constexpr size_t kMenuCancelOffset = 0x1994e0;
     constexpr uint8_t kMenuCancelPrologue[] = { 0x48, 0x8b, 0x05, 0x09, 0xb4, 0x47, 0x01, 0x48, 0x83, 0xb8, 0xe0, 0x22, 0x00, 0x00, 0x00 };
     constexpr size_t kEventManager = 0x70;
+    // Choosing a destination in the travel menu writes it into the respawn
+    // record (*(ctx+0x70): +0x164 map, +0x168 type, +0x16c id) before the warp
+    // is asked for: a canceled travel left Chico's record on Heide's Ruin while
+    // he stood at The Far Fire (15/09). The record is kept when the rest
+    // starts and put back when a travel is canceled.
+    constexpr size_t kRecordFields = 0x164;
     constexpr size_t kMenuQueue = 0x50;
     constexpr ULONGLONG kLeaveSettleMs = 1500;
     constexpr ULONGLONG kLeaveGiveUpMs = 20000;
@@ -149,6 +155,8 @@ namespace
     CloseByNumber_p s_close = nullptr;
     CloseByNumber_p s_release = nullptr;
     bool s_votes_ready = false;
+    uint8_t s_record_at_rest[12] = {};
+    bool s_record_kept = false;
     using MenuCancel_p = void(*)(void* Queue);
     MenuCancel_p s_menu_cancel = nullptr;
 
@@ -237,6 +245,13 @@ namespace
         const uint64_t Started = s_original_rest(Manager, Bonfire);
         if ((uint8_t)Started != 0 && OwnsTheWorld())
         {
+            uintptr_t Context = 0, Events = 0;
+            s_record_kept = ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+                ReadPointer(Context + kEventManager, Events) && Events != 0;
+            for (size_t i = 0; s_record_kept && i < sizeof(s_record_at_rest); ++i)
+            {
+                s_record_kept = ReadByte(Events + kRecordFields + i, s_record_at_rest[i]);
+            }
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted);
             Append(StringFormat("host: descanso na fogueira %08x; aviso para a sessao\n", (uint32_t)Bonfire));
         }
@@ -264,8 +279,35 @@ namespace
         return nullptr;
     }
 
+    void RestoreRecord()
+    {
+        uintptr_t Context = 0, Events = 0;
+        if (!s_record_kept || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0)
+        {
+            return;
+        }
+        uint8_t Now[12] = {};
+        for (size_t i = 0; i < sizeof(Now); ++i)
+        {
+            if (!ReadByte(Events + kRecordFields + i, Now[i]))
+            {
+                return;
+            }
+        }
+        if (memcmp(Now, s_record_at_rest, sizeof(Now)) != 0)
+        {
+            memcpy((void*)(Events + kRecordFields), s_record_at_rest, sizeof(s_record_at_rest));
+            uint32_t Map = 0, Id = 0;
+            memcpy(&Map, s_record_at_rest, 4);
+            memcpy(&Id, s_record_at_rest + 8, 4);
+            Append(StringFormat("host: registro de renascimento devolvido para %08x/%08x\n", Map, Id));
+        }
+    }
+
     void CloseHeldMenu()
     {
+        RestoreRecord();
         uintptr_t Context = 0, Events = 0, Queue = 0;
         if (s_menu_cancel != nullptr && ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
             ReadPointer(Context + kEventManager, Events) && Events != 0 &&
