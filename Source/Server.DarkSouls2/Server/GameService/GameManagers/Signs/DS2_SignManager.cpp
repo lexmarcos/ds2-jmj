@@ -897,9 +897,37 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     DS2_CellAndAreaId LocationId = { (uint64_t)Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
     // First check the sign still exists, if it doesn't, send a reject message as its probably already used.
-    LogS(Client->GetName().c_str(), "Summoning sign %u, looked up under area 0x%08x cell 0x%016llx.",
-        (uint32_t)Request->sign_info().sign_id(), (uint32_t)Request->online_area_id(),
-        (unsigned long long)Request->cell_id());
+    {
+        // The summoner's blob travels to the sign's owner in the push, and the
+        // owner's join warp takes its destination from it. Decoded like a
+        // sign's (version 6, int16 position with 5 fractional bits at +4).
+        const std::string& Blob = Request->player_struct();
+        float At[3] = { 0, 0, 0 };
+        if (Blob.size() >= 10)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                int16_t Fixed = 0;
+                memcpy(&Fixed, Blob.data() + 4 + k * 2, sizeof(Fixed));
+                At[k] = Fixed / 32.0f;
+            }
+        }
+        // In short lines: the logger's buffer is fixed, and one line with the
+        // whole blob in hex took the server down (15/09, signal 11 in WriteLog).
+        LogS(Client->GetName().c_str(), "Summoning sign %u, looked up under area 0x%08x cell 0x%016llx; summoner blob %zu bytes.",
+            (uint32_t)Request->sign_info().sign_id(), (uint32_t)Request->online_area_id(),
+            (unsigned long long)Request->cell_id(), Blob.size());
+        for (size_t Offset = 0; Offset < Blob.size(); Offset += 24)
+        {
+            std::string Line;
+            for (size_t k = Offset; k < std::min(Blob.size(), Offset + 24); k++)
+            {
+                Line += StringFormat("%02x", (uint8_t)Blob[k]);
+            }
+            LogS(Client->GetName().c_str(), "  blob +%02zx %s", Offset, Line.c_str());
+        }
+        (void)At;
+    }
 
     std::shared_ptr<SummonSign> Sign = LiveCache.Find(LocationId, Request->sign_info().sign_id());
 

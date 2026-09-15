@@ -144,6 +144,11 @@ namespace
     // minute, which is the point for players and the opposite of what a test
     // tearing down wants.
     std::atomic<bool> s_paused{ false };
+    // The SummonSignSetCtrl the game last filed a sign into, and a request to
+    // look again at what it already holds: a sign that arrived while paused is
+    // not delivered twice, so "retoma" has to find it in the cache.
+    std::atomic<void*> s_sign_set{ nullptr };
+    std::atomic<bool> s_rescan{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -350,11 +355,17 @@ namespace
         }
     }
 
+    void RescanSigns();
+
     // Runs on the game's thread, every frame.
     void TickHook(void* Self)
     {
         s_original_tick(Self);
 
+        if (s_rescan.exchange(false) && !s_paused.load())
+        {
+            RescanSigns();
+        }
         const bool Orders = s_pending_place.load() != kNothing || s_pending_status.load();
         if (!Orders && !s_guest)
         {
@@ -406,24 +417,23 @@ namespace
         return strtoull(Hex, nullptr, 16);
     }
 
-    uint32_t* AddSignHook(void* Self, uint32_t* OutHandle, uint8_t Type, void* P4,
-        uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11)
+    // Whether this player summons a white sign of this owner, and does it.
+    void ConsiderSign(void* Self, uint32_t Handle, uint8_t Type, uint32_t PlayerId, const char* Why)
     {
-        uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
         // A host is whoever accepts: a Steam ID list, or a password on a player
         // that is not the guest (the server then only delivers party signs).
         const bool Host = !s_accept.empty() || (s_party_code != 0 && !s_guest);
-        if (!Host || OutHandle == nullptr || *OutHandle == 0 || Type != kWhiteSign)
+        if (!Host || Handle == 0 || Type != kWhiteSign)
         {
-            return Result;
+            return;
         }
         if (s_paused.load())
         {
-            Append(StringFormat("%s  host: placa %08x chegou com o party pausado; ignorada\n", Clock().c_str(), *OutHandle));
-            return Result;
+            Append(StringFormat("%s  host: placa %08x chegou com o party pausado; ignorada\n", Clock().c_str(), Handle));
+            return;
         }
 
-        const uint64_t Owner = SignOwnerSteamId(Self, *OutHandle);
+        const uint64_t Owner = SignOwnerSteamId(Self, Handle);
         bool Accepted = s_accept.empty();
         for (uint64_t Id : s_accept)
         {
@@ -432,22 +442,69 @@ namespace
         if (!Accepted)
         {
             Append(StringFormat("%s  host: placa %08x do jogador %u (steam %llu) nao esta na lista; ignorada\n",
-                Clock().c_str(), *OutHandle, P6, (unsigned long long)Owner));
-            return Result;
+                Clock().c_str(), Handle, PlayerId, (unsigned long long)Owner));
+            return;
         }
         const int Role = LocalRole();
         void* Manager = ResolveManager();
         if (Role != 0 || Manager == nullptr)
         {
             Append(StringFormat("%s  host: placa %08x do parceiro %llu, mas o host nao esta no proprio mundo (papel %d) ou sem manager; ignorada\n",
-                Clock().c_str(), *OutHandle, (unsigned long long)Owner, Role));
-            return Result;
+                Clock().c_str(), Handle, (unsigned long long)Owner, Role));
+            return;
         }
-        uint32_t Handle = *OutHandle;
-        Append(StringFormat("%s  host: invocando a placa %08x do parceiro %llu (jogador %u)\n",
-            Clock().c_str(), Handle, (unsigned long long)Owner, P6));
-        s_summon(Manager, &Handle);
+        Append(StringFormat("%s  host: invocando a placa %08x do parceiro %llu (jogador %u)%s\n",
+            Clock().c_str(), Handle, (unsigned long long)Owner, PlayerId, Why));
+        uint32_t Copy = Handle;
+        s_summon(Manager, &Copy);
+    }
+
+    uint32_t* AddSignHook(void* Self, uint32_t* OutHandle, uint8_t Type, void* P4,
+        uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11)
+    {
+        uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
+        s_sign_set.store(Self);
+        if (OutHandle != nullptr)
+        {
+            ConsiderSign(Self, *OutHandle, Type, P6, "");
+        }
         return Result;
+    }
+
+    // The collection AddSign files into, walked through its own interface:
+    // slot 0x18 is the count, slot 0x10 the i-th entry (FUN_14020e6f0 does the
+    // same). An entry is live when +0x14 is negative.
+    void RescanSigns()
+    {
+        void* Self = s_sign_set.load();
+        uintptr_t Collection = 0, Vftable = 0, CountFn = 0, AtFn = 0;
+        if (Self == nullptr || !ReadPointer((uintptr_t)Self - 8, Collection) || Collection == 0 ||
+            !ReadPointer(Collection, Vftable) || !ReadPointer(Vftable + 0x18, CountFn) || !ReadPointer(Vftable + 0x10, AtFn))
+        {
+            Append(StringFormat("%s  host: nada para revisar (nenhuma placa chegou ainda)\n", Clock().c_str()));
+            return;
+        }
+        using Count_p = uint32_t(*)(void*);
+        using At_p = int32_t*(*)(void*, uint32_t);
+        const uint32_t Count = ((Count_p)CountFn)((void*)Collection);
+        for (uint32_t i = 0; i < Count && i < 64; i++)
+        {
+            int32_t* Entry = ((At_p)AtFn)((void*)Collection, i);
+            uint8_t Bytes[0x2c] = {};
+            if (Entry == nullptr || !ReadBytes((uintptr_t)Entry, Bytes, sizeof(Bytes)))
+            {
+                continue;
+            }
+            int32_t Live = 0, Handle = 0;
+            uint32_t PlayerId = 0;
+            memcpy(&Handle, Bytes, 4);
+            memcpy(&Live, Bytes + 0x14, 4);
+            memcpy(&PlayerId, Bytes + 0x24, 4);
+            if (Live < 0)
+            {
+                ConsiderSign(Self, (uint32_t)Handle, Bytes[0x28], PlayerId, " (revisao ao retomar)");
+            }
+        }
     }
 
     std::string Words(const uint32_t* Matching)
@@ -535,6 +592,10 @@ namespace
                     {
                         const bool Pause = Line.rfind("pausa", 0) == 0;
                         s_paused.store(Pause);
+                        if (!Pause)
+                        {
+                            s_rescan.store(true);
+                        }
                         Append(StringFormat("%s  === party %s ===\n", Clock().c_str(), Pause ? "pausado" : "retomado"));
                     }
                     else if (Line.rfind("status", 0) == 0)
