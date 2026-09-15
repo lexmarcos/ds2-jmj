@@ -733,14 +733,71 @@ punição de 36000 s. Nas quatro saídas por viagem medidas (13:53, 15:23,
 10, Chico 40/50); o **controle** foi o crash do host às 13:53, que custou 0 →
 10 ao Samuel. Os pontos antigos são de desconexões anteriores.
 
+**O convidado descansa, e a viagem é de qualquer um — feitos 15/09.**
+Decidido com o usuário: o descanso do host **não** cura o convidado (medido:
+726/854 antes e depois); quem quer a cura senta na fogueira. O descanso do
+convidado reinicia o mundo **para todos**; e uma proposta para uma fogueira que
+o host não acendeu é cancelada com aviso.
+
+O convidado nunca via "Rest at bonfire" por **duas** travas:
+
+1. `FUN_140453ce0`, as entradas de ação de evento (a lista de prompts, que
+   `FUN_1404554e0` alimenta e `FUN_140455f80` mostra): uma entrada de tipo 13
+   ou 14 (a fogueira; textos `0x6d`/`0x6e` pela tabela `0x1410ef2a0`) é
+   descartada, antes até da distância, quando o slot `+0x58` do contexto
+   (`FUN_1405135f0`) diz que o jogador está no mundo de outro. Achada com um
+   breakpoint na entrada: no Samuel fantasma, na fogueira, a entrada de tipo
+   `0x0e` passava pela máscara `+0xa0` e morria ali. Com o `jne` de `+0x453dd8`
+   trocado por `nop` o prompt apareceu na hora. O hook abre essa trava só
+   enquanto o jogador local é fantasma branco (invasor continua sem nada), com
+   bytes esperados nos dois sentidos;
+2. a pergunta 130602 do script (`FUN_140513440`, "em sessão como convidado"),
+   respondida "não" a um fantasma branco a até 3 m de uma fogueira carregada.
+   Não isolado se ela ainda é necessária com a trava 1 aberta; fica.
+
+O descanso do convidado não reinicia a cópia dele: manda `GuestEvent
+RestStarted` ao host, que mostra "A player is resting at a bonfire.", repassa
+o aviso aos outros convidados (menos quem descansou) e roda o próprio reinício,
+que chega a todos como `WorldReset`.
+
+A viagem: o convidado que escolhe uma fogueira na lista dele (a lista mostra
+as fogueiras do mundo do host) fica segurado na escolha e manda `TravelPropose`.
+O host recusa se já há votação (`Busy`) ou se não acendeu aquela fogueira
+(`NotLit`, "Travel canceled: the host has not lit %ls."); senão abre a votação
+com o convidado já contado como sim. As caixas agora nomeiam o destino, com o
+nome da fogueira (texto categoria `0x12`) e a área (categoria 5): "The host
+wants to travel to The Far Fire (Majula). Travel together?" ou "A player wants
+to travel to ...". Aprovada, a saída e a viagem são as do host; o host viaja
+pelas funções do jogo (`FUN_1401843b0` + `FUN_140184830` + `FUN_14044fe30`).
+
+Medido com os builds `44e4f654` (trava 1 por sonda) e `618742e8` (no hook),
+Chico host e Samuel convidado na The Far Fire:
+
+    18:11:13.856  Samuel  descanso na fogueira 122a no mundo do host; aviso ao host
+    18:11:13.870  Chico   o convidado descansou na fogueira 122a; aviso a todos e reinicio o mundo
+    18:11:13.887  Samuel  mundo do host reiniciado aqui tambem (pedido ha 0 ms)
+    (Samuel HP 400/915 -> 914 ao sentar; de novo com 618742e8 às 18:26:48)
+    18:13:23.948  Samuel  proponho viajar para The Far Fire (Majula)
+    18:13:23.961  Chico   votacao 1 ... proposta por um convidado; caixa aberta
+    18:13:51.596  Chico   votacao 1 recusada; Samuel: "Travel canceled: a player declined."
+    18:14:39.668  Samuel  proponho de novo; 18:14:55.099 Chico responde sim
+    18:14:55.132  Samuel  saio da sessao para o host viajar (+0x120 0 -> 1)
+    18:14:57.000  Chico   convidados fora em 383 ms; viagem iniciada para a fogueira 122a
+
+Depois da viagem: penalidade desarmada nos dois com os pontos iguais (Samuel
+10, Chico 50), o party juntou de novo e `p2pSessionVerified: true` com o
+Samuel na The Far Fire do Chico. A caixa nomeada da votação do host apareceu
+no Samuel às 18:28:26. Com o build `74247cca`, o convidado que deixa a pergunta
+sem resposta também recebe o motivo quando ela fecha: "Travel canceled: not
+every player answered." nos dois às 18:39:34.
+
 **Falta:**
 
-- o convidado não é curado pelo descanso do host (726/854 antes e depois);
-  o design não diz se deveria;
-- a caixa do aviso e a da votação são modais: o convidado precisa apertar;
-- o convidado não é avisado **para onde** o host vai (o mapa não está na
-  escolha segurada);
-- três ou mais jogadores (uma conta Steam a mais);
+- `NotLit` e `Busy` não medidos: a lista do convidado só mostra fogueiras que
+  o host acendeu, então o `NotLit` só aparece numa corrida;
+- a caixa do aviso e a da votação são modais: é preciso apertar;
+- três ou mais jogadores (uma conta Steam a mais): o repasse do aviso do
+  descanso de um convidado aos outros não é testável;
 - descanso com um invasor no mundo: o hook não distingue.
 
 - descansar reseta o mundo para todos, com aviso antes

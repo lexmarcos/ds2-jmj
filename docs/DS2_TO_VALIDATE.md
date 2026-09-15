@@ -252,10 +252,19 @@ vote (build `3235c402`) the travel waits in the list for every guest's Yes, the
 guests leave legally, and the party rejoins at the new bonfire; decline and
 timeout leave the host in the list. The guest's world reset and the rest
 notice were measured once each. Travel costs no penalty points (four leaves
-measured). Not measured: three or more players,
-leveling or attuning in it, burning a Bonfire Ascetic with a phantom present,
-resting with an invader in the world, a guest trying to rest (it is not
-offered the prompt), and any bonfire but Heide's Ruin.
+measured). A white phantom now gets "Rest at bonfire" (builds `44e4f654`
+by probe, `618742e8` in the hook): it sat at The Far Fire in Chico's world,
+healed 400 -> 914, its rest reset the host's world and showed the notice on
+the host; its own travel proposal opened the host's vote naming "The Far Fire
+(Majula)", a decline told the guest, and an accepted one made the guest leave
+legally and the host travel, with no penalty points and the party back
+together. A guest that leaves the host's question unanswered sees "Travel
+canceled: not every player answered." when it times out (build `74247cca`). Not measured: three or more players (a guest's rest notice relayed
+to the other guests), leveling or attuning in it, burning a Bonfire Ascetic
+with a phantom present, resting with an invader in the world, a proposal the
+host refuses as not lit or busy, whether query 130602's answer is still needed
+once the prompt gate is open, a guest's travel to any bonfire but the one it
+stands at, and any bonfire but Heide's Ruin and The Far Fire.
 
 ### M7: flags carried into the guest's save
 
