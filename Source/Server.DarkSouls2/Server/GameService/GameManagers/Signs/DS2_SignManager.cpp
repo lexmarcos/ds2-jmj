@@ -552,11 +552,12 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
         if (double& Last = LastStickyLogTime[Player.GetPlayerId()]; Now - Last > 10.0)
         {
             Last = Now;
-            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s, sent %zu, refused by matching %d (soul memory %u).",
+            LogS(Client->GetName().c_str(), "Sign poll: area 0x%08x, activity area %d, %d search cells (first 0x%016llx), room for %d, %zu signs cached, sticky %s, sent %zu, refused by matching %d (soul memory %u, ring %u).",
                 Request->online_area_id(), OnlineActivityArea, Request->search_areas_size(),
                 Request->search_areas_size() > 0 ? (uint64_t)Request->search_areas(0).cell_id() : 0ull,
                 RemainingSignCount, LiveCache.GetTotalEntries(), StickyEligible ? "eligible" : "skipped",
-                SentSignIds.size(), RefusedByMatching, (unsigned)Request->matching_parameter().soul_memory());
+                SentSignIds.size(), RefusedByMatching, (unsigned)Request->matching_parameter().soul_memory(),
+                (unsigned)Request->matching_parameter().name_engraved_ring());
         }
     }
 
@@ -654,8 +655,13 @@ MessageHandleResult DS2_SignManager::Handle_RequestCreateSign(GameClient* Client
 
     DS2_CellAndAreaId LocationId = { Request->cell_id(), (DS2_OnlineAreaId)Request->online_area_id() };
 
-    LogS(Client->GetName().c_str(), "Sign %u created: type %u, area 0x%08x, cell 0x%016llx.",
-        Sign->SignId, (uint32_t)Sign->Type, (uint32_t)Sign->OnlineAreaId, (unsigned long long)Sign->CellId);
+    {
+        const DS2_Frpg2RequestMessage::MatchingParameter& M = Request->matching_parameter();
+        LogS(Client->GetName().c_str(), "Sign %u created: type %u, area 0x%08x, cell 0x%016llx; matching calibration %u soul_level %u clear_count %u unknown_4 %u covenant %u unknown_7 %u cross_region %u unknown_9 %u unknown_10 %u name_engraved_ring %u soul_memory %u.",
+            Sign->SignId, (uint32_t)Sign->Type, (uint32_t)Sign->OnlineAreaId, (uint64_t)Sign->CellId,
+            M.calibration_version(), M.soul_level(), M.clear_count(), M.unknown_4(), M.covenant(), M.unknown_7(),
+            M.disable_cross_region_play(), M.unknown_9(), M.unknown_10(), M.name_engraved_ring(), M.soul_memory());
+    }
 
     LiveCache.Add(LocationId, Sign->SignId, Sign);
     Client->ActiveSummonSigns.push_back(Sign);

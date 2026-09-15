@@ -77,6 +77,17 @@ namespace
     constexpr uint8_t kFindSignPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10 };
     constexpr size_t kEntrySteamId = 0x38;
 
+    // NetSvrSummonSignInterface: the two requests that carry this player's
+    // MatchingParameter to the server, the sign's (CreateSummonSign, 4th
+    // argument) and the sign poll's (GetSummonSignList, 5th). The client's
+    // struct is 16 uint32 read here; which one the protocol's
+    // name_engraved_ring is has to be measured (`sonda`).
+    constexpr size_t kCreateSignOffset = 0x29dfa0;
+    constexpr uint8_t kCreateSignPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18 };
+    constexpr size_t kSignListOffset = 0x29e230;
+    constexpr uint8_t kSignListPrologue[] = { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 };
+    constexpr size_t kMatchingWords = 16;
+
     constexpr size_t kNetSvrGlobal = 0x1616cf8;
     constexpr size_t kNetSvrField = 0x30;
     constexpr size_t kSummonSignField = 0x78;
@@ -101,6 +112,12 @@ namespace
     using AddSign_p = uint32_t*(*)(void* Self, uint32_t* OutHandle, uint8_t Type, void* P4,
         uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11);
     using FindSign_p = int32_t*(*)(void* Collection, int32_t* Handle);
+    using CreateSign_p = void*(*)(void* This, uint32_t Area, void* Cell, uint32_t* Matching, int32_t Type, void* AppData, uint32_t* Out);
+    using SignList_p = void*(*)(void* This, uint32_t Area, void* Cells, uint32_t Count, uint32_t* Matching, uint8_t A, uint8_t B, void* Out1, void* Out2);
+    CreateSign_p s_original_create_sign = nullptr;
+    SignList_p s_original_sign_list = nullptr;
+    std::atomic<bool> s_probe{ false };
+    std::atomic<bool> s_list_logged{ false };
 
     Tick_p s_original_tick = nullptr;
     AddSign_p s_original_add_sign = nullptr;
@@ -405,6 +422,49 @@ namespace
         return Result;
     }
 
+    std::string Words(const uint32_t* Matching)
+    {
+        std::string Text;
+        uint32_t Copy[kMatchingWords] = {};
+        if (!ReadBytes((uintptr_t)Matching, (uint8_t*)Copy, sizeof(Copy)))
+        {
+            return "ilegivel";
+        }
+        for (size_t i = 0; i < kMatchingWords; i++)
+        {
+            Text += StringFormat(" [%zu]=%u", i, Copy[i]);
+        }
+        return Text;
+    }
+
+    void* CreateSignHook(void* This, uint32_t Area, void* Cell, uint32_t* Matching, int32_t Type, void* AppData, uint32_t* Out)
+    {
+        if (Matching != nullptr && s_probe.exchange(false))
+        {
+            // Distinct values in the words that read 0 on both characters, so
+            // the server's log names each one.
+            Matching[5] = 0x55;
+            Matching[6] = 0x66;
+            Matching[10] = 0xAA;
+            Matching[11] = 0xBB;
+            Append(StringFormat("%s  sonda: [5]=0x55 [6]=0x66 [10]=0xAA [11]=0xBB nesta placa\n", Clock().c_str()));
+        }
+        if (Matching != nullptr)
+        {
+            Append(StringFormat("%s  CreateSummonSign area %08x tipo %d matching:%s\n", Clock().c_str(), Area, Type, Words(Matching).c_str()));
+        }
+        return s_original_create_sign(This, Area, Cell, Matching, Type, AppData, Out);
+    }
+
+    void* SignListHook(void* This, uint32_t Area, void* Cells, uint32_t Count, uint32_t* Matching, uint8_t A, uint8_t B, void* Out1, void* Out2)
+    {
+        if (Matching != nullptr && !s_list_logged.exchange(true))
+        {
+            Append(StringFormat("%s  GetSummonSignList area %08x matching:%s\n", Clock().c_str(), Area, Words(Matching).c_str()));
+        }
+        return s_original_sign_list(This, Area, Cells, Count, Matching, A, B, Out1, Out2);
+    }
+
     bool BytesMatch(uintptr_t Address, const uint8_t* Expected, size_t Length)
     {
         return memcmp((const void*)Address, Expected, Length) == 0;
@@ -426,6 +486,12 @@ namespace
                     {
                         s_pending_place.store(Type);
                         Append(StringFormat("%s  === pedido de placa tipo %d, no proximo quadro ===\n", Clock().c_str(), Type));
+                    }
+                    else if (Line.rfind("sonda", 0) == 0)
+                    {
+                        s_probe.store(true);
+                        s_list_logged.store(false);
+                        Append(StringFormat("%s  === sonda armada para a proxima placa ===\n", Clock().c_str()));
                     }
                     else if (Line.rfind("pausa", 0) == 0 || Line.rfind("retoma", 0) == 0)
                     {
@@ -493,14 +559,18 @@ bool DS2_PartyHook::Install(Injector& injector)
     const uintptr_t Summon = Base + kSummonOffset;
     const uintptr_t AddSign = Base + kAddSignOffset;
     const uintptr_t FindSign = Base + kFindSignOffset;
+    const uintptr_t CreateSign = Base + kCreateSignOffset;
+    const uintptr_t SignList = Base + kSignListOffset;
 
     if (!BytesMatch(Tick, kTickPrologue, sizeof(kTickPrologue)) ||
         !BytesMatch(Place, kPlacePrologue, sizeof(kPlacePrologue)) ||
         !BytesMatch(Summon, kSummonPrologue, sizeof(kSummonPrologue)) ||
         !BytesMatch(AddSign, kAddSignPrologue, sizeof(kAddSignPrologue)) ||
-        !BytesMatch(FindSign, kFindSignPrologue, sizeof(kFindSignPrologue)))
+        !BytesMatch(FindSign, kFindSignPrologue, sizeof(kFindSignPrologue)) ||
+        !BytesMatch(CreateSign, kCreateSignPrologue, sizeof(kCreateSignPrologue)) ||
+        !BytesMatch(SignList, kSignListPrologue, sizeof(kSignListPrologue)))
     {
-        Error("[DS2_PartyHook] o codigo de uma das cinco entradas nao e o esperado; recusando");
+        Error("[DS2_PartyHook] o codigo de uma das sete entradas nao e o esperado; recusando");
         return false;
     }
     s_base = Base;
@@ -517,11 +587,15 @@ bool DS2_PartyHook::Install(Injector& injector)
     s_place = (SignMethod_p)Place;
     s_summon = (Summon_p)Summon;
     s_find_sign = (FindSign_p)FindSign;
+    s_original_create_sign = (CreateSign_p)CreateSign;
+    s_original_sign_list = (SignList_p)SignList;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_tick, TickHook);
     DetourAttach(&(PVOID&)s_original_add_sign, AddSignHook);
+    DetourAttach(&(PVOID&)s_original_create_sign, CreateSignHook);
+    DetourAttach(&(PVOID&)s_original_sign_list, SignListHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_PartyHook] nao consegui instalar os detours");
@@ -557,6 +631,8 @@ void DS2_PartyHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_tick, TickHook);
         DetourDetach(&(PVOID&)s_original_add_sign, AddSignHook);
+        DetourDetach(&(PVOID&)s_original_create_sign, CreateSignHook);
+        DetourDetach(&(PVOID&)s_original_sign_list, SignListHook);
         DetourTransactionCommit();
         s_original_tick = nullptr;
         s_original_add_sign = nullptr;
