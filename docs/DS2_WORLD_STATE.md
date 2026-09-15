@@ -67,6 +67,37 @@ recupera as próprias ao voltar.
 Isso é o comportamento que o design pede para portas e alavancas, **se** elas
 forem flags de mapa: o convidado vê o mundo do host, e o mundo dele não muda.
 
+## De onde vem a cópia na entrada
+
+Não é o `0x20`: é um **instantâneo do mundo** que o host serializa e o
+convidado importa no warp de entrada.
+
+O `EventFlagBuffer` (`*(mgr + 0x18)`, vftable `0x1410c2fa8`) guarda **duas**
+cópias, zeradas separadamente por `FUN_140185320(buf, 0|1)`:
+
+| cópia | globais | mapas (3 × 25 bytes, com o id do mapa em `+0xe7c` / `+0x1930`) |
+| --- | --- | --- |
+| 0, o próprio mundo | `+0x008` e `+0x4ea` (1250 bytes cada, categorias `10` e `20`) | `+0xde6`… |
+| 1, o mundo de outro | `+0xe88` e `+0x136a` | `+0x184c`… |
+
+`FUN_1404744b0`, ao esvaziar o gerenciador numa troca de mapa, grava em
+`mgr + 0x118` se o cliente é convidado em sessão, e `FUN_1404746b0` usa esse
+byte para escolher a cópia (`FUN_140186480`).
+
+- **Exporta** (host): `FUN_140185ac0` copia a cópia 0 para um blob, via
+  `FUN_140474570`, chamado de `FUN_1402b6880` e `FUN_1402bf8f0`.
+- **Importa** (convidado): `FUN_140185da0` copia o blob para a cópia 1 e
+  `FUN_140184f70` avisa os ouvintes, via `FUN_140474590`, chamado de
+  `FUN_1402b9ad0` e `FUN_1402c2fa0` — métodos virtuais vizinhos do construtor
+  do warp de entrada (`FUN_1402c2a80`).
+
+`FUN_1402c2fa0`, quando `+0xf8 == 4`, importa do mesmo blob mais coisas do que
+flags: `+0x3108` as flags, `+0x3b18` para `*(*0x1416148f0+0x70)+0x28` (o
+gerenciador que `FUN_14047a430` enche com ids de `0x98bd90` a `0x98e49f`),
+`+0x59ec` (16 bytes) para `+0x58`, `+0x3000`/`+0x3004` para
+`*(*0x1416148f0+0x38)+0x1f8`, e `+0x4018`. É o lugar natural para procurar o
+estado de objetos de mapa que não for flag.
+
 ## O que ainda não se sabe
 
 - **Se portas, alavancas, elevadores e illusory walls são flags de mapa.**
@@ -77,7 +108,8 @@ forem flags de mapa: o convidado vê o mundo do host, e o mundo dele não muda.
   medidas, então não há hit de `25cec0` para mostrar.
 - **O que o convidado vê de uma alavanca que ele mesmo puxa** no mundo do host:
   uma flag de mapa passa pelo filtro, mas o objeto pode ter outra trava.
-- **De onde vem a cópia na entrada.** Não é o `0x20`.
+- **O resto do instantâneo de entrada** (abaixo): o que são o gerenciador em
+  `+0x28` e os blocos em `+0x3000`, `+0x4018` e `+0x59ec`.
 - **O lado oposto do design.** "O que vocês fizerem juntos é salvo para todos"
   (um chefe morto na sessão fica morto no mundo do convidado) é exatamente o
   que o jogo **não** faz: o mundo do convidado volta como estava. Isso é
