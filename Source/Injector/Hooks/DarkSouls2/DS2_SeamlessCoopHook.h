@@ -11,6 +11,9 @@
 
 #include "Injector/Hooks/Hook.h"
 
+#include <cstddef>
+#include <cstdint>
+
 // Every warp the game performs, written down - and a lever on the one that
 // sends a player home when a session ends.
 //
@@ -49,3 +52,7 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
+
+// Sends a warp request again through the hook, past the travel hold. Game
+// thread only; the request is the 0x38 bytes the hook was given.
+uint8_t DS2_SeamlessCoop_ReplayWarp(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag);

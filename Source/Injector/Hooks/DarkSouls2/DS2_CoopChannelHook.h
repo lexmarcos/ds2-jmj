@@ -87,8 +87,13 @@ namespace DS2_CoopChannel
     {
         RestStarted = 0,   // the host sat at a bonfire
         WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
+        TravelLeave = 2,   // the host is about to travel: leave the session now
     };
-    constexpr uint8_t kHostEventCount = 2;
+    constexpr uint8_t kHostEventCount = 3;
+
+    // Other members of a session this machine hosts, seen in the last few
+    // seconds. 0 when it hosts nothing.
+    size_t GuestCount();
     void SendHostEvent(HostEvent Event);
     bool TakeHostEvent(HostEvent Event, Bonfire& Out);
 }

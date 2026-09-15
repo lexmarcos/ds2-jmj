@@ -10,6 +10,9 @@
 
 #include "Injector/Hooks/Hook.h"
 
+#include <cstddef>
+#include <cstdint>
+
 /// The owner of the world rests at a bonfire with phantoms in it (M8).
 ///
 /// In a session the game refuses the bonfire in three places, all asking the
@@ -47,3 +50,9 @@ public:
 /// Called every frame on the game's thread by DS2_PartyHook: a guest acts on
 /// the host's rest events.
 void DS2_BonfireInSession_Tick();
+
+/// From the warp hook, on the game's thread: a travel the owner of the world
+/// asked for while guests are in it. True when it is held - the guests are
+/// told to leave, and the travel is sent again once they are gone, or dropped
+/// after 20 s with a message.
+bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag);

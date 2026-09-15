@@ -759,6 +759,35 @@ bool DS2_CoopChannel::HostBonfire(Bonfire& Out)
 #endif
 }
 
+size_t DS2_CoopChannel::GuestCount()
+{
+#ifdef _WIN32
+    const uint64_t Self = s_self.load();
+    std::scoped_lock Lock(s_net_mutex);
+    const ULONGLONG Now = GetTickCount64();
+    size_t Guests = 0;
+    for (const Members& Session : s_sessions)
+    {
+        if (Session.Session == 0 || Now - Session.Tick > kMembersFreshMs)
+        {
+            continue;
+        }
+        bool SelfIsHost = false;
+        for (size_t i = 0; i < Session.Count; ++i)
+        {
+            SelfIsHost = SelfIsHost || (Session.Ids[i] == Self && Session.Host[i]);
+        }
+        if (SelfIsHost && Session.Count > 1)
+        {
+            Guests += Session.Count - 1;
+        }
+    }
+    return Guests;
+#else
+    return 0;
+#endif
+}
+
 void DS2_CoopChannel::SendHostEvent(HostEvent Event)
 {
 #ifdef _WIN32
