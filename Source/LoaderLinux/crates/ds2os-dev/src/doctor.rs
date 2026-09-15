@@ -366,6 +366,10 @@ fn config_drift(account: u8, configured: &Value, config: Option<&Value>) -> Chec
         let running = configured.get("partyAccept").and_then(Value::as_str).unwrap_or("");
         let file = config.get("DS2PartyAccept").and_then(Value::as_str).unwrap_or("");
         (running != file).then(|| format!("partyAccept: jogo {running:?}, arquivo {file:?}"))
+    }).chain({
+        let running = configured.get("partyPassword").and_then(Value::as_bool).unwrap_or(false);
+        let file = config.get("DS2PartyPassword").and_then(Value::as_str).is_some_and(|p| !p.is_empty());
+        (running != file).then(|| format!("partyPassword: jogo {running}, arquivo {file}"))
     }).collect();
     if differences.is_empty() {
         Check::new("config_drift", Some(account), Status::Ok, "o jogo roda com a config do arquivo").data(configured.clone())

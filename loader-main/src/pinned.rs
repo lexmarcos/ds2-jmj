@@ -43,6 +43,7 @@ pub fn injector_config() -> InjectorConfig {
         DS2SeamlessCoop: false,
         DS2PartyGuest: false,
         DS2PartyAccept: String::new(),
+        DS2PartyPassword: String::new(),
 
         DS2ProbeArea: false,
         DS2WatchAreaReads: false,

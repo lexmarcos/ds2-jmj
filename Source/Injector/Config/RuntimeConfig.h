@@ -86,6 +86,13 @@ public:
     // Steam IDs listed in DS2PartyAccept (decimal, comma separated).
     bool DS2PartyGuest = false;
     std::string DS2PartyAccept = "";
+    // The party's password. Both players set the same one: it travels as the
+    // sign's and the sign poll's name_engraved_ring (bit 31 set), and the
+    // server only matches a party sign with a party poll of the same code, so
+    // nobody else sees the sign and the host sees nobody else's. With a
+    // password, a player that is not DS2PartyGuest summons the white signs
+    // that reach it.
+    std::string DS2PartyPassword = "";
 
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.

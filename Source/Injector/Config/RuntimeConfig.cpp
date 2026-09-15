@@ -161,6 +161,7 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(DS2SeamlessCoop);
     SERIALIZE_VAR(DS2PartyGuest);
     SERIALIZE_VAR(DS2PartyAccept);
+    SERIALIZE_VAR(DS2PartyPassword);
     SERIALIZE_VAR(DS2ForcedZoneId);
     SERIALIZE_VAR(ServerPort);
     SERIALIZE_VAR(ServerGameType);

@@ -414,6 +414,19 @@ bool DS2_SignManager::CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParame
         return false;
     }
 
+    // A party (M3): the injector writes the party password's code into
+    // name_engraved_ring, with bit 31 set so it cannot be a real ring. A party
+    // sign is only for a poll with the same code, and a party poll only sees
+    // party signs of its code - whatever the sign type, and past Soul Memory.
+    const uint32_t HostRing = Host.name_engraved_ring();
+    const uint32_t SignRing = Match.name_engraved_ring();
+    const bool HostParty = (HostRing & 0x80000000u) != 0;
+    const bool SignParty = (SignRing & 0x80000000u) != 0;
+    if (HostParty || SignParty)
+    {
+        return HostParty && SignParty && HostRing == SignRing;
+    }
+
     switch (SignType)
     {
     case DS2_Frpg2RequestMessage::SignType_RedSoapstone:

@@ -278,7 +278,8 @@ bool Injector::Init()
                         {"removeFog", Config.DS2RemovePhantomFog},
                         {"timer", Config.DS2PatchPhantomTimers},
                         {"partyGuest", Config.DS2PartyGuest},
-                        {"partyAccept", Config.DS2PartyAccept}}}
+                        {"partyAccept", Config.DS2PartyAccept},
+                        {"partyPassword", !Config.DS2PartyPassword.empty()}}}
     };
     {
         std::ofstream Stream(DllPath / "DS2_Harness.json.tmp", std::ios::trunc);

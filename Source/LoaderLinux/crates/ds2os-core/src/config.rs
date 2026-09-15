@@ -55,6 +55,10 @@ pub struct InjectorConfig {
     /// signs this player summons by itself.
     #[serde(default)]
     pub DS2PartyAccept: String,
+    /// The party's password: only players with the same one see each other's
+    /// signs, and a password on a non-guest accepts the signs that arrive.
+    #[serde(default)]
+    pub DS2PartyPassword: String,
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,

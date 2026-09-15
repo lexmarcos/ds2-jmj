@@ -87,6 +87,14 @@ namespace
     constexpr size_t kSignListOffset = 0x29e230;
     constexpr uint8_t kSignListPrologue[] = { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 };
     constexpr size_t kMatchingWords = 16;
+    // Measured 15/09 by writing 3 into one word at a time and reading the
+    // server's log: [5] is name_engraved_ring, [6] covenant ([0] calibration,
+    // [1] soul memory, [2] soul level, [3] clear count, [4] unknown_4, [7]
+    // unknown_7, [8] cross region, [9] unknown_9). Values up to 0x80000000
+    // arrive intact; four large values in [5], [6], [10] and [11] at once kept
+    // the sign from leaving the client.
+    constexpr size_t kNameEngravedRing = 5;
+    constexpr uint32_t kPartyBit = 0x80000000;
 
     constexpr size_t kNetSvrGlobal = 0x1616cf8;
     constexpr size_t kNetSvrField = 0x30;
@@ -141,6 +149,21 @@ namespace
 
     bool s_guest = false;
     std::vector<uint64_t> s_accept;
+    uint32_t s_party_code = 0;   // 0 without a password
+
+    uint32_t PartyCode(const std::string& Password)
+    {
+        if (Password.empty())
+        {
+            return 0;
+        }
+        uint32_t Hash = 2166136261u;
+        for (unsigned char C : Password)
+        {
+            Hash = (Hash ^ C) * 16777619u;
+        }
+        return kPartyBit | (Hash & ~kPartyBit);
+    }
 
     // Guest bookkeeping, game thread only.
     ULONGLONG s_next_check = 0;
@@ -387,7 +410,10 @@ namespace
         uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11)
     {
         uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
-        if (s_accept.empty() || OutHandle == nullptr || *OutHandle == 0 || Type != kWhiteSign)
+        // A host is whoever accepts: a Steam ID list, or a password on a player
+        // that is not the guest (the server then only delivers party signs).
+        const bool Host = !s_accept.empty() || (s_party_code != 0 && !s_guest);
+        if (!Host || OutHandle == nullptr || *OutHandle == 0 || Type != kWhiteSign)
         {
             return Result;
         }
@@ -398,7 +424,7 @@ namespace
         }
 
         const uint64_t Owner = SignOwnerSteamId(Self, *OutHandle);
-        bool Accepted = false;
+        bool Accepted = s_accept.empty();
         for (uint64_t Id : s_accept)
         {
             Accepted = Accepted || (Owner != 0 && Id == Owner);
@@ -449,6 +475,10 @@ namespace
             Matching[Index] = s_probe_value.load();
             Append(StringFormat("%s  sonda: [%d]=%u nesta placa\n", Clock().c_str(), Index, s_probe_value.load()));
         }
+        else if (Matching != nullptr && s_party_code != 0)
+        {
+            Matching[kNameEngravedRing] = s_party_code;
+        }
         if (Matching != nullptr)
         {
             Append(StringFormat("%s  CreateSummonSign area %08x tipo %d matching:%s\n", Clock().c_str(), Area, Type, Words(Matching).c_str()));
@@ -458,6 +488,10 @@ namespace
 
     void* SignListHook(void* This, uint32_t Area, void* Cells, uint32_t Count, uint32_t* Matching, uint8_t A, uint8_t B, void* Out1, void* Out2)
     {
+        if (Matching != nullptr && s_party_code != 0)
+        {
+            Matching[kNameEngravedRing] = s_party_code;
+        }
         if (Matching != nullptr && !s_list_logged.exchange(true))
         {
             Append(StringFormat("%s  GetSummonSignList area %08x matching:%s\n", Clock().c_str(), Area, Words(Matching).c_str()));
@@ -582,6 +616,7 @@ bool DS2_PartyHook::Install(Injector& injector)
     const RuntimeConfig& Config = injector.GetConfig();
     s_guest = Config.DS2PartyGuest;
     s_accept = ParseSteamIds(Config.DS2PartyAccept);
+    s_party_code = PartyCode(Config.DS2PartyPassword);
 
     s_log_path = injector.GetDllPath() / "DS2_Party.log";
     s_request_path = injector.GetDllPath() / "DS2_Party.req";
@@ -614,8 +649,9 @@ bool DS2_PartyHook::Install(Injector& injector)
     {
         Accepted += StringFormat(" %llu", (unsigned long long)Id);
     }
-    Append(StringFormat("%s  === ds2os party: convidado %s, aceita:%s ===\n", Clock().c_str(),
-        s_guest ? "sim" : "nao", Accepted.empty() ? " ninguem" : Accepted.c_str()));
+    Append(StringFormat("%s  === ds2os party: convidado %s, aceita:%s, codigo %08x ===\n", Clock().c_str(),
+        s_guest ? "sim" : "nao", Accepted.empty() ? (s_party_code != 0 && !s_guest ? " placas da senha" : " ninguem") : Accepted.c_str(),
+        s_party_code));
     Log("[DS2_PartyHook] pronto; convidado %s, %zu steam id(s) aceitos", s_guest ? "sim" : "nao", s_accept.size());
 #endif
     return true;

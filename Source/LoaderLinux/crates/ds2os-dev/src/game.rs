@@ -99,6 +99,7 @@ pub fn prepare(
         DS2SeamlessCoop: seamless,
         DS2PartyGuest: false,
         DS2PartyAccept: String::new(),
+        DS2PartyPassword: String::new(),
         DS2ForcedZoneId: 103110,
     };
     let injector_config = config
@@ -575,7 +576,7 @@ mod tests {
 /// `--party`: instance 2 keeps its white sign down, instance 1 summons the
 /// signs of instance 2's configured Steam ID. Written over the config `prepare`
 /// just wrote, so every other flag stays as given.
-pub fn prepare_party(environment: &Environment) -> Result<Vec<serde_json::Value>, String> {
+pub fn prepare_party(environment: &Environment, password: &str) -> Result<Vec<serde_json::Value>, String> {
     let settings = crate::settings::HarnessConfig::load();
     let guest_id = settings.steam_ids.get(&2).cloned()
         .ok_or("identity_missing: `ds2os-dev game identity --instance 2 <SteamID64>` antes de --party")?;
@@ -586,8 +587,10 @@ pub fn prepare_party(environment: &Environment) -> Result<Vec<serde_json::Value>
             &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
         config.DS2PartyGuest = install.account == 2;
         config.DS2PartyAccept = if install.account == 1 { guest_id.clone() } else { String::new() };
+        config.DS2PartyPassword = password.to_owned();
         config.write_to(&install.game_dir).map_err(|e| format!("{}: {e}", path.display()))?;
-        applied.push(serde_json::json!({"instance": install.account, "guest": config.DS2PartyGuest, "accept": config.DS2PartyAccept}));
+        applied.push(serde_json::json!({"instance": install.account, "guest": config.DS2PartyGuest, "accept": config.DS2PartyAccept,
+            "password": !config.DS2PartyPassword.is_empty()}));
     }
     Ok(applied)
 }
