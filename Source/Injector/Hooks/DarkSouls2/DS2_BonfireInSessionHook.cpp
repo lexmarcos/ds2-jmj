@@ -101,6 +101,14 @@ namespace
     constexpr int kYesText = 100;
     constexpr int kNoText = 0x65;
     constexpr ULONGLONG kVoteTimeoutMs = 30000;
+    // A held travel leaves the bonfire menu open and invisible, with the rest
+    // job waiting on it (measured 15/09: queue state 10, rest state 2, the host
+    // sat with no menu). Canceling closes it the way the game cancels the
+    // bonfire menu in a session: FUN_1401994e0(*(*(ctx+0x70)+0x50)).
+    constexpr size_t kMenuCancelOffset = 0x1994e0;
+    constexpr uint8_t kMenuCancelPrologue[] = { 0x48, 0x8b, 0x05, 0x09, 0xb4, 0x47, 0x01, 0x48, 0x83, 0xb8, 0xe0, 0x22, 0x00, 0x00, 0x00 };
+    constexpr size_t kEventManager = 0x70;
+    constexpr size_t kMenuQueue = 0x50;
     constexpr ULONGLONG kLeaveSettleMs = 1500;
     constexpr ULONGLONG kLeaveGiveUpMs = 20000;
     constexpr const wchar_t* kTravelStuck = L"Travel canceled: a player could not leave the session.";
@@ -141,6 +149,8 @@ namespace
     CloseByNumber_p s_close = nullptr;
     CloseByNumber_p s_release = nullptr;
     bool s_votes_ready = false;
+    using MenuCancel_p = void(*)(void* Queue);
+    MenuCancel_p s_menu_cancel = nullptr;
 
     // Host side, game thread only.
     struct HeldTravel
@@ -254,6 +264,17 @@ namespace
         return nullptr;
     }
 
+    void CloseHeldMenu()
+    {
+        uintptr_t Context = 0, Events = 0, Queue = 0;
+        if (s_menu_cancel != nullptr && ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kEventManager, Events) && Events != 0 &&
+            ReadPointer(Events + kMenuQueue, Queue) && Queue != 0)
+        {
+            s_menu_cancel((void*)Queue);
+        }
+    }
+
     void ShowMessage(const wchar_t* Text)
     {
         if (void* FrontEnd = FrontEndOrNull())
@@ -344,7 +365,9 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             Matches(Base + kClosedOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
             Matches(Base + kButtonOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
             Matches(Base + kCloseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
-            Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue));
+            Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
+            Matches(Base + kMenuCancelOffset, kMenuCancelPrologue, sizeof(kMenuCancelPrologue));
+        s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
         s_closed = (ByNumber_p)(Base + kClosedOffset);
         s_button = (ByNumber_p)(Base + kButtonOffset);
@@ -430,6 +453,7 @@ void DS2_BonfireInSession_Tick()
         if (No > 0)
         {
             s_travel.Active = false;
+            CloseHeldMenu();
             ShowMessage(kTravelDeclined);
             Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao); viagem cancelada\n", s_travel.Vote, Yes, No));
         }
@@ -441,6 +465,7 @@ void DS2_BonfireInSession_Tick()
                 if (Now - s_travel.LeaveSince > kLeaveGiveUpMs)
                 {
                     s_travel.Active = false;
+                    CloseHeldMenu();
                     ShowMessage(kTravelStuck);
                     Append(StringFormat("host: votacao %u: %zu convidado(s) ainda na sessao depois de %llu ms; viagem cancelada\n",
                         s_travel.Vote, Guests, (unsigned long long)(Now - s_travel.LeaveSince)));
@@ -472,6 +497,7 @@ void DS2_BonfireInSession_Tick()
         else if (Now - s_travel.Since > kVoteTimeoutMs)
         {
             s_travel.Active = false;
+            CloseHeldMenu();
             ShowMessage(kTravelNoAnswer);
             Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu); viagem cancelada\n", s_travel.Vote, Yes, Guests));
         }
