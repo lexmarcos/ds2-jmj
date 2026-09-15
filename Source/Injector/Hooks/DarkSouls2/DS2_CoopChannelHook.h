@@ -90,8 +90,9 @@ namespace DS2_CoopChannel
         TravelVote = 2,     // a vote to travel; Map/Type the bonfire, Id the vote (top bit: a guest proposed it)
         TravelLeave = 3,    // everyone agreed: leave the session so the host can travel
         TravelCanceled = 4, // Id the reason, Map/Type the bonfire
+        TravelGo = 5,       // everyone agreed: go to this bonfire, Map/Id, without leaving
     };
-    constexpr uint8_t kHostEventCount = 5;
+    constexpr uint8_t kHostEventCount = 6;
 
     // Other members of a session this machine hosts, seen in the last few
     // seconds. 0 when it hosts nothing.
@@ -116,6 +117,15 @@ namespace DS2_CoopChannel
     constexpr uint8_t kGuestEventCount = 2;
     void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
     bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
+
+    // The bonfires the host of the session has lit, as a bitmap over the
+    // bonfire table's own order (the same table on every machine, so the
+    // index is the name): the host publishes it from the game's thread and
+    // the poll sends it with the announcement; a guest reads the last one.
+    // Up to 96 bonfires, which is what the table holds (77 in 1.03).
+    constexpr uint8_t kMaxLitBonfires = 96;
+    void PublishLit(uint8_t Count, const uint32_t Bits[3]);
+    bool HostLit(uint8_t& Count, uint32_t Bits[3], uint64_t& AgeMs);
 
     // This machine's SteamID64, 0 until the first poll.
     uint64_t SelfSteamId();

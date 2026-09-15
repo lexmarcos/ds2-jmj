@@ -11,6 +11,8 @@
 
 #include "Injector/Hooks/Hook.h"
 
+#include <cstdint>
+
 // The door a death of the local player goes through, and a hand on it.
 //
 // Every character, enemies included, owns a `ChrDeadActionCtrl` (vftable
@@ -75,6 +77,10 @@
 // never touches `+0x759`, and `FUN_14013c3b0`, which may be how a remote
 // character's death is replayed. See step 3 of the M2 plan in
 // docs/DS2_SEAMLESS_COOP_TASKS.md.
+//
+// The move to a bonfire in another map, without a warp, is also what a travel
+// in a session needs (M8): DS2_BonfireInSessionHook asks for it through
+// `DS2_DeathIntercept`, and nobody leaves the session.
 class DS2_DeathInterceptHook : public Hook
 {
 public:
@@ -82,3 +88,20 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
+
+namespace DS2_DeathIntercept
+{
+    // Whether a bonfire of this map can be reached without a warp: the map is
+    // the one under the player, or the game has an owner for it that the
+    // backread hook can force in.
+    bool MapReachable(uint32_t Map);
+
+    // Take the local player to that bonfire the way a respawn does, loading
+    // its map beside this one if it is not in: no warp, no session torn down,
+    // and the HP is left alone. Asked from the game's thread; the move starts
+    // on the next frame of the local player's controller.
+    void GoToBonfire(uint32_t Map, uint32_t Id);
+
+    // False once the move asked for has ended (arrived, or given up).
+    bool Moving();
+}

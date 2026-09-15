@@ -33,12 +33,17 @@
 /// phantom still cannot rest in someone else's world. 2 is only reachable once
 /// a rest has started, so its branch is patched outright, with expected bytes.
 ///
-/// The rest of a host reaches its guests over DS2_CoopChannel: sitting down
-/// sends RestStarted, and each guest shows "A player is resting at a bonfire.";
-/// the world reset the rest runs (FUN_14017fd70) sends WorldReset, and each
-/// guest runs the same reset on its copy of the host's world, so enemies the
-/// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
-/// was sent and received.
+/// The rest of a host reaches its guests over DS2_CoopChannel: the world reset
+/// the rest runs (FUN_14017fd70) sends WorldReset, and each guest runs the same
+/// reset on its copy of the host's world, so enemies the host sees come back
+/// come back on the guest too. Nothing is shown on anyone's screen for a rest:
+/// a message box in the middle of a fight was worse than no warning (decided
+/// 15/09). `DS2_Bonfire.log` says what was sent and received.
+///
+/// The guest's travel list is the host's world, not the maps it happens to
+/// have loaded: the host publishes which bonfires it has lit as a bitmap over
+/// the bonfire table's order, and the guest writes them into its own copy of
+/// the table (the column the manager's +0x44 selects).
 ///
 /// A white phantom rests too: the event action entries stop dropping the
 /// bonfire's prompt for someone in another world (FUN_140453ce0, patched only
@@ -48,7 +53,16 @@
 /// resetting its own copy the guest tells the host, who shows "A player is
 /// resting at a bonfire.", resets its world and sends the reset to everyone.
 ///
-/// Travel is a vote anyone can start. The host picking a bonfire, or a guest
+/// Travel is a vote anyone can start, and when it passes nobody leaves the
+/// session: each machine takes its own player to the bonfire the way a respawn
+/// at a bonfire of another map does (DS2_DeathIntercept::GoToBonfire, the
+/// backread hook bringing the map in beside this one), with no warp. Leaving
+/// the session and letting the party put everyone back together took about 75
+/// seconds and sent each guest through its own world first, which is not
+/// travelling together; it is what is left when the destination's map cannot
+/// be brought in.
+///
+/// The old shape, for reference: The host picking a bonfire, or a guest
 /// picking one (a proposal the host refuses if it has not lit that bonfire),
 /// opens a Yes/No box naming the bonfire and its area for everyone who did not
 /// pick. On a no, or no answer in 30 s, everyone is told. When all say yes the

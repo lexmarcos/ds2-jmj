@@ -469,6 +469,8 @@ namespace
         float Target[3] = {};
         const char* Where = "";
         const char* Why = "";
+        // A travel: the HP is not given back, and there was no death.
+        bool KeepHp = false;
         // Waiting for the bonfire's map to come in.
         bool Loading = false;
         uint32_t LoadMap = 0;
@@ -476,6 +478,13 @@ namespace
         uint32_t LoadFrames = 0;
     };
     Recovery s_recovery;
+
+    // A travel asked for by DS2_BonfireInSessionHook, from the game's thread;
+    // taken by the local player's next frame.
+    std::atomic<bool> s_go_pending{ false };
+    std::atomic<uint32_t> s_go_map{ 0 };
+    std::atomic<uint32_t> s_go_id{ 0 };
+    std::atomic<bool> s_go_moving{ false };
 
     // After the jump to another map: holding that map until the character
     // stands on it, then letting go.
@@ -1481,6 +1490,56 @@ namespace
     // death volume, with the fall camera. Out of the air first; the flags only
     // once the fall controller agrees the character is down, or the next frame
     // in the air is another fall death.
+    // A travel: the bonfire is named, there is no record to fall back on and
+    // no death to pay for. The machine is the respawn's (StartRecovery and
+    // what follows it), measured between Heide and Majula in both directions.
+    void StartTravel(uint8_t* Chr, uint32_t Map, uint32_t Id)
+    {
+        if (s_recovery.Loading || s_settle.Active)
+        {
+            DS2_Backread::Unfocus();
+            DS2_Backread::Release();
+            s_settle.Active = false;
+        }
+
+        Recovery Next;
+        Next.Active = true;
+        Next.Why = "viagem";
+        Next.KeepHp = true;
+
+        if (FindBonfireSpawn(Map, Id, Next.Target))
+        {
+            Next.Where = "fogueira da viagem";
+        }
+        else
+        {
+            uint8_t State = 0;
+            uint32_t Mask[4] = {};
+            const uintptr_t Fall = FallController(Chr);
+            if (Map == CurrentMap() || !DS2_Backread::Query(Map, State, Mask) ||
+                Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
+            {
+                ++s_recovery_failed;
+                s_go_moving.store(false);
+                Append(StringFormat("%s  viagem: a fogueira %08x do mapa %08x nao esta na lista e o mapa nao pode ser trazido; nao viajei\n",
+                    Clock().c_str(), Id, Map));
+                return;
+            }
+            const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+            DS2_Backread::Request(Map, Every);
+            Next.Loading = true;
+            Next.LoadMap = Map;
+            Next.LoadId = Id;
+            Next.Where = "ultima posicao no chao, esperando o mapa da viagem";
+        }
+
+        s_recovery = Next;
+        const bool Moved = TeleportLocal(Chr, s_recovery.Target);
+        Append(StringFormat("%s  viagem: levando para %s (%.3f, %.3f, %.3f) mapa=%08x id=%08x %s\n",
+            Clock().c_str(), s_recovery.Where, s_recovery.Target[0], s_recovery.Target[1], s_recovery.Target[2],
+            Map, Id, Moved ? "teleportado" : "TELEPORTE FALHOU"));
+    }
+
     void StartRecovery(uint8_t* Chr, const char* Why)
     {
         Recovery Next;
@@ -1676,6 +1735,7 @@ namespace
             {
                 ++s_recovery_failed;
                 s_recovery.Active = false;
+                s_go_moving.store(false);
                 Append(StringFormat("%s  %s: %u quadros e o personagem nao pousou; desisto\n",
                     Clock().c_str(), s_recovery.Why, s_recovery.Frames));
             }
@@ -1712,9 +1772,10 @@ namespace
             }
         }
 
-        // Last, so the maximum already carries this death's hollowing.
+        // Last, so the maximum already carries this death's hollowing. A
+        // travel pays nothing and heals nothing.
         int32_t Hp = 0, Max = 0;
-        if (ReadBytes((uintptr_t)Chr + kHpMax, &Max, sizeof(Max)) && Max > 0)
+        if (!s_recovery.KeepHp && ReadBytes((uintptr_t)Chr + kHpMax, &Max, sizeof(Max)) && Max > 0)
         {
             ReadBytes((uintptr_t)Chr + kHp, &Hp, sizeof(Hp));
             WriteBytes((uintptr_t)Chr + kHp, &Max, sizeof(Max));
@@ -1722,6 +1783,7 @@ namespace
 
         ++s_recovered;
         s_recovery.Active = false;
+        s_go_moving.store(false);
         Append(StringFormat("%s  %s concluido em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s, hp %d -> %d\n",
             Clock().c_str(), s_recovery.Why, s_recovery.Frames, (unsigned long long)Before, (unsigned long long)Bits,
             Camera ? "desligada" : "nao estava ligada", Hp, Max));
@@ -1895,6 +1957,12 @@ namespace
                         Clock().c_str(), Map, kArrivalGiveUpFrames));
                 }
             }
+        }
+
+        if (s_go_pending.load() && Data != nullptr && !s_recovery.Active)
+        {
+            s_go_pending.store(false);
+            StartTravel(Chr, s_go_map.load(), s_go_id.load());
         }
 
         if (s_recovery.Active && Data != nullptr)
@@ -2287,4 +2355,49 @@ void DS2_DeathInterceptHook::Uninstall()
 const char* DS2_DeathInterceptHook::GetName()
 {
     return "DS2 Death Intercept";
+}
+
+namespace DS2_DeathIntercept
+{
+    bool MapReachable(uint32_t Map)
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        if (Map == 0)
+        {
+            return false;
+        }
+        if (Map == CurrentMap())
+        {
+            return true;
+        }
+        uint8_t State = 0;
+        uint32_t Mask[4] = {};
+        return DS2_Backread::Query(Map, State, Mask);
+#else
+        (void)Map;
+        return false;
+#endif
+    }
+
+    void GoToBonfire(uint32_t Map, uint32_t Id)
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        s_go_map.store(Map);
+        s_go_id.store(Id);
+        s_go_moving.store(true);
+        s_go_pending.store(true);
+#else
+        (void)Map;
+        (void)Id;
+#endif
+    }
+
+    bool Moving()
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        return s_go_moving.load();
+#else
+        return false;
+#endif
+    }
 }

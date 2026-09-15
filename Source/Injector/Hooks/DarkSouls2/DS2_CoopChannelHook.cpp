@@ -73,6 +73,9 @@ namespace
     constexpr uint8_t kKindLastEvent = 2 + DS2_CoopChannel::kHostEventCount - 1;
     // A guest's answer to a vote: Id the vote, Type 1 yes and 0 no.
     constexpr uint8_t kKindAnswer = 0x20;
+    // The host's lit bonfires, a bitmap over the bonfire table's order: the
+    // count in Reserved, the bits in Map, Type and Id.
+    constexpr uint8_t kKindLit = 0x30;
     // A guest's event: 0x28 + DS2_CoopChannel::GuestEvent.
     constexpr uint8_t kKindFirstGuestEvent = 0x28;
     constexpr uint8_t kKindLastGuestEvent = 0x28 + DS2_CoopChannel::kGuestEventCount - 1;
@@ -136,7 +139,22 @@ namespace
         uint64_t From = 0;
         ULONGLONG Tick = 0;
     };
+    // The host's lit bonfires, last heard (guest) and to send (host).
+    struct Lit
+    {
+        bool Valid = false;
+        uint8_t Count = 0;
+        uint32_t Bits[3] = {};
+        ULONGLONG Tick = 0;
+    };
     std::mutex s_net_mutex;
+    Lit s_lit;
+    std::atomic<uint8_t> s_lit_count{ 0 };
+    std::atomic<uint32_t> s_lit_bits[3];
+    std::atomic<ULONGLONG> s_lit_tick{ 0 };
+    ULONGLONG s_lit_sent_tick = 0;
+    uint8_t s_lit_sent_count = 0;
+    uint32_t s_lit_sent_bits[3] = {};
     Members s_sessions[kMaxSessions];
     Heard s_heard;
 
@@ -439,7 +457,7 @@ namespace
         memcpy(&Said, Data, sizeof(Said));
         const bool Event = Said.Kind >= kKindFirstEvent && Said.Kind <= kKindLastEvent;
         if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion ||
-            (Said.Kind != kKindBonfire && Said.Kind != kKindAnswer && !Event &&
+            (Said.Kind != kKindBonfire && Said.Kind != kKindAnswer && Said.Kind != kKindLit && !Event &&
              !(Said.Kind >= kKindFirstGuestEvent && Said.Kind <= kKindLastGuestEvent)))
         {
             Refuse("nao e um anuncio desta versao", From, Size);
@@ -507,6 +525,36 @@ namespace
         if (Said.Role != kWorldOwner)
         {
             Refuse("so o dono do mundo anuncia a fogueira", From, Size);
+            return;
+        }
+        if (Said.Kind == kKindLit)
+        {
+            bool FromHost = false, Changed = false;
+            {
+                std::scoped_lock Lock(s_net_mutex);
+                const ULONGLONG Now = GetTickCount64();
+                FromHost = IsHostLocked(From, Now);
+                if (FromHost)
+                {
+                    Changed = !s_lit.Valid || s_lit.Count != Said.Reserved || s_lit.Bits[0] != Said.Map ||
+                        s_lit.Bits[1] != (uint32_t)Said.Type || s_lit.Bits[2] != Said.Id;
+                    s_lit.Valid = true;
+                    s_lit.Count = Said.Reserved;
+                    s_lit.Bits[0] = Said.Map;
+                    s_lit.Bits[1] = (uint32_t)Said.Type;
+                    s_lit.Bits[2] = Said.Id;
+                    s_lit.Tick = Now;
+                }
+            }
+            if (!FromHost)
+            {
+                Refuse("fogueiras acesas de quem nao e o host de uma sessao", From, Size);
+            }
+            else if (Changed)
+            {
+                Append(StringFormat("%s  fogueiras acesas do host %016llx: %u na tabela, %08x %08x %08x\n", Clock().c_str(),
+                    (unsigned long long)From, (unsigned)Said.Reserved, Said.Map, (uint32_t)Said.Type, Said.Id));
+            }
             return;
         }
         if (Event)
@@ -662,6 +710,43 @@ namespace
             }
             Append(StringFormat("%s  evento %u enviado na sessao %p (seq %u) para %zu de %zu membros\n",
                 Clock().c_str(), (unsigned)Event.Kind, (void*)Now.Session, Event.Sequence, Delivered, Count));
+        }
+
+        // The lit bonfires, when they changed or every two seconds.
+        {
+            const uint8_t LitCount = s_lit_count.load();
+            uint32_t Bits[3] = { s_lit_bits[0].load(), s_lit_bits[1].load(), s_lit_bits[2].load() };
+            const ULONGLONG LitTick = s_lit_tick.load();
+            const bool Fresh = LitTick != 0 && Tick - LitTick <= kLocalStaleMs;
+            const bool LitChanged = LitCount != s_lit_sent_count || memcmp(Bits, s_lit_sent_bits, sizeof(Bits)) != 0;
+            if (Fresh && LitCount != 0 && (LitChanged || Tick - s_lit_sent_tick >= kAnnounceEveryMs))
+            {
+                Announcement Said = {};
+                memcpy(Said.Magic, kMagic, sizeof(kMagic));
+                Said.Version = kVersion;
+                Said.Kind = kKindLit;
+                Said.Role = Mine.Role;
+                Said.Reserved = LitCount;
+                Said.Map = Bits[0];
+                Said.Type = (int32_t)Bits[1];
+                Said.Id = Bits[2];
+                {
+                    std::scoped_lock Lock(s_announce_mutex);
+                    Said.Sequence = ++s_sequence;
+                }
+                for (size_t i = 0; i < Count; ++i)
+                {
+                    SendTo(Net, Others[i], &Said, sizeof(Said), kReliable, kChannel) ? ++s_sent : ++s_send_failed;
+                }
+                if (LitChanged)
+                {
+                    Append(StringFormat("%s  fogueiras acesas enviadas (%u na tabela, %08x %08x %08x) para %zu membros\n",
+                        Clock().c_str(), (unsigned)LitCount, Bits[0], Bits[1], Bits[2], Count));
+                }
+                s_lit_sent_count = LitCount;
+                memcpy(s_lit_sent_bits, Bits, sizeof(Bits));
+                s_lit_sent_tick = Tick;
+            }
         }
 
         std::scoped_lock Lock(s_announce_mutex);
@@ -1030,6 +1115,48 @@ bool DS2_CoopChannel::TakeGuestEvent(GuestEvent Event, Bonfire& Out)
     Out.AgeMs = Now - Entry.Tick;
     return true;
 #else
+    return false;
+#endif
+}
+
+void DS2_CoopChannel::PublishLit(uint8_t Count, const uint32_t Bits[3])
+{
+#ifdef _WIN32
+    s_lit_count.store(Count);
+    for (size_t i = 0; i < 3; ++i)
+    {
+        s_lit_bits[i].store(Bits[i]);
+    }
+    s_lit_tick.store(GetTickCount64());
+#else
+    (void)Count;
+    (void)Bits;
+#endif
+}
+
+bool DS2_CoopChannel::HostLit(uint8_t& Count, uint32_t Bits[3], uint64_t& AgeMs)
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_net_mutex);
+    if (!s_lit.Valid)
+    {
+        return false;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - s_lit.Tick > kHostFreshMs)
+    {
+        return false;
+    }
+    Count = s_lit.Count;
+    Bits[0] = s_lit.Bits[0];
+    Bits[1] = s_lit.Bits[1];
+    Bits[2] = s_lit.Bits[2];
+    AgeMs = Now - s_lit.Tick;
+    return true;
+#else
+    (void)Count;
+    (void)Bits;
+    (void)AgeMs;
     return false;
 #endif
 }
