@@ -100,34 +100,22 @@ namespace
     constexpr int kYesText = 100;
     constexpr int kNoText = 0x65;
     constexpr ULONGLONG kVoteTimeoutMs = 30000;
-    // A held travel leaves the bonfire menu open and invisible, with the rest
-    // job waiting on it (measured 15/09: queue state 10, rest state 2, the host
-    // sat with no menu). Canceling closes it the way the game cancels the
-    // bonfire menu in a session: FUN_1401994e0(*(*(ctx+0x70)+0x50)).
-    // The travel itself, *(*(ctx+0x70)+0x70), starts with the 0x38-byte warp
-    // request (map at +0x08) and keeps its phase at +0x40. Picking a bonfire
-    // puts it in phase 1 (FUN_140184bd0(travel, 1)); FUN_140184a10, its update,
-    // then starts the load transition (FUN_1404815c0: HUD and menus put away,
-    // the session told to wait) and asks for the warp. Holding the warp itself
-    // was too late: with the transition started and no warp, the host was left
-    // sitting with no menu for good (15/09). Holding phase 1 is before all of
-    // it, and FUN_140184bd0(travel, 0) is the game's own way to drop a travel.
-    constexpr size_t kTravelUpdateOffset = 0x184a10;
-    constexpr uint8_t kTravelUpdatePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x0d, 0xd0, 0xfe, 0x48, 0x01 };
-    constexpr size_t kTravelResetOffset = 0x184bd0;
-    constexpr uint8_t kTravelResetPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x0d, 0x0c, 0xfd, 0x48, 0x01 };
-    constexpr size_t kTravelPhase = 0x40;
-    constexpr size_t kTravelMap = 0x08;
-    constexpr int32_t kTravelPicked = 1;
-    constexpr size_t kMenuCancelOffset = 0x1994e0;
-    constexpr uint8_t kMenuCancelPrologue[] = { 0x48, 0x8b, 0x05, 0x09, 0xb4, 0x47, 0x01, 0x48, 0x83, 0xb8, 0xe0, 0x22, 0x00, 0x00, 0x00 };
+    // Picking a bonfire in the travel list: FeGroupTestBonfireTransitionList
+    // (vftable 0x1410ba868) slot +0x80, FUN_1400d5170(list). It writes the
+    // destination into the bonfire job (+0x68, mark +0x67), and from there the
+    // character plays the travel animation, the load starts and the warp is
+    // asked for - a road whose only way out is the load: holding the warp, and
+    // then the travel's phase 1 (FUN_140184a10), both left the host frozen in
+    // the travel pose (15/09). So the vote happens before the pick is let
+    // through, with the list still open.
+    constexpr size_t kPickOffset = 0xd5170;
+    constexpr uint8_t kPickPrologue[] = { 0x40, 0x56, 0x48, 0x83, 0xec, 0x60, 0x48, 0x8b, 0x05, 0xd3, 0xca, 0x50, 0x01 };
+    constexpr size_t kTravelListVftable = 0x10ba868;
+    constexpr size_t kPickSlot = 0x80;
     constexpr size_t kEventManager = 0x70;
-    // Choosing a destination in the travel menu writes it into the respawn
-    // record (*(ctx+0x70): +0x164 map, +0x168 type, +0x16c id) before the warp
-    // is asked for: a canceled travel left Chico's record on Heide's Ruin while
-    // he stood at The Far Fire (15/09). The record is kept when the rest
-    // starts and put back when a travel is canceled.
-    constexpr size_t kRecordFields = 0x164;
+    constexpr size_t kQueueState = 0x54;
+    constexpr int32_t kQueueBonfireMenu = 10;
+    constexpr const wchar_t* kTravelPickAgain = L"Everyone agreed. Pick the bonfire again to travel.";
     constexpr size_t kMenuQueue = 0x50;
     constexpr ULONGLONG kLeaveSettleMs = 1500;
     constexpr ULONGLONG kLeaveGiveUpMs = 20000;
@@ -169,22 +157,15 @@ namespace
     CloseByNumber_p s_close = nullptr;
     CloseByNumber_p s_release = nullptr;
     bool s_votes_ready = false;
-    uint8_t s_record_at_rest[12] = {};
-    bool s_record_kept = false;
-    using MenuCancel_p = void(*)(void* Queue);
-    MenuCancel_p s_menu_cancel = nullptr;
-    using TravelUpdate_p = void(*)(void* Travel, float Delta);
-    TravelUpdate_p s_original_travel = nullptr;
-    using TravelReset_p = void(*)(void* Travel, int32_t Phase);
-    TravelReset_p s_travel_reset = nullptr;
+    using Pick_p = void(*)(void* List);
+    Pick_p s_original_pick = nullptr;
 
     // Host side, game thread only.
     struct HeldTravel
     {
         bool Active = false;
         bool Pass = false;
-        void* Travel = nullptr;
-        uint32_t Map = 0;
+        void* List = nullptr;
         uint32_t Vote = 0;
         size_t Guests = 0;
         ULONGLONG Since = 0;
@@ -263,13 +244,6 @@ namespace
         const uint64_t Started = s_original_rest(Manager, Bonfire);
         if ((uint8_t)Started != 0 && OwnsTheWorld())
         {
-            uintptr_t Context = 0, Events = 0;
-            s_record_kept = ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
-                ReadPointer(Context + kEventManager, Events) && Events != 0;
-            for (size_t i = 0; s_record_kept && i < sizeof(s_record_at_rest); ++i)
-            {
-                s_record_kept = ReadByte(Events + kRecordFields + i, s_record_at_rest[i]);
-            }
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted);
             Append(StringFormat("host: descanso na fogueira %08x; aviso para a sessao\n", (uint32_t)Bonfire));
         }
@@ -297,89 +271,60 @@ namespace
         return nullptr;
     }
 
-    void RestoreRecord()
+    void PickHook(void* List)
     {
-        uintptr_t Context = 0, Events = 0;
-        if (!s_record_kept || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
-            !ReadPointer(Context + kEventManager, Events) || Events == 0)
-        {
-            return;
-        }
-        uint8_t Now[12] = {};
-        for (size_t i = 0; i < sizeof(Now); ++i)
-        {
-            if (!ReadByte(Events + kRecordFields + i, Now[i]))
-            {
-                return;
-            }
-        }
-        if (memcmp(Now, s_record_at_rest, sizeof(Now)) != 0)
-        {
-            memcpy((void*)(Events + kRecordFields), s_record_at_rest, sizeof(s_record_at_rest));
-            uint32_t Map = 0, Id = 0;
-            memcpy(&Map, s_record_at_rest, 4);
-            memcpy(&Id, s_record_at_rest + 8, 4);
-            Append(StringFormat("host: registro de renascimento devolvido para %08x/%08x\n", Map, Id));
-        }
-    }
-
-    void TravelUpdateHook(void* Travel, float Delta)
-    {
-        if (Travel != nullptr && s_votes_ready && *(const int32_t*)((const uint8_t*)Travel + kTravelPhase) == kTravelPicked &&
-            OwnsTheWorld())
+        if (List != nullptr && s_votes_ready && OwnsTheWorld())
         {
             if (s_travel.Pass)
             {
-                s_original_travel(Travel, Delta);
-                if (*(const int32_t*)((const uint8_t*)Travel + kTravelPhase) != kTravelPicked)
-                {
-                    s_travel.Pass = false;
-                }
+                s_travel.Pass = false;
+                s_original_pick(List);
                 return;
             }
             if (s_travel.Active)
             {
-                return;   // held while the vote runs
+                return;   // a vote is running; the pick waits for it
             }
             const size_t Guests = DS2_CoopChannel::GuestCount();
             if (Guests != 0)
             {
                 s_travel = HeldTravel();
                 s_travel.Active = true;
-                s_travel.Travel = Travel;
-                memcpy(&s_travel.Map, (const uint8_t*)Travel + kTravelMap, sizeof(s_travel.Map));
+                s_travel.List = List;
                 s_travel.Vote = ++s_vote_counter;
                 s_travel.Guests = Guests;
                 s_travel.Since = GetTickCount64();
-                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, s_travel.Map, s_travel.Vote);
-                Append(StringFormat("host: viagem para o mapa %08x segurada antes da transicao; votacao %u com %zu convidado(s)\n",
-                    s_travel.Map, s_travel.Vote, Guests));
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, 0, s_travel.Vote);
+                Append(StringFormat("host: escolha de fogueira segurada na lista; votacao %u com %zu convidado(s)\n", s_travel.Vote, Guests));
                 return;
             }
         }
-        s_original_travel(Travel, Delta);
+        s_original_pick(List);
     }
 
-    void DropTravel()
+    // The list the vote was opened from, if it is still what it was: the
+    // bonfire menu open (menu queue state 10) and the object still a travel
+    // list. The host may have backed out while the others answered.
+    bool ListStillOpen(void* List)
     {
-        if (s_travel.Travel != nullptr && s_travel_reset != nullptr &&
-            *(const int32_t*)((const uint8_t*)s_travel.Travel + kTravelPhase) == kTravelPicked)
+        uintptr_t Context = 0, Events = 0, Queue = 0, Vftable = 0;
+        uint8_t State[4] = {};
+        if (List == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
+            !ReadPointer(Events + kMenuQueue, Queue) || Queue == 0)
         {
-            s_travel_reset(s_travel.Travel, 0);
+            return false;
         }
-    }
-
-    void CloseHeldMenu()
-    {
-        DropTravel();
-        RestoreRecord();
-        uintptr_t Context = 0, Events = 0, Queue = 0;
-        if (s_menu_cancel != nullptr && ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
-            ReadPointer(Context + kEventManager, Events) && Events != 0 &&
-            ReadPointer(Events + kMenuQueue, Queue) && Queue != 0)
+        for (size_t i = 0; i < sizeof(State); ++i)
         {
-            s_menu_cancel((void*)Queue);
+            if (!ReadByte(Queue + kQueueState + i, State[i]))
+            {
+                return false;
+            }
         }
+        int32_t QueueState = 0;
+        memcpy(&QueueState, State, sizeof(QueueState));
+        return QueueState == kQueueBonfireMenu && ReadPointer((uintptr_t)List, Vftable) && Vftable == s_base + kTravelListVftable;
     }
 
     void ShowMessage(const wchar_t* Text)
@@ -473,12 +418,9 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             Matches(Base + kButtonOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
             Matches(Base + kCloseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
             Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
-            Matches(Base + kMenuCancelOffset, kMenuCancelPrologue, sizeof(kMenuCancelPrologue)) &&
-            Matches(Base + kTravelUpdateOffset, kTravelUpdatePrologue, sizeof(kTravelUpdatePrologue)) &&
-            Matches(Base + kTravelResetOffset, kTravelResetPrologue, sizeof(kTravelResetPrologue));
-        s_travel_reset = (TravelReset_p)(Base + kTravelResetOffset);
-        s_original_travel = (TravelUpdate_p)(Base + kTravelUpdateOffset);
-        s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
+            Matches(Base + kPickOffset, kPickPrologue, sizeof(kPickPrologue)) &&
+            *(const uintptr_t*)(Base + kTravelListVftable + kPickSlot) == Base + kPickOffset;
+        s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
         s_closed = (ByNumber_p)(Base + kClosedOffset);
         s_button = (ByNumber_p)(Base + kButtonOffset);
@@ -494,7 +436,7 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         DetourAttach(&(PVOID&)s_original_reset, WorldResetHook);
         if (s_votes_ready)
         {
-            DetourAttach(&(PVOID&)s_original_travel, TravelUpdateHook);
+            DetourAttach(&(PVOID&)s_original_pick, PickHook);
         }
         if (DetourTransactionCommit() == NO_ERROR)
         {
@@ -534,7 +476,6 @@ void DS2_BonfireInSession_Tick()
         if (No > 0)
         {
             s_travel.Active = false;
-            CloseHeldMenu();
             ShowMessage(kTravelDeclined);
             Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao); viagem cancelada\n", s_travel.Vote, Yes, No));
         }
@@ -546,8 +487,7 @@ void DS2_BonfireInSession_Tick()
                 if (Now - s_travel.LeaveSince > kLeaveGiveUpMs)
                 {
                     s_travel.Active = false;
-                    CloseHeldMenu();
-                    ShowMessage(kTravelStuck);
+                            ShowMessage(kTravelStuck);
                     Append(StringFormat("host: votacao %u: %zu convidado(s) ainda na sessao depois de %llu ms; viagem cancelada\n",
                         s_travel.Vote, Guests, (unsigned long long)(Now - s_travel.LeaveSince)));
                 }
@@ -560,8 +500,18 @@ void DS2_BonfireInSession_Tick()
             {
                 s_travel.Active = false;
                 s_travel.Pass = true;
-                Append(StringFormat("host: convidados fora da sessao em %llu ms; viagem para %08x liberada\n",
-                    (unsigned long long)(s_travel.GuestsGone - s_travel.LeaveSince), s_travel.Map));
+                const bool Open = ListStillOpen(s_travel.List);
+                Append(StringFormat("host: convidados fora da sessao em %llu ms; %s\n",
+                    (unsigned long long)(s_travel.GuestsGone - s_travel.LeaveSince),
+                    Open ? "a escolha segue" : "a lista fechou; a proxima escolha passa"));
+                if (Open)
+                {
+                    PickHook(s_travel.List);
+                }
+                else
+                {
+                    ShowMessage(kTravelPickAgain);
+                }
             }
         }
         else if (Guests == 0 || Yes >= Guests)
@@ -575,7 +525,6 @@ void DS2_BonfireInSession_Tick()
         else if (Now - s_travel.Since > kVoteTimeoutMs)
         {
             s_travel.Active = false;
-            CloseHeldMenu();
             ShowMessage(kTravelNoAnswer);
             Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu); viagem cancelada\n", s_travel.Vote, Yes, Guests));
         }
@@ -678,7 +627,7 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
         if (s_votes_ready)
         {
-            DetourDetach(&(PVOID&)s_original_travel, TravelUpdateHook);
+            DetourDetach(&(PVOID&)s_original_pick, PickHook);
         }
         DetourTransactionCommit();
         s_original_rest = nullptr;

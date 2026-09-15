@@ -40,15 +40,14 @@
 /// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
 /// was sent and received.
 ///
-/// A travel picked by the owner of the world while guests are in it is held
-/// before its load transition starts (FUN_140184a10, phase 1): every guest gets
-/// a Yes/No box; on a no, or no answer in 30 s, the travel is dropped
-/// (FUN_140184bd0(travel, 0)), the bonfire menu closed, the respawn record put
-/// back and the host told why. When all say yes they leave the session the
+/// A bonfire picked in the travel list by the owner of the world while guests
+/// are in it is held there, before the pick reaches the game (FUN_1400d5170):
+/// every guest gets a Yes/No box; on a no, or no answer in 30 s, the host is
+/// told and the list stays open. When all say yes they leave the session the
 /// legal way (the end a host's travel causes, which costs no penalty), the
-/// travel goes ahead with the world empty, and the party joins them again at
+/// pick goes through with the world empty, and the party joins them again at
 /// the new bonfire. A host that travelled with a phantom still in its world
-/// closed twice (15/09).
+/// closed twice, and holding the travel any later froze the host (15/09).
 class DS2_BonfireInSessionHook : public Hook
 {
 public:
