@@ -611,6 +611,13 @@ depois de sair para o título e entrar.
 3. As flags `100100` e `100110`, que o host liga e manda ao carregar um mapa
    (`FUN_1404747c0`), passam também; parecem inofensivas, não foram olhadas.
 
+Lido para os itens 1 e 2, entre quem chama o setter: `FUN_14040fdb0` liga, na
+morte de um personagem, a flag em `+4` do parâmetro dele (candidata a "chefe
+morto"), e `FUN_1401826d0` liga duas flags de um registro (`+0x10`, `+0x14`) e
+soma um valor de evento (`+0x18`), com cara de tesouro recolhido. As duas só
+rodam em quem **não** é convidado, então no host, e saem pelo `0x20`. A
+categoria das flags vem dos parâmetros e não foi lida.
+
 Bosses mortos e quests feitas juntos passam para o save de quem entrou; o
 progresso **anterior** do host não passa. Esta é a segunda metade do problema
 e provavelmente o maior trabalho depois de M1: exige o cliente do convidado
