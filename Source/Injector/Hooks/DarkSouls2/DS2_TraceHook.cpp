@@ -892,7 +892,9 @@ bool DS2_TraceHook::Install(Injector& injector)
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourAttach(&(PVOID&)s_original_esd, EsdQueryHook);
-        const bool Inner = memcmp((const void*)(s_base + kEsdInnerOffset), kEsdInnerPrologue, sizeof(kEsdInnerPrologue)) == 0;
+        // DS2_BonfireInSessionHook may have detoured it first (a jmp); Detours chains.
+        const bool Inner = memcmp((const void*)(s_base + kEsdInnerOffset), kEsdInnerPrologue, sizeof(kEsdInnerPrologue)) == 0 ||
+            *(const uint8_t*)(s_base + kEsdInnerOffset) == 0xe9;
         if (Inner)
         {
             s_original_esd_inner = (EsdQuery_p)(s_base + kEsdInnerOffset);

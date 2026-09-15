@@ -121,21 +121,17 @@ namespace
     constexpr size_t kTravelBonfireOffset = 0xd4eb0;   // FUN_1400d4eb0(list): the bonfire id under the cursor
     constexpr uint8_t kTravelBonfirePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0x82, 0xd2, 0xf4, 0xff };
 
-    // A guest never gets "Rest at bonfire": the bonfire's event script asks
-    // query 130602 (FUN_140513440, "in a session as a guest") and stops there
-    // - measured 15/09 with the esd spy, the guest's script evaluated nothing
-    // else. The two map event evaluators that ask it (EventEzStateObjCtrl slot
-    // +8, FUN_140471ae0, the object at +200; EventEzStatePointCtrl slot +8,
-    // FUN_140473ac0, its point at +200 -> +0x40) answer "no" when the script
-    // belongs to a bonfire.
-    constexpr size_t kObjScriptOffset = 0x471ae0;
-    constexpr uint8_t kObjScriptPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0x98 };
-    constexpr size_t kPointScriptOffset = 0x473ac0;
-    constexpr uint8_t kPointScriptPrologue[] = { 0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xec, 0x70 };
+    // A guest never gets "Rest at bonfire": an event script asks query 130602
+    // (FUN_140513440, "in a session as a guest") and stops there - measured
+    // 15/09 with the esd spy, the guest's script evaluated nothing else. The
+    // script is a plain EventEzStateCtrl evaluated by FUN_14045c6a0, with no
+    // pointer to the bonfire in it, so the answer is "no" when the local
+    // player is a white phantom standing within 3 m of a loaded bonfire.
+    constexpr size_t kInnerScriptOffset = 0x45c6a0;
+    constexpr uint8_t kInnerScriptPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xac, 0x24 };
     constexpr int32_t kQueryIsGuest = 130602;
-    constexpr size_t kScriptTarget = 200;
-    constexpr size_t kPointPosition = 0x40;
-    constexpr float kPointNearBonfire = 3.0f;
+    constexpr size_t kCharacterPosition = 0x90;
+    constexpr float kNearBonfire = 3.0f;
 
     // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
     // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
@@ -239,8 +235,7 @@ namespace
     TravelStart_p s_travel_start = nullptr;
     RecordSet_p s_record_set = nullptr;
     TravelBonfire_p s_travel_bonfire = nullptr;
-    Script_p s_original_obj_script = nullptr;
-    Script_p s_original_point_script = nullptr;
+    Script_p s_original_inner_script = nullptr;
     bool s_guest_rest_ready = false;
     std::atomic<uint64_t> s_prompts_opened{ 0 };
 
@@ -425,25 +420,19 @@ namespace
         return s_bonfire_lit != nullptr && Manager != 0 && (s_bonfire_lit((void*)Manager, Bonfire) & 1) != 0;
     }
 
-    // Whether a script's object or point is one of the loaded bonfires.
-    bool ScriptAtBonfire(uintptr_t Target, bool IsPoint)
+    // Whether the local character stands within a few metres of a loaded bonfire.
+    bool NearBonfire()
     {
         const uintptr_t Manager = BonfireManager();
-        uintptr_t Component = 0;
-        if (Manager == 0 || Target == 0 || !ReadPointer(Manager + kBonfireList, Component))
+        uintptr_t Context = 0, Character = 0, Component = 0;
+        if (Manager == 0 || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kLocalCharacter, Character) || Character == 0 ||
+            !ReadPointer(Manager + kBonfireList, Component))
         {
             return false;
         }
-        float Point[3] = {};
-        if (IsPoint)
-        {
-            for (size_t i = 0; i < sizeof(Point); ++i)
-            {
-                uint8_t B = 0;
-                if (!ReadByte(Target + kPointPosition + i, B)) { return false; }
-                ((uint8_t*)Point)[i] = B;
-            }
-        }
+        float Me[3] = {};
+        memcpy(Me, (const void*)(Character + kCharacterPosition), sizeof(Me));
         for (int Guard = 0; Component != 0 && Guard < 64; ++Guard)
         {
             uintptr_t Entity = 0;
@@ -451,16 +440,12 @@ namespace
             {
                 return false;
             }
-            if (!IsPoint && Entity == Target)
-            {
-                return true;
-            }
-            if (IsPoint && Entity != 0)
+            if (Entity != 0)
             {
                 float At[3] = {};
                 memcpy(At, (const void*)(Entity + kEntityPosition), sizeof(At));
-                const float Dx = At[0] - Point[0], Dy = At[1] - Point[1], Dz = At[2] - Point[2];
-                if (Dx * Dx + Dy * Dy + Dz * Dz <= kPointNearBonfire * kPointNearBonfire)
+                const float Dx = At[0] - Me[0], Dy = At[1] - Me[1], Dz = At[2] - Me[2];
+                if (Dx * Dx + Dy * Dy + Dz * Dz <= kNearBonfire * kNearBonfire)
                 {
                     return true;
                 }
@@ -473,35 +458,29 @@ namespace
         return false;
     }
 
-    uint64_t ScriptQuery(Script_p Original, bool IsPoint, void* This, uint32_t* Out, void** Arguments, void* P4)
+    uint64_t InnerScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
     {
-        const uint64_t Result = Original(This, Out, Arguments, P4);
-        if (Out == nullptr || Arguments == nullptr || !IsWhitePhantom())
+        const uint64_t Result = s_original_inner_script(This, Out, Arguments, P4);
+        __try
         {
-            return Result;
-        }
-        using Id_p = int32_t(*)(void*);
-        const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
-        uintptr_t Target = 0;
-        if (Id == kQueryIsGuest && Out[0] != 0 && ReadPointer((uintptr_t)This + kScriptTarget, Target) && ScriptAtBonfire(Target, IsPoint))
-        {
-            Out[0] = 0;
-            if (s_prompts_opened.fetch_add(1) == 0)
+            if (Out != nullptr && Arguments != nullptr && Out[0] != 0)
             {
-                Append(StringFormat("convidado: o script da fogueira perguntou se sou convidado; respondi nao (%s)\n", IsPoint ? "ponto" : "objeto"));
+                using Id_p = int32_t(*)(void*);
+                const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
+                if (Id == kQueryIsGuest && IsWhitePhantom() && NearBonfire())
+                {
+                    Out[0] = 0;
+                    if (s_prompts_opened.fetch_add(1) == 0)
+                    {
+                        Append("convidado: perto da fogueira, a pergunta 'sou convidado?' do script respondeu nao\n");
+                    }
+                }
             }
         }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
         return Result;
-    }
-
-    uint64_t ObjScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
-    {
-        return ScriptQuery(s_original_obj_script, false, This, Out, Arguments, P4);
-    }
-
-    uint64_t PointScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
-    {
-        return ScriptQuery(s_original_point_script, true, This, Out, Arguments, P4);
     }
 
     // The host's own travel, started by the game's functions. False when the
@@ -818,8 +797,9 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             Matches(Base + kTravelStartOffset, kTravelStartPrologue, sizeof(kTravelStartPrologue)) &&
             Matches(Base + kRecordSetOffset, kRecordSetPrologue, sizeof(kRecordSetPrologue)) &&
             Matches(Base + kTravelBonfireOffset, kTravelBonfirePrologue, sizeof(kTravelBonfirePrologue));
-        s_guest_rest_ready = Matches(Base + kObjScriptOffset, kObjScriptPrologue, sizeof(kObjScriptPrologue)) &&
-            Matches(Base + kPointScriptOffset, kPointScriptPrologue, sizeof(kPointScriptPrologue)) &&
+        // DS2_TraceHook's esd spy may have detoured it first (a jmp); Detours chains.
+        s_guest_rest_ready = (Matches(Base + kInnerScriptOffset, kInnerScriptPrologue, sizeof(kInnerScriptPrologue)) ||
+                              *(const uint8_t*)(Base + kInnerScriptOffset) == 0xe9) &&
             Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue));
         s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
         s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
@@ -828,8 +808,7 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_travel_start = (TravelStart_p)(Base + kTravelStartOffset);
         s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
         s_travel_bonfire = (TravelBonfire_p)(Base + kTravelBonfireOffset);
-        s_original_obj_script = (Script_p)(Base + kObjScriptOffset);
-        s_original_point_script = (Script_p)(Base + kPointScriptOffset);
+        s_original_inner_script = (Script_p)(Base + kInnerScriptOffset);
         s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
         s_closed = (ByNumber_p)(Base + kClosedOffset);
@@ -850,8 +829,7 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         }
         if (s_guest_rest_ready)
         {
-            DetourAttach(&(PVOID&)s_original_obj_script, ObjScriptHook);
-            DetourAttach(&(PVOID&)s_original_point_script, PointScriptHook);
+            DetourAttach(&(PVOID&)s_original_inner_script, InnerScriptHook);
         }
         if (DetourTransactionCommit() == NO_ERROR)
         {
@@ -1155,8 +1133,7 @@ void DS2_BonfireInSessionHook::Uninstall()
         }
         if (s_guest_rest_ready)
         {
-            DetourDetach(&(PVOID&)s_original_obj_script, ObjScriptHook);
-            DetourDetach(&(PVOID&)s_original_point_script, PointScriptHook);
+            DetourDetach(&(PVOID&)s_original_inner_script, InnerScriptHook);
         }
         DetourTransactionCommit();
         s_original_rest = nullptr;
