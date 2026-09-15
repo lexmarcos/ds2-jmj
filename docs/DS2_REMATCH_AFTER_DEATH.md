@@ -401,24 +401,50 @@ Duas peças, uma de cada lado, e as duas nascem desligadas:
 | onde | flag | o que faz |
 | --- | --- | --- |
 | servidor | `DS2_AutoRematch` | lembra o último summon de cada dono de placa e sabe reenviar o push; sozinho **não** forma sessão |
-| cliente | `DS2AutoRematch` | o `DS2_RematchHook`: invocar uma vez liga a revanche, e cada placa que chegar depois é invocada sozinha |
+| cliente | `DS2AutoRematch` | o `DS2_RematchHook`: invocar uma vez liga a revanche **com o dono daquela placa**, e cada placa nova do mesmo jogador e do mesmo tipo é invocada sozinha |
 
 No harness: `ds2os-dev up --auto-rematch`, ou
 `ds2os-dev game prepare --auto-rematch` e relançar (a config é lida na
 injeção).
 
 O hook escreve em `DS2_Rematch.log`, ao lado da DLL. Escrever `0` em
-`DS2_Rematch.req` desliga; qualquer outra coisa liga.
+`DS2_Rematch.req` desliga; `alvo <id do jogador> <tipo>` arma com esse
+oponente; qualquer outra coisa liga com o oponente lembrado (e, sem nenhum,
+não invoca nada).
 
 **O que é hoje:** depois de um duelo por red sign, o fantasma que voltou
 recoloca a placa e o host o invoca sozinho, sem apertar nada. Vinte e quatro
 segundos entre a placa ir ao chão e a sessão formar, dos quais vinte são o
 intervalo do poll de placas do cliente.
 
-**O que não é:** o hook invoca **qualquer** placa que chegue, não só a do par.
-Com dois jogadores no servidor dá no mesmo; com três, invocaria o primeiro que
-aparecesse. O campo do item que identifica o dono ainda não foi lido, e é o que
-falta para isso ficar certo.
+**Só o par.** Até 14/09 o hook invocava qualquer placa que chegasse: com três
+jogadores, a de um estranho — vermelha, branca, qualquer uma — entraria no
+mundo do host sem ninguém pedir (apontado na revisão do PR 6). Agora ele lembra,
+por alça, o dono e o tipo de toda placa que passa pelo `AddSign`
+(`FUN_140213160`), e o summon feito pelo jogador fixa esse par como oponente.
+
+Os campos, medidos numa placa vermelha com um breakpoint em `+0x213234`, onde a
+entrada acabou de ser preenchida (`rdi`):
+
+| entrada | argumento do `AddSign` | valor medido |
+| --- | --- | --- |
+| `+0x20` | 5º | 1006, o id da placa no servidor (muda a cada placa) |
+| `+0x24` | 6º | 3, o id do jogador Chico (fica) |
+| `+0x28` | 3º | 7, o tipo no cliente (a branca chega como 1; no servidor a vermelha é 4) |
+| `+0x38` | 7º | a steam id em hex, `0110000140d6d6d1` |
+
+Medido em 14/09 com a DLL `04b5114f`, Samuel host e Chico humano, placas pelo
+cinto e pelo inventário, e cada duelo terminado com a morte do espírito:
+
+| passo | `DS2_Rematch.log` | servidor |
+| --- | --- | --- |
+| Samuel invoca a vermelha 1007 | `invocou a placa 80000025 (jogador 3, tipo 7); revanche ligada com ele` | `Summoning sign 1007` → `JoinGuestPlayer` → `JoinSession` |
+| Chico põe uma **branca** (1008) | `é do jogador 3 tipo 1, a revanche é com o jogador 3 tipo 7; ignorada` | a placa entregue, nenhum `Summoning` |
+| Chico põe a **vermelha** 1010 | `revanche: invocando a placa 80000045 do jogador 3` | `Summoning sign 1010` → `JoinGuestPlayer` → `JoinSession`, ninguém apertou nada |
+| `alvo 99 7`, e o Chico põe a vermelha 1011 | `é do jogador 3 tipo 7, a revanche é com o jogador 99 tipo 7; ignorada` | `sent 1` no poll do Samuel, nenhum `Summoning` |
+
+O terceiro jogador de verdade continua sem teste nesta máquina; o `alvo` é o
+jeito honesto de mostrar a recusa por dono com duas contas.
 
 ## O que isso deixa como projeto
 

@@ -15,8 +15,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -52,6 +54,60 @@ namespace
 
     std::atomic<void*> s_manager{ nullptr };
     std::atomic<bool> s_pending{ false };
+
+    // Who the rematch is with. A rematch re-summons the opponent of the last
+    // duel, not whichever sign shows up next: with three or more players a
+    // stranger's sign — red, white, anything — would otherwise be summoned
+    // into the host's world unasked.
+    //
+    // AddSign's sixth argument is the sign owner's player id and the third the
+    // sign type (measured 14/09 on a red sign: entry +0x20 sign id 1006, +0x24
+    // player 3, the type byte 7; a white sign arrives as type 1). The summon
+    // only sees a handle, so every arriving sign is remembered by handle.
+    struct SeenSign
+    {
+        uint32_t Handle = 0;
+        uint32_t PlayerId = 0;
+        uint8_t Type = 0;
+    };
+    constexpr size_t kSeenSigns = 64;
+    SeenSign s_seen[kSeenSigns];
+    size_t s_seen_next = 0;
+    std::mutex s_seen_mutex;
+
+    constexpr uint32_t kNoOpponent = 0xffffffff;
+    std::atomic<uint32_t> s_opponent_player{ kNoOpponent };
+    std::atomic<uint32_t> s_opponent_type{ 0 };
+
+    void RememberSign(uint32_t Handle, uint32_t PlayerId, uint8_t Type)
+    {
+        std::scoped_lock Lock(s_seen_mutex);
+        for (SeenSign& Seen : s_seen)
+        {
+            if (Seen.Handle == Handle)
+            {
+                Seen.PlayerId = PlayerId;
+                Seen.Type = Type;
+                return;
+            }
+        }
+        s_seen[s_seen_next] = { Handle, PlayerId, Type };
+        s_seen_next = (s_seen_next + 1) % kSeenSigns;
+    }
+
+    bool LookUpSign(uint32_t Handle, SeenSign& Out)
+    {
+        std::scoped_lock Lock(s_seen_mutex);
+        for (const SeenSign& Seen : s_seen)
+        {
+            if (Seen.Handle != 0 && Seen.Handle == Handle)
+            {
+                Out = Seen;
+                return true;
+            }
+        }
+        return false;
+    }
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -73,9 +129,21 @@ namespace
         // the whole reason this detour exists; the summon itself is the
         // player's own and is passed straight through.
         s_manager.store(Manager);
-        if (Handle != nullptr)
+        SeenSign Summoned;
+        if (Handle != nullptr && LookUpSign(*Handle, Summoned))
         {
-            Append(StringFormat("  o jogador invocou a placa %08x; revanche ligada\n", *Handle));
+            s_opponent_player.store(Summoned.PlayerId);
+            s_opponent_type.store(Summoned.Type);
+            Append(StringFormat("  o jogador invocou a placa %08x (jogador %u, tipo %u); revanche ligada com ele\n",
+                *Handle, Summoned.PlayerId, (unsigned)Summoned.Type));
+        }
+        else
+        {
+            // Without an owner there is nobody to rematch with, and summoning
+            // "the next sign" is exactly what must not happen.
+            s_opponent_player.store(kNoOpponent);
+            Append(StringFormat("  o jogador invocou a placa %08x, que nao passou pelo AddSign; revanche sem oponente\n",
+                Handle == nullptr ? 0u : *Handle));
         }
 
         // Arming here is safe because of an interlock the game already has: a
@@ -98,12 +166,32 @@ namespace
         // armed. This hook was written for red signs and never fired for a
         // white one, and a hook that only speaks when it acts cannot say
         // whether it was never called or called and declined.
-        Append(StringFormat("  placa recebida: tipo=%u alca=%08x armado=%u\n",
-            (unsigned)Type, OutHandle == nullptr ? 0u : *OutHandle,
+        Append(StringFormat("  placa recebida: tipo=%u jogador=%u alca=%08x armado=%u\n",
+            (unsigned)Type, P6, OutHandle == nullptr ? 0u : *OutHandle,
             (unsigned)s_pending.load()));
 
-        if (!s_pending.load() || OutHandle == nullptr || *OutHandle == 0)
+        if (OutHandle == nullptr || *OutHandle == 0)
         {
+            return Result;
+        }
+        RememberSign(*OutHandle, P6, Type);
+
+        if (!s_pending.load())
+        {
+            return Result;
+        }
+
+        const uint32_t Opponent = s_opponent_player.load();
+        if (Opponent == kNoOpponent)
+        {
+            Append(StringFormat("  placa %08x (jogador %u, tipo %u) chegou, mas a revanche nao tem oponente; ignorada\n",
+                *OutHandle, P6, (unsigned)Type));
+            return Result;
+        }
+        if (P6 != Opponent || (uint32_t)Type != s_opponent_type.load())
+        {
+            Append(StringFormat("  placa %08x e do jogador %u tipo %u, a revanche e com o jogador %u tipo %u; ignorada\n",
+                *OutHandle, P6, (unsigned)Type, Opponent, s_opponent_type.load()));
             return Result;
         }
 
@@ -116,7 +204,7 @@ namespace
 
         // Stays armed: the next sign from the same pair is the next rematch,
         // and that is the point. Writing "0" to the request file turns it off.
-        Append(StringFormat("  revanche: invocando a placa %08x que acabou de chegar\n", *OutHandle));
+        Append(StringFormat("  revanche: invocando a placa %08x do jogador %u, que acabou de chegar\n", *OutHandle, P6));
         s_original_summon(Manager, OutHandle);
         return Result;
     }
@@ -140,11 +228,27 @@ namespace
                 }
                 std::filesystem::remove(s_request_path, Error);
 
-                const bool Wanted = Contents.find('0') != 0;
-                s_pending.store(Wanted);
-                Append(Wanted
-                    ? "=== revanche armada a mao ===\n"
-                    : "=== revanche desligada a mao ===\n");
+                // "alvo <player id> <type>" names the opponent by hand, which is
+                // also how a sign from somebody else is tested with two accounts.
+                unsigned Player = 0;
+                unsigned SignType = 0;
+                if (sscanf(Contents.c_str(), "alvo %u %u", &Player, &SignType) == 2)
+                {
+                    s_opponent_player.store(Player);
+                    s_opponent_type.store(SignType);
+                    s_pending.store(true);
+                    Append(StringFormat("=== revanche armada a mao com o jogador %u tipo %u ===\n", Player, SignType));
+                }
+                else
+                {
+                    const bool Wanted = Contents.find('0') != 0;
+                    s_pending.store(Wanted);
+                    Append(Wanted
+                        ? (s_opponent_player.load() == kNoOpponent
+                            ? "=== revanche armada a mao, sem oponente: nenhuma placa sera invocada ===\n"
+                            : "=== revanche armada a mao ===\n")
+                        : "=== revanche desligada a mao ===\n");
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
