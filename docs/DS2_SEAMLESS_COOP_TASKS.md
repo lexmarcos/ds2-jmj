@@ -628,26 +628,48 @@ quest.
 
 ---
 
-## M8 — fogueira e viagem — **investigação começada em 15/09**
+## M8 — fogueira e viagem — **descanso em sessão feito em 15/09**
 
-**Medido 15/09:** com sessão, o host em cima da fogueira recebe o prompt "Rest
-at bonfire" e, ao apertar A, a caixa "Cannot use bonfire"; sem sessão o menu
-abre. **A trava não é uma consulta de EzState**: o espião `esd` (em
-[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)) viu as mesmas quatro
-consultas (`130301`, `130311`, `130321`, `132003`), com os mesmos valores, com e
-sem sessão, nos dois avaliadores.
+**Feito 15/09**: `DS2_BonfireInSessionHook` (com `--seamless`). O dono do
+mundo descansa na fogueira com fantasmas no mundo, e a sessão fica. Em sessão
+o jogo recusava em **três** lugares, todos perguntando a `FUN_14025f690`
+("sessão de multiplayer de pé", estado 1 ou 2):
 
-**Lido:** `FUN_1401cb950` é o descanso (comando de evento via `FUN_140452790`):
-em sessão, se `FUN_14025f690` (estado da sessão diferente de 1 e 2) e
-`FUN_1401cb3d0` (um personagem de outro time vivo no raio da fogueira) e a
-fogueira passa por `FUN_14017dc40`, ele **não** manda o evento `0x453` que
-abre o menu. Candidato forte à trava, **não confirmado**: o breakpoint nele não
-chegou a ser medido com a sessão viva.
+1. `FUN_1401cb950`, o descanso: resposta sim → mensagem `0x453`, a caixa
+   "Cannot use bonfire" (`0x453` é id de texto, não evento; a tabela de falhas
+   de invocação `FUN_140212730` usa ids do mesmo tipo);
+2. `FUN_14017ed90`, o job de descanso no estado 2: `FUN_14025ea40` diferente de
+   0 → cancela o menu (`FUN_1401994e0`), e o personagem se levanta;
+3. `FUN_140199a70`, a fila de menus no estado 10 (menu da fogueira): resposta
+   sim → cancela o menu.
 
-**Cuidado:** o Samuel morreu duas vezes nesta investigação, uma por teleporte
-para a origem de um objeto e outra por `press b` às cegas com o menu que não
-abriu (B no mundo é rolar, e a fogueira de Heide's Ruin fica na beira da água).
-Hollow 3 → 5. Feche menus só depois de ver o menu na captura.
+1 e 3 respondem "não" por um detour de `FUN_14025f690` que olha o endereço de
+retorno (`+0x1cb9d9`, `+0x199c2e`) e só quando o jogador local é dono do mundo;
+2 é patch de bytes (`74 19` → `eb 19` em `+0x17ee9d`), alcançável só com um
+descanso já começado.
+
+Achado por partes, cada uma medida: breakpoints nos ramos de `FUN_1401cb950`
+(com sessão ele ia direto à mensagem; sem, iniciava o job), a leitura por
+sonda da fila (`+0x54` de `*(ctx+0x70)+0x50`: 10 com o menu aberto sozinho, 0
+em sessão) e uma vigia de escrita nesse campo. Com as três trocadas em memória
+e depois com o build `2dc983c9`: Samuel host sentou, o menu "Heide's Ruin"
+abriu com o fantasma do Chico ao lado, `p2pSessionVerified: true` antes,
+durante e um minuto depois de fechar o menu. O fantasma não recebe a opção de
+descansar (os prompts dele são "Light torch" e "Pick up item").
+
+Ao entrar no estado 2 o job roda `FUN_14017fd70` (`FUN_140417210`,
+`FUN_1403c1b50`, `FUN_14044f880`), o candidato ao reset do mundo do host.
+
+**Falta:**
+
+- o que o **convidado** vê do reset: inimigos voltando no mundo do host na
+  tela dele, e se o `EnemyGeneratorDeadCounter` dele acompanha;
+- o aviso antes ("A player is resting at a bonfire");
+- o convidado não é curado pelo descanso do host (726/854 antes e depois);
+  o design não diz se deveria;
+- viagem pelo menu em sessão, com o grupo (item abaixo): o menu abre, mas
+  nenhuma viagem foi tentada;
+- descanso com um invasor no mundo: o hook não distingue.
 
 - descansar reseta o mundo para todos, com aviso antes
   ("A player is resting at a bonfire");

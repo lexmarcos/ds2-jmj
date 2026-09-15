@@ -241,6 +241,16 @@ whose bonfire announcement never arrives (no channel, or the host never rested
 since boot), a host with its bonfire in a map other than where it stands, and
 any area pair besides Majula → Heide. The VPS server has no party pass.
 
+### M8: resting at a bonfire in a session
+
+Measured 15/09 with Samuel hosting and Chico's phantom beside him at Heide's
+Ruin: with `DS2_BonfireInSessionHook` the host sits, the bonfire menu opens
+and the session stays verified for a minute after the menu closes. Not
+measured: what the guest sees of the world reset, travel from that menu,
+leveling or attuning in it, burning a Bonfire Ascetic with a phantom present,
+resting with an invader in the world, a guest trying to rest (it is not
+offered the prompt), and any bonfire but Heide's Ruin.
+
 ### M7: flags carried into the guest's save
 
 Measured 15/09 with one unused global flag (`109999`) set by the host's own
