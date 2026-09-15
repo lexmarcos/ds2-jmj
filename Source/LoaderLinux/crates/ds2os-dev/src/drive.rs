@@ -146,7 +146,7 @@ fn anyone_in_world(text: &str) -> bool {
 /// on screen in whatever order they finish booting, and "the second window" has
 /// meant the wrong account more than once. Position stays as a fallback for a
 /// window that does not publish its pid.
-fn window_for(environment: &Environment, account: u8) -> Result<GameWindow, String> {
+pub fn window_for(environment: &Environment, account: u8) -> Result<GameWindow, String> {
     let windows = screen::windows()?;
 
     if let Ok(prefix) = game::compat_data(environment, account) {

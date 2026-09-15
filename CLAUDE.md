@@ -124,6 +124,35 @@ Take a screenshot after every menu step rather than firing a long blind
 sequence: a `dpad left` sent when no dialog is open moves the character
 instead.
 
+**A hollow character cannot use the Cracked Red Eye Orb.** X does nothing at
+all — no animation, no message, nothing reaching the server — and it reads
+exactly like a dead button. Burn a Human Effigy first (menu → Inventory → the
+second item, A, A). Standing on a bonfire does **not** block the item; that was
+the first guess and it was wrong. Dying **in your own world** hollows you;
+dying as an invader in someone else's world does not, so a duel loss costs no
+effigy.
+
+**Two games open on the same account break every session, and the symptom
+points somewhere else.** After a failed relaunch left a second client running
+on account 1, no session would form at all — not an invasion, not a sign
+summon — while everything upstream looked healthy: the server routed the push
+and the target answered `RequestSendMessageToPlayers`. Then one side said
+"Summoning failed. Timed out." and the other "Disconnected from multiplayer
+session." Closing the extra client fixed it immediately. `status` shows the
+game processes; there must be exactly one per account. Before reading any PvP
+result as a finding, **run the invasion control** — two button presses, and it
+says whether the machine can form a session at all.
+
+**Quit Game is refused while a PvP session is live**, on both sides. The menu
+entry highlights and A does nothing, so `game leave` sits there pressing
+buttons until it times out. End the session first: a death, the timer, or
+`game stop`.
+
+`game focus <n>`, `pad --focus <n>` and `game shot` all mean the **instance**,
+resolved by the owning process. They used to index the window list, which put
+`shot-1.png` on either account depending on boot order, and sent presses to the
+wrong game.
+
 ### Two installations, two accounts
 
 **Never start the second instance from the first Steam.** The session

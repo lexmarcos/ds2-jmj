@@ -68,6 +68,12 @@ public:
     // the experiment for the barrier that pens a phantom into one area.
     bool DS2RemovePhantomFog = false;
 
+    // Summons the same red sign again from the host's side, so a duel can
+    // start over without the player walking back to the sign. Off by default:
+    // it writes two detours into the game's own code, and the server half it
+    // pairs with is off too.
+    bool DS2AutoRematch = false;
+
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.
     int DS2ForcedZoneId = 103110;

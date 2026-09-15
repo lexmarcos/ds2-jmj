@@ -159,6 +159,54 @@ would not need a code patch at all.
 
 Worth finding where that table lives and what a present record contains.
 
+### The rematch after a death
+
+Measured in [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md), with
+two gaps left open:
+
+- whether the Red Sign Soapstone can be used hollow. The test that
+  looked like it proved yes was run on a character who turned out to be
+  human, so it proves nothing. The orb is the only item measured.
+- whether a fall death and a kill death produce the same message chain.
+  The fall showed no `RequestNotifyDeath`, but the server census only
+  logs the first message of each type per client, so that is not
+  evidence either way. A staged kill needs the two characters next to
+  each other, and the terrain around the Heide bonfire kept killing the
+  phantom on the way over.
+
+The first reading of these measurements was wrong in a way worth
+remembering: a death as an invader looked like it cost human form,
+because an accidental second death **in the invader's own world** sat
+between the duel and the test. The fix was to run the loop again with
+nothing in between.
+
+### A revanche por red sign, e o que o servidor tem sem entregar nada
+
+`DS2_AutoRematch` e o gatilho `debug_summon.req` estão no servidor e
+funcionam no que prometem: o par é lembrado e o push é reenviado. Mas
+**sozinhos não formam sessão nenhuma** — está medido em
+[DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md). A flag nasce
+desligada e deve continuar assim até existir a metade do cliente; caso
+contrário ela vira a mesma armadilha que o `debug_invade.req` virou.
+
+Em aberto, em ordem de quanto bloqueiam:
+
+- ~~O `SignHandle` sobrevive a uma placa nova?~~ **Não**, e o hook já
+  resolve: ele lê o handle novo no parâmetro de saída da função que
+  registra a placa. A revanche por red sign funciona ponta a ponta.
+- **O hook invoca qualquer placa que chegue**, não só a do par. Com dois
+  jogadores dá no mesmo; com três, está errado. Falta ler o campo do
+  item que identifica o dono.
+- **Qual índice da tabela em `0x1410c0050` é cada papel.** Zerar todos
+  trava a morte; para o co-op seamless é preciso saber qual entrada
+  mexer, e o tipo vem de `rcx+0xe0` num objeto transitório.
+- ~~A Red Sign Soapstone pode ser usada hollow?~~ **Respondido em 12/09:
+  não.** Hollow, o X não coloca placa; com uma Human Effigy, no mesmo
+  ponto e sem andar, a placa sai. Vale para os dois itens online.
+- **O host hollow não vê placa** foi medido uma vez só, com o controle
+  no mesmo ponto (efígie, prompt aparece). Vale repetir num outro lugar
+  antes de virar regra.
+
 ## Not started
 
 From the original brief, and unrelated to any of the above: arena

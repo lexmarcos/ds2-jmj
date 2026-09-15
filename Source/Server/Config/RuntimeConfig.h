@@ -340,6 +340,15 @@ public:
     // player; only the dead-area rule is lifted.
     bool DS2_InvadeAnywhere = false;
 
+    // If enabled the server remembers the last red sign duel of each pair and
+    // can start it again without the host walking back to a sign. Only the
+    // summon is replayed: the phantom's client still has to have a sign out,
+    // which is the state that makes an unasked-for push mean anything at all.
+    // An invasion cannot be restarted this way — a fabricated break-in push
+    // reaches a client that is doing nothing and is ignored, which is measured
+    // in docs/DS2_REMATCH_AFTER_DEATH.md.
+    bool DS2_AutoRematch = false;
+
     // If enabled the server logs the first time each client sends each kind of
     // message. One line per client per message type, so it stays readable, and
     // it maps which online subsystems a client actually uses where it stands.

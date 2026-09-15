@@ -53,6 +53,23 @@ protected:
     MessageHandleResult Handle_RequestRejectSign(GameClient* Client, const Frpg2ReliableUdpMessage& Message);
     MessageHandleResult Handle_RequestGetRightMatchingArea(GameClient* Client, const Frpg2ReliableUdpMessage& Message);
 
+    // Sends the summon push for a sign as if the remembered host had walked up
+    // to it and pressed the button. Returns why it could not, for the log.
+    bool ReplaySummon(uint32_t OwnerPlayerId, uint32_t ExplicitHostId, std::string& OutReason);
+
+    // Tells the host a visitor is arriving, the way a covenant invasion does.
+    // The point of it is which side opens the session: an invasion push goes to
+    // the *host* and the host reaches for its peer, which is the half a
+    // replayed summon is missing.
+    bool PushVisitToHost(uint32_t OwnerPlayerId, uint32_t VisitType, uint32_t ExplicitHostId, std::string& OutReason);
+
+    // Tells the host it is being invaded by the phantom. This is the one push
+    // the game answers by opening a session — the host reaches for its peer
+    // within a second of it, idle or not.
+    bool PushBreakInToHost(uint32_t OwnerPlayerId, uint32_t ExplicitHostId, std::string& OutReason);
+
+    void PollRematchRequest();
+
 private:
     Server* ServerInstance;
     GameService* GameServiceInstance;
@@ -64,5 +81,26 @@ private:
     // Throttles the sticky-sign diagnostic, which would otherwise print on
     // every sign list poll. Keyed on player id.
     std::unordered_map<uint32_t, double> LastStickyLogTime;
+
+    // The last summon of each sign owner, kept so the same duel can be started
+    // again. The player struct is the summoning host's own blob, which the
+    // server never builds and can only repeat: it arrives in RequestSummonSign
+    // and is handed to the phantom's client untouched.
+    struct RememberedSummon
+    {
+        uint32_t HostPlayerId = 0;
+        std::string HostSteamId;
+        std::string PlayerStruct;
+        double Time = 0.0;
+    };
+    std::unordered_map<uint32_t, RememberedSummon> LastSummonOfOwner;
+
+    // The last player blob each client sent with a sign of its own. The blob
+    // is the only part of a summon the server cannot build, and a pair that
+    // has never duelled leaves none behind — but anyone who has ever placed a
+    // sign has handed one over already.
+    std::unordered_map<uint32_t, std::vector<uint8_t>> LastPlayerStruct;
+
+    double NextRematchPollTime = 0.0;
 
 };

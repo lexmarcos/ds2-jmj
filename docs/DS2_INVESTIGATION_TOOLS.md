@@ -87,6 +87,80 @@ the game when the character moved. A second thread can reach an address between
 the first restoring the byte and the handler running, so the handler owns an
 address whether or not it is still armed - without that it died immediately.
 
+## O breakpoint que segue um ponteiro
+
+`DS2_Trace.req` aceita, desde 12/09:
+
+```
+bp <deslocamento hex>
+bp <deslocamento hex> deref <registrador>[+<hex>] <bytes>
+```
+
+Registradores: `rcx rdx r8 r9 rax rbx rsi rdi`; no máximo 64 bytes.
+
+Isto existe porque **metade do que interessa neste binário está atrás de um
+ponteiro**, e o ponteiro morre antes de qualquer sonda conseguir responder. O
+ponto de entrada do summon recebe um `SignHandle` por endereço; o objeto que
+decide se uma morte desfaz a sessão guarda o tipo em `+0xe0` e é reciclado em
+segundos. Tentar ler esses endereços depois, com `DS2_MemProbe.req`, devolve
+memória já reaproveitada — foi medido, e a leitura tardia deu um ponteiro de
+heap onde deveria haver um byte de tipo.
+
+Exemplos reais:
+
+```
+bp 2a14c0 deref rdx 4        # o SignHandle que o host invocou
+bp 190950 deref rcx+e0 1     # o tipo que decide se a morte encerra as sessões
+```
+
+A leitura é protegida: um registrador pode apontar para qualquer coisa, e uma
+falha dentro de um handler vetorizado leva o jogo junto. Endereço ilegível sai
+como `[rcx=... ilegivel]` em vez de virar crash.
+
+### Rearmar o mesmo endereço exige `clear`
+
+O tracer guarda todo endereço que já armou, e `Arm` desiste silenciosamente se
+o endereço já está no mapa. Mandar `bp 2a14c0` uma segunda vez **parece
+funcionar** — o log responde `=== armados 1 enderecos ===` — e não arma nada.
+Custou uma rodada inteira de duelo até o hit que não veio explicar isso.
+
+Para medir a mesma função duas vezes:
+
+```
+clear
+bp 2a14c0 deref rdx 4
+```
+
+## A varredura de breakpoints, com a lista vinda do Ghidra
+
+O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
+`/home/suel/tools/scripts`, faz o mesmo trabalho lendo a lista de funções do
+próprio Ghidra e imprimindo os **deslocamentos de módulo**, um por linha:
+
+```
+analyzeHeadless ... -postScript Entries.java <saida> 0x140270000 0x1402a0000
+```
+
+O método, confirmado em 12/09 achando o que o botão A numa placa de invocação
+alcança:
+
+1. `head -520 <saida> | sed 's/^/bp /' > <install>/DS2_Trace.req`
+   (acima de ~600 o jogo fica instável, e 3229 já matou o processo)
+2. deixe o jogo parado uns quinze segundos: o que roda por quadro dispara e se
+   desarma sozinho
+3. **apague o `DS2_Trace.log`** — é o que separa o ruído do que você quer
+4. aperte o botão
+5. o que aparecer no log novo é o que a ação alcançou
+
+Na prática o primeiro toque (abrir o diálogo "Summon this dark spirit?") deixou
+duas funções: uma é alocador de pool, o que por si só diz que o toque
+**alocou** alguma coisa. O confirme deixou onze, com as pilhas inteiras.
+
+Vale saber o que o ruído parece: `FUN_140279d50` é inicialização de free-list,
+e `FUN_140276050`/`FUN_140276110` são invólucros de envio de pedido — pegam um
+subsistema, pedem um id ao objeto pelo slot virtual `+0x58` e repassam. Um
+alvo de verdade tem os campos do pedido nas mãos.
+
 ## Reading the binary
 
 `objdump` reads the PE directly and dumps all 27MB in about three seconds:
