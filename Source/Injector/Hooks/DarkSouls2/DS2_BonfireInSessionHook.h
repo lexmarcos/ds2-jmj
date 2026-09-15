@@ -53,7 +53,9 @@ void DS2_BonfireInSession_Tick();
 
 /// From the warp hook, on the game's thread: a travel the owner of the world
 /// asked for while guests are in it. True when it is held: every guest gets a
-/// Yes/No box, and the travel goes ahead when all say yes (the guests then
-/// follow to the host's new bonfire, DS2_DeathIntercept_FollowHost), or is
-/// canceled with a message on a no or after 30 s.
+/// Yes/No box; on a no, or no answer in 30 s, the travel is canceled with a
+/// message. When all say yes they leave the session the legal way (the end a
+/// host's travel causes, which costs no penalty), the host travels with its
+/// world empty, and the party joins them again at the new bonfire. A host
+/// that travelled with a phantom still in its world closed twice (15/09).
 bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag);

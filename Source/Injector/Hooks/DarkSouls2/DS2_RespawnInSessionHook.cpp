@@ -788,6 +788,15 @@ namespace
 #endif
 }
 
+void* DS2_RespawnInSession_PlayingSession()
+{
+#ifdef _WIN32
+    return s_session.load();
+#else
+    return nullptr;
+#endif
+}
+
 bool DS2_RespawnInSessionHook::Install(Injector& injector)
 {
 #ifdef _WIN32

@@ -9,7 +9,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
-#include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 
@@ -101,6 +101,19 @@ namespace
     constexpr int kYesText = 100;
     constexpr int kNoText = 0x65;
     constexpr ULONGLONG kVoteTimeoutMs = 30000;
+    constexpr ULONGLONG kLeaveSettleMs = 1500;
+    constexpr ULONGLONG kLeaveGiveUpMs = 20000;
+    constexpr const wchar_t* kTravelStuck = L"Travel canceled: a player could not leave the session.";
+
+    // The guest's session, NetSummonJoinMultiplayCtrl (vftable 0x1410d7bd8),
+    // playing in state 7 (+0xf8). A nonzero +0x120 makes its state-7 handler
+    // (FUN_1402c3830) end the session with reason 3 on the next frame: the
+    // same end the guest got when a host travelled on 15/09 (from +0x2c385c),
+    // armed 1 -> 0 with the penalty points unchanged.
+    constexpr size_t kJoinCtrlVftable = 0x10d7bd8;
+    constexpr size_t kJoinState = 0xf8;
+    constexpr int32_t kJoinPlaying = 7;
+    constexpr size_t kJoinLeave = 0x120;
 
     // The local character's role: *(*0x1416148f0 + 0xd0) -> +0xb0 -> +0x3c.
     constexpr size_t kGameGlobal = 0x16148f0;
@@ -139,6 +152,9 @@ namespace
         uint32_t Vote = 0;
         size_t Guests = 0;
         ULONGLONG Since = 0;
+        bool Leaving = false;
+        ULONGLONG LeaveSince = 0;
+        ULONGLONG GuestsGone = 0;
     };
     HeldTravel s_travel;
     uint32_t s_vote_counter = 0;
@@ -417,20 +433,41 @@ void DS2_BonfireInSession_Tick()
             ShowMessage(kTravelDeclined);
             Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao); viagem cancelada\n", s_travel.Vote, Yes, No));
         }
+        else if (s_travel.Leaving)
+        {
+            if (Guests != 0)
+            {
+                s_travel.GuestsGone = 0;
+                if (Now - s_travel.LeaveSince > kLeaveGiveUpMs)
+                {
+                    s_travel.Active = false;
+                    ShowMessage(kTravelStuck);
+                    Append(StringFormat("host: votacao %u: %zu convidado(s) ainda na sessao depois de %llu ms; viagem cancelada\n",
+                        s_travel.Vote, Guests, (unsigned long long)(Now - s_travel.LeaveSince)));
+                }
+            }
+            else if (s_travel.GuestsGone == 0)
+            {
+                s_travel.GuestsGone = Now;
+            }
+            else if (Now - s_travel.GuestsGone >= kLeaveSettleMs)
+            {
+                s_travel.Active = false;
+                HeldTravel Travel = s_travel;
+                const uint8_t Accepted = DS2_SeamlessCoop_ReplayWarp(Travel.Context, Travel.Request, sizeof(Travel.Request), Travel.Flag);
+                uint32_t Map = 0;
+                memcpy(&Map, Travel.Request + 0x08, sizeof(Map));
+                Append(StringFormat("host: convidados fora da sessao em %llu ms; viagem para %08x retomada, aceita=%u\n",
+                    (unsigned long long)(Travel.GuestsGone - Travel.LeaveSince), Map, (unsigned)Accepted));
+            }
+        }
         else if (Guests == 0 || Yes >= Guests)
         {
-            s_travel.Active = false;
-            HeldTravel Travel = s_travel;
-            const uint8_t Accepted = DS2_SeamlessCoop_ReplayWarp(Travel.Context, Travel.Request, sizeof(Travel.Request), Travel.Flag);
-            uint32_t Map = 0, Spawn = 0;
-            memcpy(&Map, Travel.Request + 0x08, sizeof(Map));
-            memcpy(&Spawn, Travel.Request + 0x18, sizeof(Spawn));
-            if (Accepted != 0 && Guests != 0)
-            {
-                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelFollow, Map, Spawn);
-            }
-            Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu) em %llu ms; viagem para %08x/%08x aceita=%u\n",
-                Travel.Vote, Yes, Guests, (unsigned long long)(Now - Travel.Since), Map, Spawn, (unsigned)Accepted));
+            s_travel.Leaving = true;
+            s_travel.LeaveSince = Now;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelLeave);
+            Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu) em %llu ms; convidados saem da sessao\n",
+                s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since)));
         }
         else if (Now - s_travel.Since > kVoteTimeoutMs)
         {
@@ -482,10 +519,32 @@ void DS2_BonfireInSession_Tick()
                 Said.Map, Said.Id, s_open_vote.Number));
         }
     }
-    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelFollow, Said))
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelLeave, Said))
     {
-        DS2_DeathIntercept_FollowHost(Said.Map, Said.Id);
-        Append(StringFormat("convidado: o host viajou para %08x/%08x; vou atras quando ele chegar\n", Said.Map, Said.Id));
+        const uintptr_t Session = (uintptr_t)DS2_RespawnInSession_PlayingSession();
+        uintptr_t Vftable = 0;
+        uint8_t State[4] = {};
+        const bool Playing = Session != 0 && ReadPointer(Session, Vftable) && Vftable == s_base + kJoinCtrlVftable &&
+            ReadByte(Session + kJoinState, State[0]) && ReadByte(Session + kJoinState + 1, State[1]) &&
+            ReadByte(Session + kJoinState + 2, State[2]) && ReadByte(Session + kJoinState + 3, State[3]);
+        int32_t StateValue = 0;
+        memcpy(&StateValue, State, sizeof(StateValue));
+        if (Playing && StateValue == kJoinPlaying)
+        {
+            int32_t* Leave = (int32_t*)(Session + kJoinLeave);
+            const int32_t Before = *Leave;
+            if (Before == 0)
+            {
+                *Leave = 1;
+            }
+            Append(StringFormat("convidado: votacao aprovada; saio da sessao para o host viajar (sessao %p, +0x120 %d -> %d)\n",
+                (void*)Session, Before, *Leave));
+        }
+        else
+        {
+            Append(StringFormat("convidado: pedido de saida para a viagem, mas nao ha sessao jogando (sessao %p, vftable %s, estado %d)\n",
+                (void*)Session, Vftable == s_base + kJoinCtrlVftable ? "certa" : "outra", StateValue));
+        }
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said))
     {

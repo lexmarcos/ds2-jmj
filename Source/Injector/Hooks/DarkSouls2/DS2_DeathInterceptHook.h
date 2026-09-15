@@ -11,8 +11,6 @@
 
 #include "Injector/Hooks/Hook.h"
 
-#include <cstdint>
-
 // The door a death of the local player goes through, and a hand on it.
 //
 // Every character, enemies included, owns a `ChrDeadActionCtrl` (vftable
@@ -84,9 +82,3 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
-
-/// A guest follows its host to the bonfire it travelled to (M8): once the host
-/// announces that bonfire, the guest is taken there the way a fall in another
-/// map is recovered - the map loaded if it is not, then the spawn point. Any
-/// thread; the move happens on the game's thread. Given up after 60 s.
-void DS2_DeathIntercept_FollowHost(uint32_t Map, uint32_t Bonfire);

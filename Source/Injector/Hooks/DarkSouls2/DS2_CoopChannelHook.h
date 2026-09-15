@@ -88,7 +88,7 @@ namespace DS2_CoopChannel
         RestStarted = 0,   // the host sat at a bonfire
         WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
         TravelVote = 2,    // the host asks to travel; Id carries the vote number
-        TravelFollow = 3,  // the host travelled; Map/Id are its destination
+        TravelLeave = 3,   // everyone agreed: leave the session so the host can travel
     };
     constexpr uint8_t kHostEventCount = 4;
 

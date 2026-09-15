@@ -48,3 +48,8 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
+
+/// The guest's session (NetSummonJoinMultiplayCtrl) the state-7 handler was
+/// last handed, or null. It may be stale: check its vftable and state before
+/// touching it, on the game's thread.
+void* DS2_RespawnInSession_PlayingSession();
