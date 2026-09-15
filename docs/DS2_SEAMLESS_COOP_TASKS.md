@@ -33,6 +33,7 @@ ao servidor. Ausência de erro não prova nada.
 | Morte de convidado vai para a última fogueira | motivo 4/força 0 → `FUN_14044fde0` | medido com o interruptor ligado e desligado |
 | **M0 — o harness anda sozinho** | `DS2_NavHook` + `ds2os-dev where` / `goto` | 9 m da fogueira até o outro personagem, escada acima, em 17 passos |
 | **M3 — sem efígie**, placa branca | `DS2_HollowSummonHook` (`+0x2a1b1e`), com `--seamless` | Samuel e Chico hollow (estado 1): `Summoning sign` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` (14/09) |
+| **M3 — sem soapstone e sem toque**, primeira metade | `DS2_PartyHook` (convidado: `placa 1`) + `DS2_RematchHook` (host: `alvo <jogador> <tipo>`), com `--seamless --auto-rematch` | nenhuma tecla nos dois: `Sign 1015 created` → `Summoning sign 1015` → `JoinGuestPlayer` → `JoinSession`, `p2pSessionVerified: true`, os dois hollow (14/09) |
 | **M3 — sem Soul Memory**, placa branca | `DisableSoulMemoryMatching` em `DS2_WhiteSoapstoneMatchingParameters` e `DS2_SmallWhiteSoapstoneMatchingParameters` | com tiers que separam 5130 de 2551: `refused by matching 1` desligado, `sent 1` e a invocação com ele ligado (14/09) |
 
 ---
@@ -462,9 +463,28 @@ mapa e o ponto do host.
 
 ## M3 — entrar uma vez, sem ritual — **começado em 14/09**
 
-**Feito:** efígie e Soul Memory não travam mais a entrada por placa branca
-(ver a tabela "Feito" e "Sem efígie" em [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)).
-**Falta:** a entrada sem soapstone, e os resíduos listados abaixo.
+**Feito:** efígie e Soul Memory não travam mais a entrada por placa branca, e
+a entrada já acontece sem soapstone e sem toque quando os dois lados recebem a
+ordem (ver "Sem efígie" e "Entrar sem soapstone" em
+[DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)).
+
+**Falta, para a entrada sem ritual de verdade:**
+
+1. **Quem manda a ordem.** Hoje são dois arquivos de pedido escritos à mão
+   (`DS2_Party.req` no convidado, `DS2_Rematch.req` no host). O jogador não
+   vai escrever arquivo: a ordem tem que nascer da configuração — o convidado
+   põe a placa ao chegar no mundo e a repõe quando ela some; o host aceita as
+   placas do parceiro.
+2. **A senha.** O host hoje aceita por id de jogador do servidor, que o
+   jogador não conhece. Falta o par se reconhecer por uma senha — e o
+   servidor entregar a placa só a quem tem a mesma, para um estranho não a
+   ver.
+3. **Longe um do outro.** Medido só com os dois na mesma fogueira. Placa é
+   por área e célula; em áreas diferentes o host nem recebe a placa (ver
+   `DS2_StickySigns`).
+4. **Uma revanche e uma entrada no mesmo hook.** O `alvo` da revanche foi o
+   atalho para medir; a entrada merece o seu próprio, sem depender de
+   `DS2AutoRematch`.
 
 Medido antes de mexer: **o convidado hollow põe a placa branca** (`Sign created:
 type 1` com estado 1) — a trava estava só no **host**, que hollow recebia a

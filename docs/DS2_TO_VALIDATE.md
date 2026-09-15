@@ -228,6 +228,16 @@ item-use gate in `FUN_1402a1bf0` is untouched), whether the patched filter's
 other refusal (`FUN_1402aabf0() == 8`) ever bites, a host in another area than
 the sign, and the VPS, which still matches by Soul Memory.
 
+### Entering without a soapstone
+
+Measured once, 14/09, with both characters hollow at the same bonfire: the
+guest's sign placed through `DS2_Party.req` (`placa 1`) and the host's rematch
+armed by hand (`alvo 3 1`) formed a session with no button pressed. Not
+measured: other sign types through `placa` (the type goes through the game's
+own mapping, `FUN_14029c9b0`), the two players in different areas or cells, a
+host already in a session, what `placa` does while the player is a phantom, a
+stranger's client seeing the party sign, and the red sign path.
+
 ## Understood incompletely
 
 ### Heide reads 7 and accepts a sign anyway

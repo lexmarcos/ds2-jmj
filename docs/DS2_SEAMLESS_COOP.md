@@ -1930,3 +1930,55 @@ propósito: `2999` à frente da lista da placa branca, 0 tiers abaixo e acima.
 
 A configuração local ficou com os tiers padrão e `DisableSoulMemoryMatching`
 ligado na White e na Small White Sign Soapstone; a vermelha continua com tiers.
+
+## Entrar sem soapstone (M3, 14/09)
+
+### Onde o jogo põe a placa
+
+Um breakpoint em `NetSvrSummonSignInterface::CreateSummonSign`
+(`FUN_14029dfa0`, único chamador do construtor do `NetSvrCreateSummonSignJob`,
+`FUN_14029d6c0`) só disparou no uso real da White Sign Soapstone, com o
+chamador `+0x2a2b98`, a área em `rdx` e a Soul Memory e o nível do Chico no
+`MatchingParameter`. Subindo:
+
+| função | o que é |
+| --- | --- |
+| `FUN_1402a2780(manager, &tipo)` | pôr a minha placa: checa, monta célula e matching, chama o `CreateSummonSign`; guarda a placa em `manager+0x18` (posta), `+0x24` (alça), `+0x40` (tipo); uma segunda chamada troca a placa |
+| `FUN_1402a1410(manager, tipo)` | método do `NetSvrSummonSignManager`: converte o tipo pelo estado do jogador (`FUN_14029c9b0`) e chama a de cima |
+| `FUN_14029fff0(manager, tipo)` | o vizinho "dá para pôr agora?", só a checagem (`FUN_1402a1bf0`); o código de item chama a cada quadro — **só** em quem tem a soapstone em avaliação, nunca rodou no Samuel |
+| `FUN_140291cb0`, `FUN_14024fb80` | consultas de uso de item por tipo, não criação — foi o primeiro engano desta rodada |
+
+O gerenciador sai do getter do jogo, `FUN_1405132a0`: `*(*0x141616cf8 + 0x30)`
+é o `NetSvrManager` (vftable `0x1410d53a8`), e o campo `+0x78` dele é o
+`NetSvrSummonSignManager` (vftable `0x1410d61f8`), igual nas duas instâncias.
+Os invólucros do `NetSvrManager` que carregam esse `+0x78` são os slots 14
+(pôr) e 17 (invocar).
+
+Cuidado com o `chain` do MemProbe: o primeiro desreferenciamento é implícito.
+`chain x 1616cf8 30,78 8` é `*(*(*(base+0x1616cf8)+0x30)+0x78)`; com um `0` à
+frente ele desreferencia uma vez a mais e responde `chain_unresolved`.
+
+### O hook
+
+`DS2_PartyHook` (com `--seamless`) faz um detour do update do
+`SummonSignSetCtrl` (`+0x2139d0`), que roda a cada quadro no host e no
+convidado, e executa ali, na thread do jogo, o que chegou em `DS2_Party.req`:
+`placa <tipo>` chama `FUN_1402a1410`; `status` diz o que o gerenciador guarda.
+A revanche, armada à mão com `alvo` antes de qualquer summon, usa o mesmo
+gerenciador resolvido.
+
+### O resultado
+
+Os dois hollow na fogueira de Heide, build `b30cadef`, `up --seamless
+--keep-fog --auto-rematch`, **nenhuma tecla** em nenhuma das duas instâncias:
+
+    23:31:51  Chico   DS2_Party   placa tipo 1: "placa posta, alca 60000001"
+    23:31:51  3:Chico             Sign 1015 created: type 1
+    23:32:33  Samuel  DS2_Rematch "revanche: invocando a placa 80000021 do jogador 3"
+    23:32:33  1:Samuel            Summoning sign 1015
+    23:32:44  1:Samuel            RequestNotifyJoinGuestPlayer
+    23:32:46  3:Chico             RequestNotifyJoinSession
+              session             p2pSessionVerified: true
+
+Quase um minuto da ordem à sessão, dos quais a maior parte é o intervalo do
+poll de placas do host. A sessão terminou com `session end`.
