@@ -9,6 +9,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 
@@ -79,18 +80,27 @@ namespace
     constexpr int kTitleCategory = 0;
     constexpr int kTitleId = 0xcc;
     constexpr const wchar_t* kRestNotice = L"A player is resting at a bonfire.";
-    constexpr const wchar_t* kTravelNotice = L"The host is travelling. You will join again at the destination.";
-    constexpr const wchar_t* kTravelCanceled = L"Travel canceled: other players are still in your world.";
+    constexpr const wchar_t* kTravelQuestion = L"The host wants to travel to another bonfire. Travel together?";
+    constexpr const wchar_t* kTravelDeclined = L"Travel canceled: a player declined.";
+    constexpr const wchar_t* kTravelNoAnswer = L"Travel canceled: not every player answered.";
 
-    // The guest's in-session update (NetSummonJoinMultiplayCtrl, state 7):
-    // a nonzero +0x120 makes it end the session with reason 3 on its next
-    // frame, the same end a host that travelled caused on 15/09, which cost the
-    // guest no penalty (armed 1 -> 0, points 40 -> 40).
-    constexpr size_t kGuestUpdateOffset = 0x2c3830;
-    constexpr uint8_t kGuestUpdatePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0x83, 0xb9, 0x20, 0x01, 0x00, 0x00, 0x00 };
-    constexpr size_t kGuestLeaveFlag = 0x120;
-    constexpr ULONGLONG kTravelSettleMs = 1500;
-    constexpr ULONGLONG kTravelGiveUpMs = 20000;
+    // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
+    // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
+    // (+0x324); FUN_140500440(frontend, n) says it closed, FUN_1404ff940
+    // (frontend, n) which button (2 and 5 are the second, "No"), and
+    // FUN_1404ff2e0 / FUN_1404fe960 (frontend, 0) put it away.
+    constexpr size_t kChoiceOffset = 0x4fe1c0;
+    constexpr uint8_t kChoicePrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00, 0x0f, 0xb6, 0x84, 0x24, 0x08, 0x01 };
+    constexpr size_t kClosedOffset = 0x500440;
+    constexpr size_t kButtonOffset = 0x4ff940;
+    constexpr uint8_t kByNumberPrologue[] = { 0x48, 0x8b, 0x81, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x14, 0x85, 0xd2, 0x7e, 0x08 };
+    constexpr size_t kCloseOffset = 0x4ff2e0;
+    constexpr size_t kReleaseOffset = 0x4fe960;
+    constexpr uint8_t kCloseByNumberPrologue[] = { 0x48, 0x8b, 0xc1, 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x11, 0x85, 0xd2 };
+    constexpr size_t kDialogNumber = 0x324;
+    constexpr int kYesText = 100;
+    constexpr int kNoText = 0x65;
+    constexpr ULONGLONG kVoteTimeoutMs = 30000;
 
     // The local character's role: *(*0x1416148f0 + 0xd0) -> +0xb0 -> +0x3c.
     constexpr size_t kGameGlobal = 0x16148f0;
@@ -109,19 +119,38 @@ namespace
     using Text_p = const wchar_t*(*)(int Category, int Id);
     Text_p s_text = nullptr;
     bool s_replaying = false;   // game thread only
-    using GuestUpdate_p = void(*)(void* Ctrl, float Delta);
-    GuestUpdate_p s_original_guest_update = nullptr;
-    std::atomic<bool> s_leave_requested{ false };
+    using Choice_p = int32_t(*)(void* FrontEnd, const wchar_t* Text, const wchar_t* Yes, const wchar_t* No, uint8_t A, uint8_t B, uint8_t C, uint8_t D);
+    using ByNumber_p = uint64_t(*)(void* FrontEnd, int32_t Number);
+    using CloseByNumber_p = void(*)(void* FrontEnd, int32_t Number);
+    Choice_p s_choice = nullptr;
+    ByNumber_p s_closed = nullptr;
+    ByNumber_p s_button = nullptr;
+    CloseByNumber_p s_close = nullptr;
+    CloseByNumber_p s_release = nullptr;
+    bool s_votes_ready = false;
+
+    // Host side, game thread only.
     struct HeldTravel
     {
         bool Active = false;
         void* Context = nullptr;
         uint8_t Request[0x38] = {};
         uint8_t Flag = 0;
+        uint32_t Vote = 0;
+        size_t Guests = 0;
         ULONGLONG Since = 0;
-        ULONGLONG GuestsGone = 0;
     };
-    HeldTravel s_travel;   // game thread only
+    HeldTravel s_travel;
+    uint32_t s_vote_counter = 0;
+
+    // Guest side, game thread only.
+    struct OpenVote
+    {
+        bool Active = false;
+        uint32_t Vote = 0;
+        int32_t Number = 0;
+    };
+    OpenVote s_open_vote;
     std::atomic<bool> s_events_ready{ false };
     std::filesystem::path s_log_path;
     std::mutex s_log_mutex;
@@ -198,28 +227,22 @@ namespace
         }
     }
 
-    void GuestUpdateHook(void* Ctrl, float Delta)
-    {
-        if (s_leave_requested.exchange(false) && Ctrl != nullptr)
-        {
-            int32_t* Flag = (int32_t*)((uint8_t*)Ctrl + kGuestLeaveFlag);
-            const int32_t Before = *Flag;
-            if (Before == 0)
-            {
-                *Flag = 1;
-            }
-            Append(StringFormat("convidado: saindo da sessao para o host viajar (+0x120 %d -> %d)\n", Before, *Flag));
-        }
-        s_original_guest_update(Ctrl, Delta);
-    }
-
-    void ShowMessage(const wchar_t* Text)
+    void* FrontEndOrNull()
     {
         uintptr_t Context = 0, FrontEnd = 0;
         if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
             ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0)
         {
-            s_dialog((void*)FrontEnd, Text, s_text(kTitleCategory, kTitleId), 1, 1);
+            return (void*)FrontEnd;
+        }
+        return nullptr;
+    }
+
+    void ShowMessage(const wchar_t* Text)
+    {
+        if (void* FrontEnd = FrontEndOrNull())
+        {
+            s_dialog(FrontEnd, Text, s_text(kTitleCategory, kTitleId), 1, 1);
         }
     }
 
@@ -299,10 +322,18 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
     if (Matches(Base + kRestStartOffset, kRestStartPrologue, sizeof(kRestStartPrologue)) &&
         Matches(Base + kWorldResetOffset, kWorldResetPrologue, sizeof(kWorldResetPrologue)) &&
         Matches(Base + kDialogOffset, kDialogPrologue, sizeof(kDialogPrologue)) &&
-        Matches(Base + kTextOffset, kTextPrologue, sizeof(kTextPrologue)) &&
-        Matches(Base + kGuestUpdateOffset, kGuestUpdatePrologue, sizeof(kGuestUpdatePrologue)))
+        Matches(Base + kTextOffset, kTextPrologue, sizeof(kTextPrologue)))
     {
-        s_original_guest_update = (GuestUpdate_p)(Base + kGuestUpdateOffset);
+        s_votes_ready = Matches(Base + kChoiceOffset, kChoicePrologue, sizeof(kChoicePrologue)) &&
+            Matches(Base + kClosedOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
+            Matches(Base + kButtonOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
+            Matches(Base + kCloseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
+            Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue));
+        s_choice = (Choice_p)(Base + kChoiceOffset);
+        s_closed = (ByNumber_p)(Base + kClosedOffset);
+        s_button = (ByNumber_p)(Base + kButtonOffset);
+        s_close = (CloseByNumber_p)(Base + kCloseOffset);
+        s_release = (CloseByNumber_p)(Base + kReleaseOffset);
         s_original_rest = (RestStart_p)(Base + kRestStartOffset);
         s_original_reset = (WorldReset_p)(Base + kWorldResetOffset);
         s_dialog = (Dialog_p)(Base + kDialogOffset);
@@ -311,17 +342,16 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         DetourUpdateThread(GetCurrentThread());
         DetourAttach(&(PVOID&)s_original_rest, RestStartHook);
         DetourAttach(&(PVOID&)s_original_reset, WorldResetHook);
-        DetourAttach(&(PVOID&)s_original_guest_update, GuestUpdateHook);
         if (DetourTransactionCommit() == NO_ERROR)
         {
             s_events_ready.store(true);
-            Append("=== ds2os fogueira em sessao: descanso, reinicio do mundo e aviso ===\n");
+            Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso e votacao de viagem (%s) ===\n",
+                s_votes_ready ? "votacao pronta" : "sem votacao: a caixa sim/nao nao e a esperada"));
         }
         else
         {
             s_original_rest = nullptr;
             s_original_reset = nullptr;
-            s_original_guest_update = nullptr;
             Error("[DS2BonfireInSession] nao consegui instalar o aviso e o reinicio do convidado");
         }
     }
@@ -337,13 +367,13 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
 bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag)
 {
 #if defined(_WIN32) && defined(_M_X64)
-    if (!s_events_ready.load() || s_original_guest_update == nullptr || Size != sizeof(s_travel.Request) || !OwnsTheWorld())
+    if (!s_events_ready.load() || !s_votes_ready || Size != sizeof(s_travel.Request) || !OwnsTheWorld())
     {
         return false;
     }
     if (s_travel.Active)
     {
-        return true;
+        return true;   // a second press while the vote runs
     }
     const size_t Guests = DS2_CoopChannel::GuestCount();
     if (Guests == 0)
@@ -355,9 +385,13 @@ bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size
     s_travel.Context = Context;
     memcpy(s_travel.Request, Request, sizeof(s_travel.Request));
     s_travel.Flag = Flag;
+    s_travel.Vote = ++s_vote_counter;
+    s_travel.Guests = Guests;
     s_travel.Since = GetTickCount64();
-    DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelLeave);
-    Append(StringFormat("host: viagem segurada com %zu convidado(s); pedido para sairem\n", Guests));
+    uint32_t Map = 0;
+    memcpy(&Map, Request + 0x08, sizeof(Map));
+    DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Map, s_travel.Vote);
+    Append(StringFormat("host: viagem para o mapa %08x segurada; votacao %u com %zu convidado(s)\n", Map, s_travel.Vote, Guests));
     return true;
 #else
     return false;
@@ -374,41 +408,84 @@ void DS2_BonfireInSession_Tick()
     const ULONGLONG Now = GetTickCount64();
     if (s_travel.Active)
     {
+        size_t Yes = 0, No = 0;
+        DS2_CoopChannel::GuestAnswers(s_travel.Vote, Yes, No);
         const size_t Guests = DS2_CoopChannel::GuestCount();
-        if (Guests != 0)
+        if (No > 0)
         {
-            s_travel.GuestsGone = 0;
-            if (Now - s_travel.Since > kTravelGiveUpMs)
-            {
-                s_travel.Active = false;
-                ShowMessage(kTravelCanceled);
-                Append(StringFormat("host: viagem cancelada; %zu convidado(s) ainda na sessao depois de %llu ms\n",
-                    Guests, (unsigned long long)(Now - s_travel.Since)));
-            }
+            s_travel.Active = false;
+            ShowMessage(kTravelDeclined);
+            Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao); viagem cancelada\n", s_travel.Vote, Yes, No));
         }
-        else if (s_travel.GuestsGone == 0)
-        {
-            s_travel.GuestsGone = Now;
-        }
-        else if (Now - s_travel.GuestsGone >= kTravelSettleMs)
+        else if (Guests == 0 || Yes >= Guests)
         {
             s_travel.Active = false;
             HeldTravel Travel = s_travel;
             const uint8_t Accepted = DS2_SeamlessCoop_ReplayWarp(Travel.Context, Travel.Request, sizeof(Travel.Request), Travel.Flag);
-            Append(StringFormat("host: convidados fora ha %llu ms; viagem retomada, aceita=%u\n",
-                (unsigned long long)(Now - Travel.GuestsGone), (unsigned)Accepted));
+            uint32_t Map = 0, Spawn = 0;
+            memcpy(&Map, Travel.Request + 0x08, sizeof(Map));
+            memcpy(&Spawn, Travel.Request + 0x18, sizeof(Spawn));
+            if (Accepted != 0 && Guests != 0)
+            {
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelFollow, Map, Spawn);
+            }
+            Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu) em %llu ms; viagem para %08x/%08x aceita=%u\n",
+                Travel.Vote, Yes, Guests, (unsigned long long)(Now - Travel.Since), Map, Spawn, (unsigned)Accepted));
+        }
+        else if (Now - s_travel.Since > kVoteTimeoutMs)
+        {
+            s_travel.Active = false;
+            ShowMessage(kTravelNoAnswer);
+            Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu); viagem cancelada\n", s_travel.Vote, Yes, Guests));
         }
     }
+
+    if (s_open_vote.Active)
+    {
+        void* FrontEnd = FrontEndOrNull();
+        const bool Ours = FrontEnd != nullptr && *(const int32_t*)((const uint8_t*)FrontEnd + kDialogNumber) == s_open_vote.Number;
+        if (!Ours || (uint8_t)s_closed(FrontEnd, s_open_vote.Number) != 0)
+        {
+            const uint64_t Button = Ours ? s_button(FrontEnd, s_open_vote.Number) : 2;
+            const bool Yes = Ours && (uint32_t)Button != 2 && (uint32_t)Button != 5;
+            if (Ours)
+            {
+                s_close(FrontEnd, 0);
+                s_release(FrontEnd, 0);
+            }
+            s_open_vote.Active = false;
+            DS2_CoopChannel::SendGuestAnswer(s_open_vote.Vote, Yes);
+            Append(StringFormat("convidado: votacao %u respondida %s (botao %llu%s)\n", s_open_vote.Vote, Yes ? "sim" : "nao",
+                (unsigned long long)Button, Ours ? "" : ", a caixa foi trocada"));
+        }
+    }
+
     if (OwnsTheWorld())
     {
         return;
     }
     DS2_CoopChannel::Bonfire Said;
-    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelLeave, Said))
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Said) && s_votes_ready)
     {
-        s_leave_requested.store(true);
-        ShowMessage(kTravelNotice);
-        Append(StringFormat("convidado: o host vai viajar (pedido ha %llu ms); saio da sessao\n", (unsigned long long)Said.AgeMs));
+        void* FrontEnd = FrontEndOrNull();
+        if (FrontEnd == nullptr)
+        {
+            DS2_CoopChannel::SendGuestAnswer(Said.Id, false);
+            Append(StringFormat("convidado: votacao %u sem frontend; respondo nao\n", Said.Id));
+        }
+        else
+        {
+            s_open_vote.Active = true;
+            s_open_vote.Vote = Said.Id;
+            s_open_vote.Number = s_choice(FrontEnd, kTravelQuestion, s_text(0, kYesText), s_text(0, kNoText), 1, 1, 1, 1);
+            Append(StringFormat("convidado: o host quer viajar para o mapa %08x; votacao %u aberta (caixa %d)\n",
+                Said.Map, Said.Id, s_open_vote.Number));
+        }
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelFollow, Said))
+    {
+        DS2_DeathIntercept_FollowHost(Said.Map, Said.Id);
+        Append(StringFormat("convidado: o host viajou para %08x/%08x; vou atras quando ele chegar\n", Said.Map, Said.Id));
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said))
     {
@@ -436,11 +513,9 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
         DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
-        DetourDetach(&(PVOID&)s_original_guest_update, GuestUpdateHook);
         DetourTransactionCommit();
         s_original_rest = nullptr;
         s_original_reset = nullptr;
-        s_original_guest_update = nullptr;
     }
     if (s_job_patched)
     {

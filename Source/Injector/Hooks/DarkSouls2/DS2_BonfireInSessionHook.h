@@ -52,7 +52,8 @@ public:
 void DS2_BonfireInSession_Tick();
 
 /// From the warp hook, on the game's thread: a travel the owner of the world
-/// asked for while guests are in it. True when it is held - the guests are
-/// told to leave, and the travel is sent again once they are gone, or dropped
-/// after 20 s with a message.
+/// asked for while guests are in it. True when it is held: every guest gets a
+/// Yes/No box, and the travel goes ahead when all say yes (the guests then
+/// follow to the host's new bonfire, DS2_DeathIntercept_FollowHost), or is
+/// canceled with a message on a no or after 30 s.
 bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag);

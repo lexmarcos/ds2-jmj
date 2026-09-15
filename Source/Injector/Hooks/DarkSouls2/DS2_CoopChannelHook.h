@@ -87,13 +87,20 @@ namespace DS2_CoopChannel
     {
         RestStarted = 0,   // the host sat at a bonfire
         WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
-        TravelLeave = 2,   // the host is about to travel: leave the session now
+        TravelVote = 2,    // the host asks to travel; Id carries the vote number
+        TravelFollow = 3,  // the host travelled; Map/Id are its destination
     };
-    constexpr uint8_t kHostEventCount = 3;
+    constexpr uint8_t kHostEventCount = 4;
 
     // Other members of a session this machine hosts, seen in the last few
     // seconds. 0 when it hosts nothing.
     size_t GuestCount();
-    void SendHostEvent(HostEvent Event);
+    // With Map/Id nonzero they replace the host's record in the event.
+    void SendHostEvent(HostEvent Event, uint32_t Map = 0, uint32_t Id = 0);
     bool TakeHostEvent(HostEvent Event, Bonfire& Out);
+
+    // A guest's answer to the host's vote, sent to the host of its session by
+    // the next poll. The host counts the answers it received for one vote.
+    void SendGuestAnswer(uint32_t Vote, bool Yes);
+    void GuestAnswers(uint32_t Vote, size_t& Yes, size_t& No);
 }

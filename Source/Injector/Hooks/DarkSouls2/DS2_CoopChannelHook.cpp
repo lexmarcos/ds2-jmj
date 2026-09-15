@@ -71,6 +71,8 @@ namespace
     // sent once, reliably, to every other member.
     constexpr uint8_t kKindFirstEvent = 2;
     constexpr uint8_t kKindLastEvent = 2 + DS2_CoopChannel::kHostEventCount - 1;
+    // A guest's answer to a vote: Id the vote, Type 1 yes and 0 no.
+    constexpr uint8_t kKindAnswer = 0x20;
     constexpr uint8_t kWorldOwner = 0;                 // *(chr+0xb0)+0x3c
 
     constexpr ULONGLONG kAnnounceEveryMs = 2000;
@@ -157,6 +159,22 @@ namespace
     // guest summoned later must not get a rest that happened before it came.
     std::atomic<uint32_t> s_events_pending{ 0 };
     std::atomic<ULONGLONG> s_events_tick{ 0 };
+    std::atomic<uint32_t> s_event_map[DS2_CoopChannel::kHostEventCount] = {};
+    std::atomic<uint32_t> s_event_id[DS2_CoopChannel::kHostEventCount] = {};
+
+    // Votes: a guest's answer waiting to be sent, and the answers a host got.
+    std::atomic<bool> s_answer_pending{ false };
+    std::atomic<uint32_t> s_answer_vote{ 0 };
+    std::atomic<bool> s_answer_yes{ false };
+    struct Answer
+    {
+        uint32_t Vote = 0;
+        uint64_t From = 0;
+        bool Yes = false;
+    };
+    constexpr size_t kMaxAnswers = 16;
+    Answer s_answers[kMaxAnswers];   // under s_net_mutex
+    size_t s_answer_next = 0;
     constexpr ULONGLONG kEventFreshMs = 5000;
     struct HeardEvent
     {
@@ -377,9 +395,59 @@ namespace
         }
         memcpy(&Said, Data, sizeof(Said));
         const bool Event = Said.Kind >= kKindFirstEvent && Said.Kind <= kKindLastEvent;
-        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion || (Said.Kind != kKindBonfire && !Event))
+        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion ||
+            (Said.Kind != kKindBonfire && Said.Kind != kKindAnswer && !Event))
         {
             Refuse("nao e um anuncio desta versao", From, Size);
+            return;
+        }
+        if (Said.Kind == kKindAnswer)
+        {
+            // From a member of a session this machine hosts.
+            bool Member = false;
+            {
+                std::scoped_lock Lock(s_net_mutex);
+                const uint64_t Self = s_self.load();
+                const ULONGLONG Now = GetTickCount64();
+                for (const Members& Session : s_sessions)
+                {
+                    if (Session.Session == 0 || Now - Session.Tick > kMembersFreshMs)
+                    {
+                        continue;
+                    }
+                    bool SelfIsHost = false, Has = false;
+                    for (size_t i = 0; i < Session.Count; ++i)
+                    {
+                        SelfIsHost = SelfIsHost || (Session.Ids[i] == Self && Session.Host[i]);
+                        Has = Has || Session.Ids[i] == From;
+                    }
+                    Member = Member || (SelfIsHost && Has);
+                }
+                if (Member)
+                {
+                    bool Replaced = false;
+                    for (Answer& Entry : s_answers)
+                    {
+                        if (Entry.Vote == Said.Id && Entry.From == From)
+                        {
+                            Entry.Yes = Said.Type != 0;
+                            Replaced = true;
+                        }
+                    }
+                    if (!Replaced)
+                    {
+                        s_answers[s_answer_next] = { Said.Id, From, Said.Type != 0 };
+                        s_answer_next = (s_answer_next + 1) % kMaxAnswers;
+                    }
+                }
+            }
+            if (!Member)
+            {
+                Refuse("resposta de quem nao e convidado desta sessao", From, Size);
+                return;
+            }
+            Append(StringFormat("%s  resposta de %016llx a votacao %u: %s\n", Clock().c_str(),
+                (unsigned long long)From, Said.Id, Said.Type != 0 ? "sim" : "nao"));
             return;
         }
         if (Said.Role != kWorldOwner)
@@ -516,9 +584,11 @@ namespace
             Event.Version = kVersion;
             Event.Kind = (uint8_t)(kKindFirstEvent + Index);
             Event.Role = Mine.Role;
-            Event.Map = Mine.Map;
+            const uint32_t MapOverride = s_event_map[Index].load();
+            const uint32_t IdOverride = s_event_id[Index].load();
+            Event.Map = MapOverride != 0 ? MapOverride : Mine.Map;
             Event.Type = Mine.Type;
-            Event.Id = Mine.Id;
+            Event.Id = (MapOverride != 0 || IdOverride != 0) ? IdOverride : Mine.Id;
             {
                 std::scoped_lock Lock(s_announce_mutex);
                 Event.Sequence = ++s_sequence;
@@ -642,6 +712,34 @@ namespace
 
         Receive(Net);
         Announce(Net, Now, Self);
+
+        // A guest's answer goes to the host of this session.
+        if (s_answer_pending.load())
+        {
+            uint64_t Host = 0;
+            for (size_t i = 0; i < Now.Count; ++i)
+            {
+                if (Now.Host[i] && Now.Ids[i] != Self)
+                {
+                    Host = Now.Ids[i];
+                }
+            }
+            if (Host != 0 && s_answer_pending.exchange(false))
+            {
+                Announcement Reply = {};
+                memcpy(Reply.Magic, kMagic, sizeof(kMagic));
+                Reply.Version = kVersion;
+                Reply.Kind = kKindAnswer;
+                Reply.Role = 1;
+                Reply.Id = s_answer_vote.load();
+                Reply.Type = s_answer_yes.load() ? 1 : 0;
+                const auto SendTo = (Send_p)VirtualAt(Net, kSendSlot);
+                const bool Sent = SendTo(Net, Host, &Reply, sizeof(Reply), kReliable, kChannel);
+                Sent ? ++s_sent : ++s_send_failed;
+                Append(StringFormat("%s  resposta a votacao %u enviada ao host %016llx: %s%s\n", Clock().c_str(), Reply.Id,
+                    (unsigned long long)Host, Reply.Type != 0 ? "sim" : "nao", Sent ? "" : " (falhou)"));
+            }
+        }
     }
 
     void PollHook(void* Session)
@@ -788,9 +886,36 @@ size_t DS2_CoopChannel::GuestCount()
 #endif
 }
 
-void DS2_CoopChannel::SendHostEvent(HostEvent Event)
+void DS2_CoopChannel::SendGuestAnswer(uint32_t Vote, bool Yes)
 {
 #ifdef _WIN32
+    s_answer_vote.store(Vote);
+    s_answer_yes.store(Yes);
+    s_answer_pending.store(true);
+#endif
+}
+
+void DS2_CoopChannel::GuestAnswers(uint32_t Vote, size_t& Yes, size_t& No)
+{
+    Yes = 0;
+    No = 0;
+#ifdef _WIN32
+    std::scoped_lock Lock(s_net_mutex);
+    for (const Answer& Entry : s_answers)
+    {
+        if (Entry.From != 0 && Entry.Vote == Vote)
+        {
+            Entry.Yes ? ++Yes : ++No;
+        }
+    }
+#endif
+}
+
+void DS2_CoopChannel::SendHostEvent(HostEvent Event, uint32_t Map, uint32_t Id)
+{
+#ifdef _WIN32
+    s_event_map[(size_t)Event].store(Map);
+    s_event_id[(size_t)Event].store(Id);
     const ULONGLONG Now = GetTickCount64();
     if (Now - s_events_tick.load() > kEventFreshMs)
     {

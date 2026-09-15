@@ -495,6 +495,13 @@ namespace
     uint32_t s_owner_map = 0;
     uint32_t s_arrival_frames = 0;
     uint8_t s_last_local_role = 0xff;
+
+    // A host's travel to follow (DS2_DeathIntercept_FollowHost).
+    std::atomic<bool> s_follow{ false };
+    std::atomic<uint32_t> s_follow_map{ 0 };
+    std::atomic<uint32_t> s_follow_bonfire{ 0 };
+    std::atomic<ULONGLONG> s_follow_since{ 0 };
+    constexpr ULONGLONG kFollowGiveUpMs = 60000;
     constexpr uint32_t kArrivalGiveUpFrames = 30 * 60;
     constexpr uint32_t kArrivalSettleFrames = 30;
 
@@ -1895,6 +1902,27 @@ namespace
                         Clock().c_str(), Map, kArrivalGiveUpFrames));
                 }
             }
+
+            // The host travelled: go where it went, once it says it is there.
+            if (s_follow.load() && !s_recovery.Active && Data != nullptr)
+            {
+                const ULONGLONG Now = GetTickCount64();
+                DS2_CoopChannel::Bonfire Said;
+                if (RoleNow == kWorldOwnerRole || Now - s_follow_since.load() > kFollowGiveUpMs)
+                {
+                    s_follow.store(false);
+                    Append(StringFormat("%s  viagem do host: desisto (papel %u, %llu ms)\n", Clock().c_str(), RoleNow,
+                        (unsigned long long)(Now - s_follow_since.load())));
+                }
+                else if (DS2_CoopChannel::HostBonfire(Said) && Said.Map == s_follow_map.load() && Said.Id == s_follow_bonfire.load() &&
+                    Said.AgeMs < 3000)
+                {
+                    s_follow.store(false);
+                    Append(StringFormat("%s  viagem do host: o host esta na fogueira %08x do mapa %08x; vou para la\n",
+                        Clock().c_str(), Said.Id, Said.Map));
+                    StartRecovery(Chr, "viagem do host");
+                }
+            }
         }
 
         if (s_recovery.Active && Data != nullptr)
@@ -2170,6 +2198,16 @@ namespace
         }
     }
 
+#endif
+}
+
+void DS2_DeathIntercept_FollowHost(uint32_t Map, uint32_t Bonfire)
+{
+#ifdef _WIN32
+    s_follow_map.store(Map);
+    s_follow_bonfire.store(Bonfire);
+    s_follow_since.store(GetTickCount64());
+    s_follow.store(true);
 #endif
 }
 
