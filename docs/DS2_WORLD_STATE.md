@@ -82,7 +82,7 @@ cópias, zeradas separadamente por `FUN_140185320(buf, 0|1)`:
 
 `FUN_1404744b0`, ao esvaziar o gerenciador numa troca de mapa, grava em
 `mgr + 0x118` se o cliente é convidado em sessão, e `FUN_1404746b0` usa esse
-byte para escolher a cópia (`FUN_140186480`).
+byte para dizer em qual cópia o mapa que sai é descartado (`FUN_140186480`).
 
 - **Exporta** (host): `FUN_140185ac0` copia a cópia 0 para um blob, via
   `FUN_140474570`, chamado de `FUN_1402b6880` e `FUN_1402bf8f0`.
@@ -90,6 +90,11 @@ byte para escolher a cópia (`FUN_140186480`).
   `FUN_140184f70` avisa os ouvintes, via `FUN_140474590`, chamado de
   `FUN_1402b9ad0` e `FUN_1402c2fa0` — métodos virtuais vizinhos do construtor
   do warp de entrada (`FUN_1402c2a80`).
+
+Medido numa entrada (15/09, 08:45, traço em `474570` e `474590`): o host passou
+por `FUN_140474570` vindo de `+0x2bfbfc` (`FUN_1402bf8f0`) e o convidado por
+`FUN_140474590` vindo de `+0x2c3080` (`FUN_1402c2fa0`), os dois com
+`r8 = 0a1f0000`, o mapa de Heide. Um hit de cada, e nenhum `0x20`.
 
 `FUN_1402c2fa0`, quando `+0xf8 == 4`, importa do mesmo blob mais coisas do que
 flags: `+0x3108` as flags, `+0x3b18` para `*(*0x1416148f0+0x70)+0x28` (o
