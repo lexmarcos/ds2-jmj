@@ -500,7 +500,9 @@ namespace
             memcpy(&Handle, Bytes, 4);
             memcpy(&Live, Bytes + 0x14, 4);
             memcpy(&PlayerId, Bytes + 0x24, 4);
-            if (Live < 0)
+            // Summon signs carry the 0x80000000 tag; the same collection also
+            // holds 0xc0000000 entries that are something else.
+            if (Live < 0 && ((uint32_t)Handle & 0xc0000000u) == 0x80000000u)
             {
                 ConsiderSign(Self, (uint32_t)Handle, Bytes[0x28], PlayerId, " (revisao ao retomar)");
             }

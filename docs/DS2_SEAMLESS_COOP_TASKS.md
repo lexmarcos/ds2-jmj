@@ -481,9 +481,12 @@ ordem (ver "Sem efígie" e "Entrar sem soapstone" em
    senha que não é convidado invoca as placas brancas que chegam. Medidos a
    entrada só pela senha, senhas diferentes, host público contra placa com
    senha e host com senha contra placa pública.
-3. **Longe um do outro.** Medido só com os dois na mesma fogueira. Placa é
-   por área e célula; em áreas diferentes o host nem recebe a placa (ver
-   `DS2_StickySigns`).
+3. ~~**Longe um do outro.**~~ **Feito 15/09**, com uma dependência: o servidor
+   oferece ao poll com senha as placas do mesmo código de qualquer área, com a
+   posição reescrita para onde o host está; o host invoca; o convidado entra
+   num ponto errado do mapa do host (a própria placa convertida), cai, e o
+   modo `respawn` do M2 o leva à fogueira do host dentro da sessão. Medido
+   duas vezes de Majula (viagem de fogueira) para Heide.
 4. ~~**Uma revanche e uma entrada no mesmo hook.**~~ **Feito 15/09**: a
    entrada é toda do `DS2_PartyHook` (detour próprio do `AddSign`), medida com
    `DS2AutoRematch` desligado.

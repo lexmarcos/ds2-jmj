@@ -228,6 +228,16 @@ item-use gate in `FUN_1402a1bf0` is untouched), whether the patched filter's
 other refusal (`FUN_1402aabf0() == 8`) ever bites, a host in another area than
 the sign, and the VPS, which still matches by Soul Memory.
 
+### Entering from another area
+
+Measured twice, Majula to Heide, 15/09: the guest's join lands on its own sign
+converted into the host's map, which there was empty space, and the death hook
+in `respawn` mode caught the fall and took it to the host's bonfire. A pair of
+maps where that point is inside geometry, or over ground far from the host,
+would leave the guest there — not falling, so not rescued. The fix that does
+not depend on falling is to rewrite the join destination; it needs the host's
+position on the guest before the warp, which nothing delivers yet.
+
 ### Entering without a soapstone
 
 Measured once, 14/09, with both characters hollow at the same bonfire: the

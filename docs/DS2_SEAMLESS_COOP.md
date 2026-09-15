@@ -2059,3 +2059,43 @@ e o código é igual. O log do poll diz o anel de quem pediu.
 
 Detalhe do último: com a própria placa no chão o cliente não pede placas
 alheias, então para ver o poll do Chico ele teve de ser host, não convidado.
+
+### Longe um do outro (15/09)
+
+**O que impedia.** Uma placa é arquivada por área e célula, e o poll pede as
+células em volta de quem pede. Com o convidado em Majula e o host em Heide, a
+placa nunca chegava.
+
+**O servidor.** No poll com código de party, depois da passada normal (e antes
+do envio da resposta — a primeira versão ficou depois do `Send`, registrava a
+oferta e nunca a mandava), uma passada pelo cache inteiro oferece as placas de
+party do mesmo código, reportadas sob a área e a primeira célula que o host
+pediu. O cliente decodifica a posição do `player_struct` da placa
+(`FUN_14029cce0`: versão 6, 0x50 bytes, `int16` com 5 bits de fração em
+`+4/+6/+8`), então para uma placa de outra área essa posição é reescrita, só
+nessa resposta, para a última posição do host. O summon a encontra pelo id.
+
+**O que o convidado faz.** O destino do warp de entrada (`FUN_1402c2a80`,
+`motivo=4 forca=1`) sai da placa do próprio convidado, convertida para o mapa
+do host; o `player_struct` do host no summon (71 bytes, versão 4) traz área,
+célula e nome, não posição. De Majula para Heide o ponto foi sempre
+(-7.81, -33.53, 372.06), no vazio. Com o modo `observe` o convidado morria e a
+sessão caía; com `respawn` o hook de morte cancela a queda e o leva à fogueira
+do host que o canal P2P anunciou, e a sessão fica:
+
+    03:00:28  Chico (Majula)  Sign 1004 created, area 0x009932c0
+    03:01:21  Samuel (Heide)  Party sign 1004 ... moved to 6.4 -18.5 209.2; Summoning sign 1004
+    03:01:38  Chico           morte CANCELADA queda; renascer: fogueira do host (6.186, -18.517, 209.053) teleportado
+    03:01:38  Samuel          RequestNotifyJoinGuestPlayer
+    03:01:40  Chico           RequestNotifyJoinSession        p2pSessionVerified: true
+
+A encenação tem que ser uma viagem de fogueira de verdade: com `goto-map` e
+saída para o título o cliente ficou com a área de um mapa e a posição de outro,
+e pôs placas com posição (0,0,0) que o host não aceitou.
+
+**Retomar revisa o cache.** Uma placa que chega com o host pausado não é
+entregue de novo; `retoma` agora percorre a coleção do `SummonSignSetCtrl`
+(slots `0x18` contagem e `0x10` item, entrada viva com `+0x14` negativo, alça
+com a marca `0x80000000`) e invoca a do parceiro. Medido: placa 1005 ignorada
+às 03:10:11 com o host pausado, invocada às 03:10:29 ao retomar, entrada de
+Majula com a queda recuperada e `p2pSessionVerified: true`.
