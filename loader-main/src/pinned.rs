@@ -41,6 +41,8 @@ pub fn injector_config() -> InjectorConfig {
         // The seamless co-op hooks are still measured one case at a time in
         // the harness; a player's loader does not turn them on yet.
         DS2SeamlessCoop: false,
+        DS2PartyGuest: false,
+        DS2PartyAccept: String::new(),
 
         DS2ProbeArea: false,
         DS2WatchAreaReads: false,

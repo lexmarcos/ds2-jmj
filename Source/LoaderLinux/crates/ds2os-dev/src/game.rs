@@ -97,6 +97,8 @@ pub fn prepare(
         DS2RemovePhantomFog: remove_fog,
         DS2AutoRematch: auto_rematch,
         DS2SeamlessCoop: seamless,
+        DS2PartyGuest: false,
+        DS2PartyAccept: String::new(),
         DS2ForcedZoneId: 103110,
     };
     let injector_config = config
@@ -568,4 +570,24 @@ mod tests {
         let silent = Err("request_not_consumed: nada leu DS2_Channel.req".to_owned());
         assert_eq!(stop_verdict(1, &silent, StopGuard::Refuse), Ok(Some("session_check_unknown")));
     }
+}
+
+/// `--party`: instance 2 keeps its white sign down, instance 1 summons the
+/// signs of instance 2's configured Steam ID. Written over the config `prepare`
+/// just wrote, so every other flag stays as given.
+pub fn prepare_party(environment: &Environment) -> Result<Vec<serde_json::Value>, String> {
+    let settings = crate::settings::HarnessConfig::load();
+    let guest_id = settings.steam_ids.get(&2).cloned()
+        .ok_or("identity_missing: `ds2os-dev game identity --instance 2 <SteamID64>` antes de --party")?;
+    let mut applied = Vec::new();
+    for install in &environment.installs {
+        let path = install.game_dir.join(ds2os_core::config::INJECTOR_CONFIG_FILE);
+        let mut config: ds2os_core::config::InjectorConfig = serde_json::from_slice(
+            &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
+        config.DS2PartyGuest = install.account == 2;
+        config.DS2PartyAccept = if install.account == 1 { guest_id.clone() } else { String::new() };
+        config.write_to(&install.game_dir).map_err(|e| format!("{}: {e}", path.display()))?;
+        applied.push(serde_json::json!({"instance": install.account, "guest": config.DS2PartyGuest, "accept": config.DS2PartyAccept}));
+    }
+    Ok(applied)
 }

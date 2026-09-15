@@ -276,7 +276,9 @@ bool Injector::Init()
                         {"autoRematch", Config.DS2AutoRematch},
                         {"forceZone", Config.DS2ForceMultiPlayZone},
                         {"removeFog", Config.DS2RemovePhantomFog},
-                        {"timer", Config.DS2PatchPhantomTimers}}}
+                        {"timer", Config.DS2PatchPhantomTimers},
+                        {"partyGuest", Config.DS2PartyGuest},
+                        {"partyAccept", Config.DS2PartyAccept}}}
     };
     {
         std::ofstream Stream(DllPath / "DS2_Harness.json.tmp", std::ios::trunc);

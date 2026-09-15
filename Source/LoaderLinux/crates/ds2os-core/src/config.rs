@@ -47,6 +47,14 @@ pub struct InjectorConfig {
     /// Death in another world goes to the last bonfire, and every warp is
     /// written to DS2_Seamless.log.
     pub DS2SeamlessCoop: bool,
+    /// With seamless on: keep this player's white sign on the ground while
+    /// it stands in its own world (M3, entering without a soapstone).
+    #[serde(default)]
+    pub DS2PartyGuest: bool,
+    /// With seamless on: Steam IDs, decimal and comma separated, whose white
+    /// signs this player summons by itself.
+    #[serde(default)]
+    pub DS2PartyAccept: String,
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,

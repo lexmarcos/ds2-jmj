@@ -350,8 +350,9 @@ fn receipt_of_boot(account: u8, boot: Option<&str>, receipt: Option<&Value>) -> 
 /// says now. The file is read at injection, so a change after the launch —
 /// `up` rewrites it from its own flags — is not in the game that is open.
 fn config_drift(account: u8, configured: &Value, config: Option<&Value>) -> Check {
-    const PAIRS: [(&str, &str); 5] = [("autoRematch", "DS2AutoRematch"), ("forceZone", "DS2ForceMultiPlayZone"),
-        ("removeFog", "DS2RemovePhantomFog"), ("seamless", "DS2SeamlessCoop"), ("timer", "DS2PatchPhantomTimers")];
+    const PAIRS: [(&str, &str); 6] = [("autoRematch", "DS2AutoRematch"), ("forceZone", "DS2ForceMultiPlayZone"),
+        ("removeFog", "DS2RemovePhantomFog"), ("seamless", "DS2SeamlessCoop"), ("timer", "DS2PatchPhantomTimers"),
+        ("partyGuest", "DS2PartyGuest")];
     let Some(config) = config else {
         return Check::new("config_drift", Some(account), Status::Problem, "Injector.config ausente ou ilegível").fix("`ds2os-dev game prepare`");
     };
@@ -359,6 +360,12 @@ fn config_drift(account: u8, configured: &Value, config: Option<&Value>) -> Chec
         let running_value = configured.get(*running).and_then(Value::as_bool).unwrap_or(false);
         let file_value = config.get(*file).and_then(Value::as_bool).unwrap_or(false);
         (running_value != file_value).then(|| format!("{running}: jogo {running_value}, arquivo {file_value}"))
+    }).chain({
+        // A DLL from before the party fields has no "partyAccept" at all; that is
+        // "nobody accepted", the same as an empty string.
+        let running = configured.get("partyAccept").and_then(Value::as_str).unwrap_or("");
+        let file = config.get("DS2PartyAccept").and_then(Value::as_str).unwrap_or("");
+        (running != file).then(|| format!("partyAccept: jogo {running:?}, arquivo {file:?}"))
     }).collect();
     if differences.is_empty() {
         Check::new("config_drift", Some(account), Status::Ok, "o jogo roda com a config do arquivo").data(configured.clone())

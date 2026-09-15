@@ -80,6 +80,13 @@ public:
     // call every warp in the game goes through.
     bool DS2SeamlessCoop = false;
 
+    // Entering without the ritual (M3), with DS2SeamlessCoop. A guest keeps its
+    // own white sign on the ground while it stands in its own world, placing it
+    // again when it is gone; a host summons, by itself, the white signs of the
+    // Steam IDs listed in DS2PartyAccept (decimal, comma separated).
+    bool DS2PartyGuest = false;
+    std::string DS2PartyAccept = "";
+
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.
     int DS2ForcedZoneId = 103110;

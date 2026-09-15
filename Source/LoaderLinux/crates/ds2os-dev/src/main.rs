@@ -161,6 +161,9 @@ enum Command {
         /// Death in another world goes to the last bonfire, not home
         #[arg(long)]
         seamless: bool,
+        /// With --seamless: instance 2 keeps its white sign down, instance 1 summons it by itself
+        #[arg(long, requires = "seamless")]
+        party: bool,
     },
     /// Stops the server and the second instance
     Down {
@@ -664,6 +667,9 @@ enum GameAction {
         /// Death in another world goes to the last bonfire, not home
         #[arg(long)]
         seamless: bool,
+        /// With --seamless: instance 2 keeps its white sign down, instance 1 summons it by itself
+        #[arg(long, requires = "seamless")]
+        party: bool,
     },
     /// Starts the game, in its own Proton prefix, without Steam
     Launch {
@@ -847,8 +853,8 @@ fn run(command: Command) -> Result<(), String> {
         Command::Character { instance } => character_command(&environment, &accounts(&instance)?),
         Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
         Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),
-        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless } => {
-            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog, auto_rematch, seamless)
+        Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless, party } => {
+            up(&environment, timer_seconds, !no_timer, probe_area, no_enter, !no_force_zone, !keep_fog, auto_rematch, seamless, party)
         }
         Command::Down { force } => {
             let stopped_game = if environment.installs.iter().any(|i| i.account == 2) {
@@ -960,7 +966,7 @@ fn run(command: Command) -> Result<(), String> {
                 println!("identidades: {:?}", config.steam_ids);
                 Ok(())
             },
-            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch, seamless } => {
+            GameAction::Prepare { timer_seconds, no_timer, probe_area, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch, seamless, party } => {
                 // The timer patch installs its own exception handler and single
                 // steps through a software breakpoint. Two handlers competing
                 // for the same exception would muddy what the watch reports, so
@@ -969,7 +975,9 @@ fn run(command: Command) -> Result<(), String> {
                 if watch_reads && !no_timer {
                     println!("  timer desligado enquanto o watch estiver ligado");
                 }
-                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch, seamless)
+                prepare(&environment, timer_seconds, timer, probe_area || watch_reads, watch_reads, area_address, probe_zone, force_zone, remove_fog, auto_rematch, seamless)?;
+                if party { party_config(&environment)?; }
+                Ok(())
             }
             GameAction::Launch { steam_home, instance } => {
                 let home = resolve_second_steam(steam_home)?;
@@ -1737,6 +1745,16 @@ fn row<T: std::fmt::Debug>(label: &str, value: Option<T>) {
     }
 }
 
+fn party_config(environment: &Environment) -> Result<(), String> {
+    let applied = game::prepare_party(environment)?;
+    for entry in &applied {
+        println!("    party   conta {}: convidado {}, aceita {}", entry["instance"], entry["guest"],
+            entry["accept"].as_str().filter(|s| !s.is_empty()).unwrap_or("ninguém"));
+    }
+    output::event("party_config", serde_json::json!(applied));
+    Ok(())
+}
+
 fn prepare(
     environment: &Environment,
     timer_seconds: f64,
@@ -1817,6 +1835,7 @@ fn up(
     remove_fog: bool,
     auto_rematch: bool,
     seamless: bool,
+    party: bool,
 ) -> Result<(), String> {
     for account in [1, 2] {
         install_for(environment, account)?;
@@ -1869,6 +1888,7 @@ fn up(
     // how a Majula test quietly fails.
     println!("\njogo");
     prepare(environment, timer_seconds, timer_patch, probe_area, false, None, false, force_zone, remove_fog, auto_rematch, seamless)?;
+    if party { party_config(environment)?; }
 
     println!("\ninstâncias");
     if environment.installs.len() < 2 {
