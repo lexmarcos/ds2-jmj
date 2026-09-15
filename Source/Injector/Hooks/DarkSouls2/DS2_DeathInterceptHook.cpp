@@ -494,6 +494,7 @@ namespace
     // bonfire (0: not waiting).
     uint32_t s_owner_map = 0;
     uint32_t s_arrival_frames = 0;
+    uint8_t s_last_local_role = 0xff;
     constexpr uint32_t kArrivalGiveUpFrames = 30 * 60;
 
     // Waiting for the banner to end, to give the HUD back.
@@ -1857,21 +1858,26 @@ namespace
                 }
                 s_arrival_frames = 0;
             }
-            else if (NewController && s_owner_map != 0 && Enabled(FeatureHostBonfire))
+            else if (s_last_local_role == kWorldOwnerRole && s_owner_map != 0 && Enabled(FeatureHostBonfire))
             {
+                // The controller survives the join (measured 15/09: no new
+                // local controller across it), so the role change is the sign.
                 s_arrival_frames = 1;
             }
+            s_last_local_role = RoleNow;
+            (void)NewController;
 
             if (s_arrival_frames > 0 && RoleNow != kWorldOwnerRole && !s_recovery.Active && Data != nullptr)
             {
                 ++s_arrival_frames;
                 const uint32_t Map = CurrentMap();
                 DS2_CoopChannel::Bonfire Said;
-                if (Map != 0 && Map == s_owner_map)
+                const bool Announced = DS2_CoopChannel::HostBonfire(Said) && Said.Map != 0;
+                if (Announced && Said.Map == s_owner_map)
                 {
                     s_arrival_frames = 0;   // the host is in the map the guest came from: nothing converted
                 }
-                else if (Map != 0 && DS2_CoopChannel::HostBonfire(Said) && Said.Map == Map)
+                else if (Announced && Map == Said.Map)
                 {
                     s_arrival_frames = 0;
                     Append(StringFormat("%s  chegada de outro mapa: vim de %08x, o host esta em %08x\n",
