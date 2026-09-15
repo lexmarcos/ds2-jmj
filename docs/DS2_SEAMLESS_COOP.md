@@ -1982,3 +1982,39 @@ Os dois hollow na fogueira de Heide, build `b30cadef`, `up --seamless
 
 Quase um minuto da ordem à sessão, dos quais a maior parte é o intervalo do
 poll de placas do host. A sessão terminou com `session end`.
+
+### A entrada nasce da configuração (15/09)
+
+`DS2PartyGuest` e `DS2PartyAccept` no `Injector.config` (com `DS2SeamlessCoop`);
+no harness, `up --seamless --party` faz da conta 2 convidado e da conta 1 o host
+que aceita a steam id configurada da conta 2.
+
+- **Convidado**, a cada segundo no quadro do `SummonSignSetCtrl`: no próprio
+  mundo (papel 0) sem placa branca, põe uma. Ao voltar de outro mundo (papel
+  1 → 0), repõe. Quando a placa some com ele ainda no próprio mundo, espera
+  30 s: ser invocado tira a placa segundos antes de o papel mudar, e repor
+  nessa janela disputa o join (visto uma vez, sem estrago, antes da carência).
+  O gerenciador zera o "placa posta" quando a placa é invocada.
+- **Host**, no detour do `AddSign`: acha a entrada pelo handle
+  (`FUN_14020e6f0` na coleção `*(this-8)`), lê a steam id em `+0x38` e, se ela
+  está em `DS2PartyAccept` e o host está no próprio mundo, invoca
+  (`FUN_1402a14c0`).
+- **`pausa` / `retoma`** em `DS2_Party.req` param e religam os dois lados;
+  `ds2os-dev session end` pausa sozinho, e confirma pelo eco.
+
+Medido com os dois hollow, `DS2AutoRematch` desligado, nenhuma tecla e nenhum
+arquivo de pedido:
+
+| hora | o quê |
+| --- | --- |
+| 00:39:48 | Chico põe a placa ao chegar: `Sign 1016 created` |
+| 00:40:19 | Samuel invoca o parceiro 76561199048087249 |
+| 00:40:30–32 | `JoinGuestPlayer`, `JoinSession`, `p2pSessionVerified: true` |
+| 00:41:21 | `session end` (build sem pausa) |
+| 00:41:39 | Chico, de volta, repõe: `Sign 1017 created` |
+| 00:42:19–32 | Samuel invoca de novo, `JoinGuestPlayer`, `JoinSession` |
+
+Com a carência e a pausa (build `cc2a3272`): às 00:50:18 o convidado registrou
+"a placa sumiu; espero 30 s", às 00:50:22 já era fantasma, e a sessão formou;
+`session end` pausou as duas contas e em dois minutos o servidor não viu
+placa, summon nem join.

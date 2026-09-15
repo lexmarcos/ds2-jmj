@@ -470,11 +470,11 @@ ordem (ver "Sem efígie" e "Entrar sem soapstone" em
 
 **Falta, para a entrada sem ritual de verdade:**
 
-1. **Quem manda a ordem.** Hoje são dois arquivos de pedido escritos à mão
-   (`DS2_Party.req` no convidado, `DS2_Rematch.req` no host). O jogador não
-   vai escrever arquivo: a ordem tem que nascer da configuração — o convidado
-   põe a placa ao chegar no mundo e a repõe quando ela some; o host aceita as
-   placas do parceiro.
+1. ~~**Quem manda a ordem.**~~ **Feito 15/09**: `DS2PartyGuest` (o convidado
+   põe a placa ao chegar e a repõe ao voltar, com 30 s de carência quando ela
+   some no próprio mundo) e `DS2PartyAccept` (steam ids cujas placas o host
+   invoca sozinho); `ds2os-dev up --seamless --party`. Entrada, `session end`
+   e reentrada automática medidas sem tecla nem arquivo.
 2. **A senha.** O host hoje aceita por id de jogador do servidor, que o
    jogador não conhece. Falta o par se reconhecer por uma senha — e o
    servidor entregar a placa só a quem tem a mesma, para um estranho não a
@@ -482,9 +482,9 @@ ordem (ver "Sem efígie" e "Entrar sem soapstone" em
 3. **Longe um do outro.** Medido só com os dois na mesma fogueira. Placa é
    por área e célula; em áreas diferentes o host nem recebe a placa (ver
    `DS2_StickySigns`).
-4. **Uma revanche e uma entrada no mesmo hook.** O `alvo` da revanche foi o
-   atalho para medir; a entrada merece o seu próprio, sem depender de
-   `DS2AutoRematch`.
+4. ~~**Uma revanche e uma entrada no mesmo hook.**~~ **Feito 15/09**: a
+   entrada é toda do `DS2_PartyHook` (detour próprio do `AddSign`), medida com
+   `DS2AutoRematch` desligado.
 
 Medido antes de mexer: **o convidado hollow põe a placa branca** (`Sign created:
 type 1` com estado 1) — a trava estava só no **host**, que hollow recebia a

@@ -50,7 +50,8 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `reload` | restarts the server and puts everyone back in the world, without closing the game |
 | `server up\|down\|restart\|status` | the local server on its own |
 | `server wait --signs N` | passes on a `Sign poll` line written after it started saying `N signs cached`; no poll is inconclusive |
-| `session end` | ends the session the legal way (host `copias off`, guest dies in observe), waits for both channels to drop it, restores both settings |
+| `up --seamless --party` | account 2 keeps its white sign down and account 1 summons it by itself (`DS2PartyGuest`/`DS2PartyAccept`); a session forms and re-forms with no input. `DS2_Party.req` takes `pausa`/`retoma` |
+| `session end` | ends the session the legal way (host `copias off`, guest dies in observe), waits for both channels to drop it, restores both settings; pauses `DS2_Party` first so the session stays ended |
 | `hooks reset --instance both` | Session, Backread, Trace and Death back to a fresh arrival's state, each confirmed by its echo; scenarios opt in with `"hookState": "reset"` |
 | `game prepare` | writes `Injector.config`, the wrapper, and copies the injector binaries into **both** installations; with that game closed, rotates any `DS2*.log` above 8 MB to `.1` |
 | `injector fetch` | waits for the CI run that built HEAD's injector sources, downloads it into `~/Downloads/injector` (previous kept as `injector.prev`), writes `manifest.json`, cancels `ci.yml`; says `needsPrepare`/`needsRelaunch`, never installs |
