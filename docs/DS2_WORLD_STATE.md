@@ -115,6 +115,22 @@ host**: flags, valores de evento, fogueiras, estado de objetos e mortes de
 inimigos. O que o M4 precisa medir é quanto disso chega ao objeto na tela e o
 que muda **depois** da entrada, que só o `0x20` (flags) cobre até onde se viu.
 
+## O estado de objetos no save do convidado
+
+O save guarda o estado de objetos de mapa num `SaveDataObj` (vftable
+`0x1410da378`): até três mapas, 0x6008 bytes cada, versão `0x69`.
+
+- **Grava** (`FUN_1402e5a10`, slot `+0x10`): para cada mapa guardado em
+  `*(*(ctx+0x38)+0x200)+0x18`, se o cliente **não** é convidado em sessão e o
+  mapa está carregado, serializa os objetos vivos (`FUN_1401f22c0`); se é
+  convidado, grava a cópia guardada (`FUN_1401e7450`) — o mundo dele, não o
+  do host. Depois `FUN_1401f2ea0` no `MapStateActManager`.
+- **Lê** (`FUN_1402e5890`, slot `+0x18`): até 3 blocos para `FUN_1401e7a10`,
+  depois `FUN_1401f2ce0`.
+
+Lido, não medido: é o jogo garantindo que um convidado não salva portas e
+alavancas do host no próprio save, que é o que o design pede.
+
 ## O que ainda não se sabe
 
 - **Se portas, alavancas, elevadores e illusory walls são flags de mapa.**
