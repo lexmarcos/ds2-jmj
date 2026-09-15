@@ -679,10 +679,27 @@ Ao entrar no estado 2 o job roda `FUN_14017fd70` (`FUN_140417210`,
                         0a040000 → fogueira do host, teleportado
       12:32:27  p2pSessionVerified: true, os dois na The Far Fire
 
-  75 s de ponta a ponta, sem tecla e sem morte. **Falta** a votação e o grupo
-  viajando **junto** (sem sair da sessão), o aviso na tela do convidado, e se
-  essa saída conta desconexão ilegal para o convidado (a saída foi pedida pelo
-  host e o Chico continuou pondo placa, o que sugere que não);
+  75 s de ponta a ponta, sem tecla e sem morte.
+
+  **Desconexão ilegal: a saída pela viagem não conta (medido, com controle).**
+  O contador é o `MultiPlayPenaltyCtrl` em
+  `*(*(*0x141616cf8+0x30)+0x68)+0x1c0` (vftable `0x1410d0f00`): `+0x08` armado
+  (byte, gravado no save em `+0x488` bit 0 por `FUN_14024fe40`), `+0x0a`
+  pontos (`uint16`, save `+0x47a`), `+0x0c` tempo restante da punição (`float`).
+  Entrar numa sessão arma; um fim de sessão legal desarma sem somar; um cliente
+  que some armado soma `+0x1c`/`+0x20` do parâmetro (10) e o bloqueio vem em
+  `+0x22` (100 pontos), com 36000 s de punição. Parâmetro lido em
+  `*(*(*(*0x141616cf8+0x40)+0x10)+0xd8)`, linha `+0x198`.
+
+      13:51:13  Chico  armado=1 pontos=40   (sessão com o Samuel em Majula)
+      13:53:14  Chico  armado=0 pontos=40   (o host viajou; a saída desarmou sem somar)
+
+  O controle aconteceu sem querer: o jogo do Samuel **fechou** no carregamento
+  dessa viagem (`c0000005` em `+0x3f510f`, `FUN_1403f4f60`, um personagem com
+  `+0xc8` já liberado dentro do `CharacterManager`, no mesmo instante em que a
+  sessão caía), e ao voltar ele tinha **0 → 10 pontos**. Os 40 do Chico são de
+  desconexões antigas. Saves de antes de mexer mais na viagem:
+  `m8-antes-viagem`.
 - descanso com um invasor no mundo: o hook não distingue.
 
 - descansar reseta o mundo para todos, com aviso antes
