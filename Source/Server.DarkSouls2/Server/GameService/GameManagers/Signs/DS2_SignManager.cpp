@@ -475,7 +475,7 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
     // Writes one sign into the response. ReportedAreaId/ReportedCellId are what
     // the searching client is told the sign lives in, which is normally where it
     // really is but is overridden by the sticky pass below.
-    auto AppendSign = [&](const std::shared_ptr<SummonSign>& Sign, const std::unordered_set<uint32_t>& ClientExistingSignId, uint32_t ReportedAreaId, uint64_t ReportedCellId)
+    auto AppendSign = [&](const std::shared_ptr<SummonSign>& Sign, const std::unordered_set<uint32_t>& ClientExistingSignId, uint32_t ReportedAreaId, uint64_t ReportedCellId, const std::vector<uint8_t>* PlayerStruct = nullptr)
     {
         // If client already has sign data we only need to return a limited set of data.
         if (ClientExistingSignId.count(Sign->SignId) > 0)
@@ -491,7 +491,8 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
             SignData->mutable_sign_info()->set_sign_id(Sign->SignId);
             SignData->set_online_area_id(ReportedAreaId);
             SignData->mutable_matching_parameter()->CopyFrom(static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters));
-            SignData->set_player_struct(Sign->PlayerStruct.data(), Sign->PlayerStruct.size());
+            const std::vector<uint8_t>& Struct = PlayerStruct != nullptr ? *PlayerStruct : Sign->PlayerStruct;
+            SignData->set_player_struct(Struct.data(), Struct.size());
             SignData->set_player_steam_id(Sign->PlayerSteamId);
             SignData->set_cell_id(ReportedCellId);
             SignData->set_sign_type((DS2_Frpg2RequestMessage::SignType)Sign->Type);
@@ -614,6 +615,93 @@ MessageHandleResult DS2_SignManager::Handle_RequestGetSignList(GameClient* Clien
                 Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId, ReportedAreaId, ReportedCellId);
 
             AppendSign(Sign, ClientExistingSignId, ReportedAreaId, ReportedCellId);
+
+            if (RemainingSignCount <= 0)
+            {
+                break;
+            }
+        }
+    }
+
+    // A party (M3) is one pair wherever its two players stand: a sign is filed
+    // by area and cell, and a host in another area would never be sent its
+    // guest's sign. So a poll carrying a party code (see CanMatchWith) is also
+    // offered that party's signs from anywhere, reported under a cell it is
+    // searching, the way sticky signs are. The summon finds it by id.
+    const uint32_t RequesterRing = Request->matching_parameter().name_engraved_ring();
+    if ((RequesterRing & 0x80000000u) != 0 &&
+        RemainingSignCount > 0 &&
+        Request->search_areas_size() > 0)
+    {
+        std::unordered_set<uint32_t> ClientExistingSignId;
+        for (int i = 0; i < Request->search_areas_size(); i++)
+        {
+            const DS2_Frpg2RequestMessage::SignCellInfo& Area = Request->search_areas(i);
+            for (int j = 0; j < Area.local_signs_size(); j++)
+            {
+                ClientExistingSignId.insert(Area.local_signs(j).sign_id());
+            }
+        }
+
+        uint32_t ReportedAreaId = Request->online_area_id();
+        uint64_t ReportedCellId = Request->search_areas(0).cell_id();
+        uint32_t SelfPlayerId = Player.GetPlayerId();
+
+        std::vector<std::shared_ptr<SummonSign>> PartySigns = LiveCache.GetRecentSetGlobal(RemainingSignCount, [this, &Request, &SentSignIds, SelfPlayerId](const std::shared_ptr<SummonSign>& Sign) {
+            if (Sign->PlayerId == SelfPlayerId || SentSignIds.count(Sign->SignId) > 0)
+            {
+                return false;
+            }
+            const uint32_t SignRing = static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters.get()).name_engraved_ring();
+            return (SignRing & 0x80000000u) != 0 && CanMatchWith(
+                Request->matching_parameter(),
+                static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Sign->MatchingParameters.get()),
+                Sign->Type
+            );
+        });
+
+        const DS2_PlayerState& RequesterState = Client->GetPlayerStateType<DS2_PlayerState>();
+        const bool HaveLocation = RequesterState.GetPlayerStatus().has_player_location() &&
+            RequesterState.GetPlayerStatus().player_location().has_position();
+
+        for (std::shared_ptr<SummonSign>& Sign : PartySigns)
+        {
+            // The client decodes a sign's position from its player_struct (version
+            // 6, 0x50 bytes, three int16 at +4/+6/+8 with 5 fractional bits, then
+            // adds its own loaded map's origin) and drops a sign that does not
+            // sit where it was offered. A sign from another area is moved, for
+            // this reply only, to where the requester last said it stands.
+            std::vector<uint8_t> Moved = Sign->PlayerStruct;
+            const bool OtherArea = (uint32_t)Sign->OnlineAreaId != ReportedAreaId;
+            float Before[3] = { 0, 0, 0 };
+            float After[3] = { 0, 0, 0 };
+            if (Moved.size() == 0x50 && Moved[0] == 6)
+            {
+                for (int k = 0; k < 3; k++)
+                {
+                    int16_t Fixed = 0;
+                    memcpy(&Fixed, Moved.data() + 4 + k * 2, sizeof(Fixed));
+                    Before[k] = Fixed / 32.0f;
+                }
+                if (OtherArea && HaveLocation)
+                {
+                    const auto& Position = RequesterState.GetPlayerStatus().player_location().position();
+                    const float Target[3] = { Position.x(), Position.y(), Position.z() };
+                    for (int k = 0; k < 3; k++)
+                    {
+                        const float Scaled = std::round(Target[k] * 32.0f);
+                        const int16_t Fixed = (int16_t)std::max(-32768.0f, std::min(32767.0f, Scaled));
+                        memcpy(Moved.data() + 4 + k * 2, &Fixed, sizeof(Fixed));
+                        After[k] = Fixed / 32.0f;
+                    }
+                }
+            }
+
+            LogS(Client->GetName().c_str(), "Party sign %u (owner area 0x%08x cell 0x%016llx, at %.1f %.1f %.1f) offered as area 0x%08x cell 0x%016llx%s.",
+                Sign->SignId, (uint32_t)Sign->OnlineAreaId, Sign->CellId, Before[0], Before[1], Before[2], ReportedAreaId, ReportedCellId,
+                (OtherArea && HaveLocation) ? StringFormat(", moved to %.1f %.1f %.1f", After[0], After[1], After[2]).c_str() : "");
+
+            AppendSign(Sign, ClientExistingSignId, ReportedAreaId, ReportedCellId, (OtherArea && HaveLocation) ? &Moved : nullptr);
 
             if (RemainingSignCount <= 0)
             {
@@ -818,9 +906,16 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     // A sticky sign was offered under the summoner's own cell and area, not the
     // one it is filed under, so the lookup above cannot find it. The sign id is
     // unique across the whole cache, so fall back to that.
-    if (!Sign && Config.DS2_StickySigns)
+    if (!Sign)
     {
-        Sign = LiveCache.Find(Request->sign_info().sign_id());
+        // Party signs (M3) are offered the same way, with or without sticky signs.
+        std::shared_ptr<SummonSign> Anywhere = LiveCache.Find(Request->sign_info().sign_id());
+        const bool PartySign = Anywhere &&
+            (static_cast<DS2_Frpg2RequestMessage::MatchingParameter&>(*Anywhere->MatchingParameters.get()).name_engraved_ring() & 0x80000000u) != 0;
+        if (Anywhere && (Config.DS2_StickySigns || PartySign))
+        {
+            Sign = Anywhere;
+        }
         if (Sign)
         {
             LogS(Client->GetName().c_str(), "Summoning sticky sign %u, filed under area 0x%08x cell 0x%016llx.",
