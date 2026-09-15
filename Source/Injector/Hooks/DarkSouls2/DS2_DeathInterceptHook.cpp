@@ -489,6 +489,13 @@ namespace
     };
     Settle s_settle;
 
+    // The map this machine's player last stood in as the owner of its world,
+    // and how many frames a guest arriving elsewhere has waited for the host's
+    // bonfire (0: not waiting).
+    uint32_t s_owner_map = 0;
+    uint32_t s_arrival_frames = 0;
+    constexpr uint32_t kArrivalGiveUpFrames = 30 * 60;
+
     // Waiting for the banner to end, to give the HUD back.
     struct BannerWait
     {
@@ -1815,6 +1822,7 @@ namespace
         uint8_t* Data = *(uint8_t**)(Chr + kCharacterData);
         const uint8_t Before = Bytes[kCtrlState];
         PublishLocal(Chr);
+        const bool NewController = Ctrl != s_local_ctrl;
 
         if (Ctrl != s_local_ctrl)
         {
@@ -1830,6 +1838,53 @@ namespace
             s_banner_wait.Active = false;
             Append(StringFormat("%s  controlador do jogador local %p, personagem %p, estado %u\n",
                 Clock().c_str(), Ctrl, Character, Before));
+        }
+
+        // Joining a host in another map lands the guest on its own sign
+        // converted into the host's map - for Majula into Heide, empty space
+        // (measured 15/09, M3). The host's bonfire is known by then, so a guest
+        // arriving from another map goes to it at once, without waiting to
+        // fall; a fall was the only rescue before, and a point inside the
+        // ground would not have fallen.
+        {
+            const uint8_t RoleNow = RoleOf(Chr);
+            if (RoleNow == kWorldOwnerRole)
+            {
+                const uint32_t Map = CurrentMap();
+                if (Map != 0)
+                {
+                    s_owner_map = Map;
+                }
+                s_arrival_frames = 0;
+            }
+            else if (NewController && s_owner_map != 0 && Enabled(FeatureHostBonfire))
+            {
+                s_arrival_frames = 1;
+            }
+
+            if (s_arrival_frames > 0 && RoleNow != kWorldOwnerRole && !s_recovery.Active && Data != nullptr)
+            {
+                ++s_arrival_frames;
+                const uint32_t Map = CurrentMap();
+                DS2_CoopChannel::Bonfire Said;
+                if (Map != 0 && Map == s_owner_map)
+                {
+                    s_arrival_frames = 0;   // the host is in the map the guest came from: nothing converted
+                }
+                else if (Map != 0 && DS2_CoopChannel::HostBonfire(Said) && Said.Map == Map)
+                {
+                    s_arrival_frames = 0;
+                    Append(StringFormat("%s  chegada de outro mapa: vim de %08x, o host esta em %08x\n",
+                        Clock().c_str(), s_owner_map, Map));
+                    StartRecovery(Chr, "chegada de outro mapa");
+                }
+                else if (s_arrival_frames > kArrivalGiveUpFrames)
+                {
+                    s_arrival_frames = 0;
+                    Append(StringFormat("%s  chegada de outro mapa: sem anuncio da fogueira do host no mapa %08x em %u quadros; fica onde chegou\n",
+                        Clock().c_str(), Map, kArrivalGiveUpFrames));
+                }
+            }
         }
 
         if (s_recovery.Active && Data != nullptr)
