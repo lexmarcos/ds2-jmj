@@ -660,13 +660,36 @@ descansar (os prompts dele são "Light torch" e "Pick up item").
 Ao entrar no estado 2 o job roda `FUN_14017fd70` (`FUN_140417210`,
 `FUN_1403c1b50`, `FUN_14044f880`), o candidato ao reset do mundo do host.
 
+**Reset e aviso no convidado — feitos 15/09.** Medido antes, com o Chico
+host e o Samuel fantasma em Heide: um inimigo (550 HP, em (-55.9, -8.0,
+260.0)) morto no host sumiu também do convidado — a morte replica —, mas
+depois do descanso ele **voltou só no host**; no convidado continuou morto.
+O descanso do jogo não conta nada à sessão.
+
+Agora o `DS2_BonfireInSessionHook` fala pelo canal P2P próprio
+(`DS2_CoopChannel::SendHostEvent`, tipos 2 e 3 do anúncio): `FUN_14017dc40`
+(o descanso começou) manda `RestStarted`, e o convidado mostra a caixa **"A
+player is resting at a bonfire."** com a função das mensagens de rede do jogo
+(`FUN_1404fe2a0` em `*(ctx+0x22e0)`, título `FUN_140503620(0, 0xcc)`);
+`FUN_14017fd70` (o reset: geradores de inimigos, objetos de mapa, eventos)
+manda `WorldReset`, e o convidado roda o **mesmo** `FUN_14017fd70` na cópia
+dele do mundo do host, na thread do jogo. Medido com o build `502fb6d0`:
+
+    14:29:54.978  Chico   host: descanso na fogueira 00007ba7; aviso para a sessao
+    14:29:54.992  Samuel  convidado: o host descansou (...ha 6 ms); aviso mostrado
+    14:29:57.861  Chico   host: o mundo foi reiniciado pelo descanso
+    14:29:57.876  Samuel  convidado: mundo do host reiniciado aqui tambem (ha 7 ms)
+
+O inimigo morto de novo antes do descanso estava de volta, 550/550 na mesma
+posição, **nos dois** clientes; a caixa apareceu na tela do Samuel e fechou com
+A; `p2pSessionVerified: true` o tempo todo.
+
 **Falta:**
 
-- o que o **convidado** vê do reset: inimigos voltando no mundo do host na
-  tela dele, e se o `EnemyGeneratorDeadCounter` dele acompanha;
-- o aviso antes ("A player is resting at a bonfire");
 - o convidado não é curado pelo descanso do host (726/854 antes e depois);
   o design não diz se deveria;
+- a caixa é modal: o convidado precisa apertar A; um aviso sem botão não foi
+  procurado;
 - ~~viagem pelo menu em sessão~~ **medida 15/09**, e o grupo já chega junto
   sem código novo, pela soma de M2 e M3. Samuel viajou de Heide's Ruin para
   The Far Fire (Majula) com o Chico na sessão:
