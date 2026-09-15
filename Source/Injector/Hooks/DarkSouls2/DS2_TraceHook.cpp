@@ -13,6 +13,7 @@
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Platform/Platform.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -29,6 +30,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <map>
+#include "ThirdParty/detours/src/detours.h"
 #endif
 
 namespace
@@ -56,6 +59,50 @@ namespace
     std::thread s_thread;
     PVOID s_handler = nullptr;
     uintptr_t s_base = 0;
+
+    // `esd <ms> [rotulo]`: every EzState environment query the game evaluates
+    // in a window, by id, with the values it answered. Event scripts decide
+    // things like "Cannot use bonfire" through these, and a query id is what
+    // a patch would have to change. FUN_140456a90 is the dispatcher (a
+    // virtual, slot of the vftable at 0x1410ef418 region): (this, out value,
+    // arguments, ?); the id is the arguments' slot +8, the answer a value and
+    // a type tag at out[0] and out[2].
+    constexpr size_t kEsdQueryOffset = 0x456a90;
+    constexpr uint8_t kEsdQueryPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xc0 };
+    using EsdQuery_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
+    EsdQuery_p s_original_esd = nullptr;
+    std::atomic<bool> s_esd_on{ false };
+    std::chrono::steady_clock::time_point s_esd_deadline;
+    std::string s_esd_label;
+    struct EsdSeen
+    {
+        uint64_t Count = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> Values;   // (value, tag), first few distinct
+    };
+    std::mutex s_esd_mutex;
+    std::map<int32_t, EsdSeen> s_esd_seen;
+
+    uint64_t EsdQueryHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        if (!s_esd_on.load(std::memory_order_relaxed))
+        {
+            return s_original_esd(This, Out, Arguments, P4);
+        }
+        using Id_p = int32_t(*)(void*);
+        const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
+        const uint64_t Result = s_original_esd(This, Out, Arguments, P4);
+        const uint32_t Value = Out[0];
+        const uint32_t Tag = Out[2];
+        std::scoped_lock Lock(s_esd_mutex);
+        EsdSeen& Seen = s_esd_seen[Id];
+        ++Seen.Count;
+        const std::pair<uint32_t, uint32_t> Pair{ Value, Tag };
+        if (Seen.Values.size() < 4 && std::find(Seen.Values.begin(), Seen.Values.end(), Pair) == Seen.Values.end())
+        {
+            Seen.Values.push_back(Pair);
+        }
+        return Result;
+    }
 
     // The image is about 28 MB. This only has to be an upper bound, for
     // deciding whether a stack slot looks like a code address in this module.
@@ -622,6 +669,7 @@ namespace
     //   wp <hex absolute address> <decimal length> [seconds, default 3, max 20]
     //   wpr <same>   (reads too)
     //   wpclear
+    //   esd <ms> [rotulo]   EzState queries evaluated in the window, by id
     //
     // The deref is what makes an argument readable. Half the interesting
     // values in this binary are behind a pointer in rcx or rdx — a handle, a
@@ -701,6 +749,30 @@ namespace
                     ArmWatch((uintptr_t)strtoull(Where.c_str(), nullptr, 16), Length, Seconds, Kind == "wpr");
                 }
             }
+            else if (Kind == "esd")
+            {
+                // esd <decimal ms, max 20000> [rotulo]
+                int Ms = 1500;
+                std::string Label;
+                Parts >> Ms >> Label;
+                if (Ms < 100) { Ms = 100; }
+                if (Ms > 20000) { Ms = 20000; }
+                if (s_original_esd == nullptr)
+                {
+                    Append("=== esd: o despachante nao foi instalado ===\n");
+                }
+                else
+                {
+                    {
+                        std::scoped_lock Lock(s_esd_mutex);
+                        s_esd_seen.clear();
+                        s_esd_label = Label;
+                    }
+                    s_esd_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(Ms);
+                    s_esd_on.store(true);
+                    Append(StringFormat("=== esd: consultas por %d ms (%s) ===\n", Ms, Label.c_str()));
+                }
+            }
             else if (Kind == "wpclear")
             {
                 DisarmWatch("pedido");
@@ -727,11 +799,38 @@ namespace
         }
     }
 
+    void FlushEsd()
+    {
+        s_esd_on.store(false);
+        std::map<int32_t, EsdSeen> Seen;
+        std::string Label;
+        {
+            std::scoped_lock Lock(s_esd_mutex);
+            Seen.swap(s_esd_seen);
+            Label = s_esd_label;
+        }
+        std::string Text = StringFormat("=== esd (%s): %zu consultas distintas ===\n", Label.c_str(), Seen.size());
+        for (const auto& [Id, Entry] : Seen)
+        {
+            std::string Values;
+            for (const auto& [Value, Tag] : Entry.Values)
+            {
+                Values += StringFormat(" %08x/%u", Value, Tag);
+            }
+            Text += StringFormat("  esd %s %08x (%d) x%llu:%s\n", Label.c_str(), (uint32_t)Id, Id, (unsigned long long)Entry.Count, Values.c_str());
+        }
+        Append(Text);
+    }
+
     void Run()
     {
         while (s_running.load())
         {
             ServeRequests();
+            if (s_esd_on.load() && std::chrono::steady_clock::now() >= s_esd_deadline)
+            {
+                FlushEsd();
+            }
             if (s_watch_armed.load() && std::chrono::steady_clock::now() >= s_watch_deadline)
             {
                 DisarmWatch("prazo");
@@ -766,6 +865,19 @@ bool DS2_TraceHook::Install(Injector& injector)
         }
     }
 
+    if (memcmp((const void*)(s_base + kEsdQueryOffset), kEsdQueryPrologue, sizeof(kEsdQueryPrologue)) == 0)
+    {
+        s_original_esd = (EsdQuery_p)(s_base + kEsdQueryOffset);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)s_original_esd, EsdQueryHook);
+        if (DetourTransactionCommit() != NO_ERROR)
+        {
+            s_original_esd = nullptr;
+            Error("[DS2Trace] nao consegui instalar o espiao de EzState");
+        }
+    }
+
     s_running.store(true);
     s_thread = std::thread(Run);
 
@@ -784,6 +896,15 @@ void DS2_TraceHook::Uninstall()
     }
     DisarmAll();
     DisarmWatch("desinstalando");
+    if (s_original_esd != nullptr)
+    {
+        s_esd_on.store(false);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)s_original_esd, EsdQueryHook);
+        DetourTransactionCommit();
+        s_original_esd = nullptr;
+    }
     if (s_handler != nullptr)
     {
         RemoveVectoredExceptionHandler(s_handler);
