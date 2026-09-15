@@ -67,6 +67,10 @@ namespace
 
     constexpr uint8_t kVersion = 1;
     constexpr uint8_t kKindBonfire = 1;
+    // Kinds 2 and up are the host's events (DS2_CoopChannel::HostEvent),
+    // sent once, reliably, to every other member.
+    constexpr uint8_t kKindFirstEvent = 2;
+    constexpr uint8_t kKindLastEvent = 2 + DS2_CoopChannel::kHostEventCount - 1;
     constexpr uint8_t kWorldOwner = 0;                 // *(chr+0xb0)+0x3c
 
     constexpr ULONGLONG kAnnounceEveryMs = 2000;
@@ -146,6 +150,23 @@ namespace
     std::mutex s_announce_mutex;
     Sent s_sent_state[kMaxSessions];
     uint32_t s_sequence = 0;
+
+    // Host events: bits queued by the game's thread, sent by the next poll.
+    // Received ones count up per kind; the game's thread takes each once.
+    // A queued event nobody could be told within this long is dropped: a
+    // guest summoned later must not get a rest that happened before it came.
+    std::atomic<uint32_t> s_events_pending{ 0 };
+    std::atomic<ULONGLONG> s_events_tick{ 0 };
+    constexpr ULONGLONG kEventFreshMs = 5000;
+    struct HeardEvent
+    {
+        uint64_t Count = 0;
+        Announcement Last = {};
+        uint64_t From = 0;
+        ULONGLONG Tick = 0;
+    };
+    HeardEvent s_heard_events[DS2_CoopChannel::kHostEventCount];
+    uint64_t s_taken_events[DS2_CoopChannel::kHostEventCount] = {};
 
     std::atomic<uint64_t> s_polls{ 0 };
     std::atomic<uint64_t> s_foreign{ 0 };
@@ -355,7 +376,8 @@ namespace
             return;
         }
         memcpy(&Said, Data, sizeof(Said));
-        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion || Said.Kind != kKindBonfire)
+        const bool Event = Said.Kind >= kKindFirstEvent && Said.Kind <= kKindLastEvent;
+        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion || (Said.Kind != kKindBonfire && !Event))
         {
             Refuse("nao e um anuncio desta versao", From, Size);
             return;
@@ -363,6 +385,31 @@ namespace
         if (Said.Role != kWorldOwner)
         {
             Refuse("so o dono do mundo anuncia a fogueira", From, Size);
+            return;
+        }
+        if (Event)
+        {
+            bool EventFromHost = false;
+            {
+                std::scoped_lock Lock(s_net_mutex);
+                const ULONGLONG Now = GetTickCount64();
+                EventFromHost = IsHostLocked(From, Now);
+                if (EventFromHost)
+                {
+                    HeardEvent& Entry = s_heard_events[Said.Kind - kKindFirstEvent];
+                    ++Entry.Count;
+                    Entry.Last = Said;
+                    Entry.From = From;
+                    Entry.Tick = Now;
+                }
+            }
+            if (!EventFromHost)
+            {
+                Refuse("evento de quem nao e o host de uma sessao", From, Size);
+                return;
+            }
+            Append(StringFormat("%s  evento %u do host recebido de %016llx: mapa %08x tipo %d id %08x (seq %u)\n",
+                Clock().c_str(), (unsigned)Said.Kind, (unsigned long long)From, Said.Map, Said.Type, Said.Id, Said.Sequence));
             return;
         }
 
@@ -454,6 +501,43 @@ namespace
         if (!SelfIsHost || Count == 0)
         {
             return;
+        }
+
+        const auto SendTo = (Send_p)VirtualAt(Net, kSendSlot);
+        const uint32_t Events = Tick - s_events_tick.load() > kEventFreshMs ? 0 : s_events_pending.exchange(0);
+        for (uint8_t Index = 0; Index < DS2_CoopChannel::kHostEventCount; ++Index)
+        {
+            if ((Events & (1u << Index)) == 0)
+            {
+                continue;
+            }
+            Announcement Event = {};
+            memcpy(Event.Magic, kMagic, sizeof(kMagic));
+            Event.Version = kVersion;
+            Event.Kind = (uint8_t)(kKindFirstEvent + Index);
+            Event.Role = Mine.Role;
+            Event.Map = Mine.Map;
+            Event.Type = Mine.Type;
+            Event.Id = Mine.Id;
+            {
+                std::scoped_lock Lock(s_announce_mutex);
+                Event.Sequence = ++s_sequence;
+            }
+            size_t Delivered = 0;
+            for (size_t i = 0; i < Count; ++i)
+            {
+                if (SendTo(Net, Others[i], &Event, sizeof(Event), kReliable, kChannel))
+                {
+                    ++Delivered;
+                    ++s_sent;
+                }
+                else
+                {
+                    ++s_send_failed;
+                }
+            }
+            Append(StringFormat("%s  evento %u enviado na sessao %p (seq %u) para %zu de %zu membros\n",
+                Clock().c_str(), (unsigned)Event.Kind, (void*)Now.Session, Event.Sequence, Delivered, Count));
         }
 
         std::scoped_lock Lock(s_announce_mutex);
@@ -669,6 +753,46 @@ bool DS2_CoopChannel::HostBonfire(Bonfire& Out)
     Out.Id = s_heard.Last.Id;
     Out.From = s_heard.From;
     Out.AgeMs = Now - s_heard.Tick;
+    return true;
+#else
+    return false;
+#endif
+}
+
+void DS2_CoopChannel::SendHostEvent(HostEvent Event)
+{
+#ifdef _WIN32
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - s_events_tick.load() > kEventFreshMs)
+    {
+        s_events_pending.store(0);
+    }
+    s_events_tick.store(Now);
+    s_events_pending.fetch_or(1u << (uint32_t)Event);
+#endif
+}
+
+bool DS2_CoopChannel::TakeHostEvent(HostEvent Event, Bonfire& Out)
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_net_mutex);
+    const size_t Index = (size_t)Event;
+    const HeardEvent& Entry = s_heard_events[Index];
+    if (Entry.Count == s_taken_events[Index])
+    {
+        return false;
+    }
+    s_taken_events[Index] = Entry.Count;
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - Entry.Tick > kHostFreshMs || !IsHostLocked(Entry.From, Now))
+    {
+        return false;
+    }
+    Out.Map = Entry.Last.Map;
+    Out.Type = Entry.Last.Type;
+    Out.Id = Entry.Last.Id;
+    Out.From = Entry.From;
+    Out.AgeMs = Now - Entry.Tick;
     return true;
 #else
     return false;

@@ -7,12 +7,19 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <string>
+
+#include "Shared/Core/Utils/Strings.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -44,6 +51,34 @@ namespace
     constexpr uint8_t kJobExpected[] = { 0x74, 0x19 };
     constexpr uint8_t kJobPatch[] = { 0xeb, 0x19 };
 
+    // The rest, host side (measured 15/09, docs/DS2_SEAMLESS_COOP_TASKS.md M8):
+    //
+    //   +0x17dc40  FUN_14017dc40(EventBonfireManager, bonfire id): starts the
+    //              rest, returns 1 when it did (state 0 -> 1)
+    //   +0x17fd70  FUN_14017fd70(): the world reset of a rest, run on state
+    //              1 -> 2; enemy generators (FUN_140417210), map objects
+    //              (FUN_1403c27f0) and the event manager (FUN_14044f880). Takes
+    //              nothing, reads the globals.
+    //
+    // Measured without this: an enemy killed in the host's world came back on
+    // the host when it rested and stayed dead on the guest.
+    constexpr size_t kRestStartOffset = 0x17dc40;
+    constexpr uint8_t kRestStartPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x83, 0x79, 0x38, 0x00, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kWorldResetOffset = 0x17fd70;
+    constexpr uint8_t kWorldResetPrologue[] = { 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x05, 0x75, 0x4b, 0x49, 0x01, 0x48, 0x8b, 0x48, 0x40 };
+
+    // A message box with text of our own, the way FUN_1402d6540 shows the
+    // network errors: FUN_1404fe2a0(*(ctx+0x22e0), text, title, 1, 1), the
+    // title from FUN_140503620(0, 0xcc).
+    constexpr size_t kDialogOffset = 0x4fe2a0;
+    constexpr uint8_t kDialogPrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0xb0, 0x00, 0x00, 0x00, 0x0f, 0xb6, 0x84, 0x24, 0xe0 };
+    constexpr size_t kTextOffset = 0x503620;
+    constexpr uint8_t kTextPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x56 };
+    constexpr size_t kFrontEnd = 0x22e0;
+    constexpr int kTitleCategory = 0;
+    constexpr int kTitleId = 0xcc;
+    constexpr const wchar_t* kRestNotice = L"A player is resting at a bonfire.";
+
     // The local character's role: *(*0x1416148f0 + 0xd0) -> +0xb0 -> +0x3c.
     constexpr size_t kGameGlobal = 0x16148f0;
     constexpr size_t kLocalCharacter = 0xd0;
@@ -52,6 +87,18 @@ namespace
 
     using SessionUp_p = uint64_t(*)(void* Session);
     SessionUp_p s_original = nullptr;
+    using RestStart_p = uint64_t(*)(void* Manager, int32_t Bonfire);
+    RestStart_p s_original_rest = nullptr;
+    using WorldReset_p = void(*)();
+    WorldReset_p s_original_reset = nullptr;
+    using Dialog_p = uint32_t(*)(void* FrontEnd, const wchar_t* Text, const wchar_t* Title, uint8_t A, uint8_t B);
+    Dialog_p s_dialog = nullptr;
+    using Text_p = const wchar_t*(*)(int Category, int Id);
+    Text_p s_text = nullptr;
+    bool s_replaying = false;   // game thread only
+    std::atomic<bool> s_events_ready{ false };
+    std::filesystem::path s_log_path;
+    std::mutex s_log_mutex;
     uintptr_t s_base = 0;
     bool s_job_patched = false;
     std::atomic<uint64_t> s_answered{ 0 };
@@ -90,6 +137,39 @@ namespace
             ReadPointer(Context + kLocalCharacter, Character) && Character != 0 &&
             ReadPointer(Character + kRoles, Roles) && Roles != 0 &&
             ReadByte(Roles + kRole, Role) && Role == 0;
+    }
+
+    void Append(const std::string& Text)
+    {
+        std::scoped_lock Lock(s_log_mutex);
+        std::ofstream Stream(s_log_path, std::ios::app);
+        if (Stream)
+        {
+            SYSTEMTIME Now;
+            GetLocalTime(&Now);
+            Stream << StringFormat("%02u:%02u:%02u.%03u  ", Now.wHour, Now.wMinute, Now.wSecond, Now.wMilliseconds) << Text;
+        }
+    }
+
+    uint64_t RestStartHook(void* Manager, int32_t Bonfire)
+    {
+        const uint64_t Started = s_original_rest(Manager, Bonfire);
+        if ((uint8_t)Started != 0 && OwnsTheWorld())
+        {
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted);
+            Append(StringFormat("host: descanso na fogueira %08x; aviso para a sessao\n", (uint32_t)Bonfire));
+        }
+        return Started;
+    }
+
+    void WorldResetHook()
+    {
+        s_original_reset();
+        if (!s_replaying && OwnsTheWorld())
+        {
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::WorldReset);
+            Append("host: o mundo foi reiniciado pelo descanso; pedido para a sessao\n");
+        }
     }
 
     uint64_t SessionUpHook(void* Session)
@@ -162,14 +242,87 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         return false;
     }
     s_job_patched = true;
+
+    // The guest's half: optional, the rest in session works without it.
+    s_log_path = injector.GetDllPath() / "DS2_Bonfire.log";
+    if (Matches(Base + kRestStartOffset, kRestStartPrologue, sizeof(kRestStartPrologue)) &&
+        Matches(Base + kWorldResetOffset, kWorldResetPrologue, sizeof(kWorldResetPrologue)) &&
+        Matches(Base + kDialogOffset, kDialogPrologue, sizeof(kDialogPrologue)) &&
+        Matches(Base + kTextOffset, kTextPrologue, sizeof(kTextPrologue)))
+    {
+        s_original_rest = (RestStart_p)(Base + kRestStartOffset);
+        s_original_reset = (WorldReset_p)(Base + kWorldResetOffset);
+        s_dialog = (Dialog_p)(Base + kDialogOffset);
+        s_text = (Text_p)(Base + kTextOffset);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)s_original_rest, RestStartHook);
+        DetourAttach(&(PVOID&)s_original_reset, WorldResetHook);
+        if (DetourTransactionCommit() == NO_ERROR)
+        {
+            s_events_ready.store(true);
+            Append("=== ds2os fogueira em sessao: descanso, reinicio do mundo e aviso ===\n");
+        }
+        else
+        {
+            s_original_rest = nullptr;
+            s_original_reset = nullptr;
+            Error("[DS2BonfireInSession] nao consegui instalar o aviso e o reinicio do convidado");
+        }
+    }
+    else
+    {
+        Error("[DS2BonfireInSession] o codigo do descanso, do reinicio ou da caixa de mensagem nao e o esperado; so o host descansa");
+    }
     Log("[DS2BonfireInSession] o dono do mundo descansa em fogueira com a sessao de pe");
 #endif
     return true;
 }
 
+void DS2_BonfireInSession_Tick()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    if (!s_events_ready.load() || OwnsTheWorld())
+    {
+        return;
+    }
+    DS2_CoopChannel::Bonfire Said;
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said))
+    {
+        uintptr_t Context = 0, FrontEnd = 0;
+        const bool Shown = ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0;
+        if (Shown)
+        {
+            s_dialog((void*)FrontEnd, kRestNotice, s_text(kTitleCategory, kTitleId), 1, 1);
+        }
+        Append(StringFormat("convidado: o host descansou na fogueira %08x (mapa %08x, ha %llu ms); aviso %s\n",
+            Said.Id, Said.Map, (unsigned long long)Said.AgeMs, Shown ? "mostrado" : "sem frontend"));
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::WorldReset, Said))
+    {
+        s_replaying = true;
+        s_original_reset();
+        s_replaying = false;
+        Append(StringFormat("convidado: mundo do host reiniciado aqui tambem (pedido ha %llu ms)\n", (unsigned long long)Said.AgeMs));
+    }
+#endif
+}
+
 void DS2_BonfireInSessionHook::Uninstall()
 {
 #if defined(_WIN32) && defined(_M_X64)
+    s_events_ready.store(false);
+    if (s_original_rest != nullptr)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
+        DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
+        DetourTransactionCommit();
+        s_original_rest = nullptr;
+        s_original_reset = nullptr;
+    }
     if (s_job_patched)
     {
         WriteCode(s_base + kJobBranch, kJobExpected, sizeof(kJobExpected));

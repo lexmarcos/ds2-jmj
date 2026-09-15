@@ -29,6 +29,13 @@
 /// its return address, and only while the local player owns the world, so a
 /// phantom still cannot rest in someone else's world. 2 is only reachable once
 /// a rest has started, so its branch is patched outright, with expected bytes.
+///
+/// The rest of a host reaches its guests over DS2_CoopChannel: sitting down
+/// sends RestStarted, and each guest shows "A player is resting at a bonfire.";
+/// the world reset the rest runs (FUN_14017fd70) sends WorldReset, and each
+/// guest runs the same reset on its copy of the host's world, so enemies the
+/// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
+/// was sent and received.
 class DS2_BonfireInSessionHook : public Hook
 {
 public:
@@ -36,3 +43,7 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
+
+/// Called every frame on the game's thread by DS2_PartyHook: a guest acts on
+/// the host's rest events.
+void DS2_BonfireInSession_Tick();

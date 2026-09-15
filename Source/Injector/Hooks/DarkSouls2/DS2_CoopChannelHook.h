@@ -77,4 +77,18 @@ namespace DS2_CoopChannel
     // The bonfire the host of this session last announced: false unless it
     // came in the last 30 s from someone who is the host of a session now.
     bool HostBonfire(Bonfire& Out);
+
+    // Things the host tells its guests once, at the moment they happen. The
+    // host queues one from the game's thread; the next poll sends it to every
+    // other member, with the host's respawn record, if the host owns the world
+    // and has guests (otherwise it is dropped). A guest takes each received
+    // event once.
+    enum class HostEvent : uint8_t
+    {
+        RestStarted = 0,   // the host sat at a bonfire
+        WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
+    };
+    constexpr uint8_t kHostEventCount = 2;
+    void SendHostEvent(HostEvent Event);
+    bool TakeHostEvent(HostEvent Event, Bonfire& Out);
 }

@@ -8,6 +8,7 @@
 
 #include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ProgressCarryHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -363,6 +364,7 @@ namespace
     {
         s_original_tick(Self);
         DS2_ProgressCarry_Tick();
+        DS2_BonfireInSession_Tick();
 
         if (s_rescan.exchange(false) && !s_paused.load())
         {
