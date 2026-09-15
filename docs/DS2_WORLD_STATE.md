@@ -57,10 +57,12 @@ Com os dois em Heide, `up --seamless --party`, traço em `25ce10` e `25cec0`
    (`109999`): ligado só no host, presente no convidado na sessão, ausente no
    convidado em casa, desligado de volta no host.
 
-A leitura provável é que o convidado **carrega as flags do host** ao entrar e
-recarrega as próprias ao voltar. Troca ou mescla ainda não se distingue: os
-dois personagens tinham os mesmos bits, e nenhum teste ligou um bit só no
-convidado.
+5. **É troca, não mescla.** O inverso: `109999` ligado só no convidado, em
+   casa. Na sessão o convidado tinha o bit **desligado**, como o host; de volta
+   em casa, ligado de novo (e desligado na memória do Chico em seguida).
+
+O convidado **carrega as flags do host** ao entrar, no lugar das próprias, e
+recupera as próprias ao voltar.
 
 Isso é o comportamento que o design pede para portas e alavancas, **se** elas
 forem flags de mapa: o convidado vê o mundo do host, e o mundo dele não muda.

@@ -535,7 +535,8 @@ por quadro das barreiras de área.
 
 **Medido 15/09** ([DS2_WORLD_STATE.md](DS2_WORLD_STATE.md)): o jogo já faz a
 metade das flags. O convidado recebe **todas** as event flags do host ao entrar
-(de mapa e globais, provado com bits ligados só na memória do host), não as
+(de mapa e globais, provado com bits ligados só na memória do host) no lugar
+das próprias (um bit só do convidado some na sessão e volta em casa), não as
 leva para casa, e em sessão o host propaga cada mudança pelo pacote P2P `0x20`
 (`FUN_140474a60` → `FUN_14051e6b0`), enquanto o convidado só consegue mudar as
 de mapa (`FUN_14025cdb0`).
