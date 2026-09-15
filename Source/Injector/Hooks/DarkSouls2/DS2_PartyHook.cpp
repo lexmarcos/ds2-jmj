@@ -7,6 +7,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_ProgressCarryHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -361,6 +362,7 @@ namespace
     void TickHook(void* Self)
     {
         s_original_tick(Self);
+        DS2_ProgressCarry_Tick();
 
         if (s_rescan.exchange(false) && !s_paused.load())
         {
