@@ -1085,7 +1085,9 @@ void DS2_BonfireInSession_Tick()
         const Cancel Why = (Cancel)Said.Id;
         const uint16_t Bonfire = (uint16_t)Said.Type;
         const bool Mine = s_proposal.Active && s_proposal.Bonfire == Bonfire;
-        if (s_open_vote.Active && !s_open_vote.Host)
+        // A question still open vanishes here; its player is told why.
+        const bool WasAsked = s_open_vote.Active && !s_open_vote.Host;
+        if (WasAsked)
         {
             if (void* FrontEnd = FrontEndOrNull())
             {
@@ -1108,7 +1110,7 @@ void DS2_BonfireInSession_Tick()
         else if (Why == Cancel::Declined || Why == Cancel::NoAnswer || Why == Cancel::Stuck)
         {
             wcsncpy_s(s_message, Why == Cancel::Declined ? kTravelDeclined : Why == Cancel::NoAnswer ? kTravelNoAnswer : kTravelStuck, _TRUNCATE);
-            Show = Mine || s_answered_yes;
+            Show = Mine || s_answered_yes || WasAsked;
         }
         if (Mine)
         {
