@@ -1843,7 +1843,11 @@ namespace
         {
             // The map another player stands in must not unload under its
             // copy here, whatever this machine's player does.
-            if (Character != nullptr && Enabled(FeatureOtherMap) && *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
+            // Not while this machine is bringing a map in for a travel: a
+            // third map forced at that moment is memory this game does not
+            // have, and the other player is on its way out of that map too.
+            if (Character != nullptr && Enabled(FeatureOtherMap) && !s_go_moving.load() &&
+                *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
                 ((const uint8_t*)Character)[kChrType] == kRemotePlayerCopy)
             {
                 int32_t Index = -1;

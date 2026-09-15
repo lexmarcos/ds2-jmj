@@ -488,18 +488,42 @@ namespace
 
     // The bonfire table: where it is, how many entries, and which lit column
     // this machine reads.
+    // The table is written into, so it is checked before it is believed: the
+    // count in range, the column one of the two, and the ids of every entry
+    // strictly ascending and nonzero, which is what the game's own binary
+    // search over this table needs. A manager caught half built would fail
+    // here instead of sending 77 byte writes into the heap.
     bool BonfireTable(uintptr_t& Table, uint32_t& Count, uint8_t& Column)
     {
         const uintptr_t Manager = BonfireManager();
         uint8_t Col = 0;
-        if (Manager == 0 || !ReadPointer(Manager + kBonfireTable, Table) || Table == 0 ||
-            !ReadByte(Manager + kBonfireColumn, Col))
+        uint32_t Many = 0;
+        uintptr_t At = 0;
+        if (Manager == 0 || !ReadPointer(Manager + kBonfireTable, At) || At == 0 ||
+            !ReadByte(Manager + kBonfireColumn, Col) || Col > 3)
         {
             return false;
         }
-        memcpy(&Count, (const void*)(Manager + kBonfireCount), sizeof(Count));
+        memcpy(&Many, (const void*)(Manager + kBonfireCount), sizeof(Many));
+        if (Many < 8 || Many > DS2_CoopChannel::kMaxLitBonfires)
+        {
+            return false;
+        }
+        uint16_t Last = 0;
+        for (uint32_t i = 0; i < Many; ++i)
+        {
+            uint16_t Id = 0;
+            memcpy(&Id, (const void*)(At + i * kBonfireEntry), sizeof(Id));
+            if (Id == 0 || Id <= Last)
+            {
+                return false;
+            }
+            Last = Id;
+        }
+        Table = At;
+        Count = Many;
         Column = Col;
-        return Count != 0 && Count <= DS2_CoopChannel::kMaxLitBonfires;
+        return true;
     }
 
     // The host says which bonfires it has lit, so a guest's travel list is
@@ -537,7 +561,9 @@ namespace
         uintptr_t Table = 0;
         uint32_t Mine = 0;
         uint8_t Column = 0;
-        if (!BonfireTable(Table, Mine, Column) || Column == 0 || Mine != Count)
+        // Never while a map is coming in: that is when a half built manager
+        // could be read, and there is nothing to gain from the hurry.
+        if (DS2_DeathIntercept::Moving() || !BonfireTable(Table, Mine, Column) || Column == 0 || Mine != Count)
         {
             return;
         }
@@ -686,7 +712,10 @@ namespace
         s_go.Active = true;
         s_go.Map = Map;
         s_go.Bonfire = Bonfire;
-        s_go.At = GetTickCount64() + (Closed ? kStandUpMs : 0);
+        // The host goes first and the guests a moment later: two machines
+        // forcing a map in at the same instant is the shape the two crashes
+        // of 15/09 had (docs/DS2_SEAMLESS_COOP_TASKS.md, M8).
+        s_go.At = GetTickCount64() + (Closed || !OwnsTheWorld() ? kStandUpMs : 0);
         Append(StringFormat("viagem para a fogueira %04x (mapa %08x)%s\n", (unsigned)Bonfire, Map,
             Closed ? "; menu da fogueira fechado, esperando levantar" : ""));
     }
