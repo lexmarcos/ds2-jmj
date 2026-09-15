@@ -31,6 +31,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <map>
+#include <tuple>
 #include "ThirdParty/detours/src/detours.h"
 #endif
 
@@ -112,6 +113,46 @@ namespace
 
     // The outer dispatcher's ids as they are; the inner one's with the top
     // bit set, so the two stay apart in the report.
+    // `texto <ms> [rotulo]`: every text the game looks up in a window
+    // (FUN_140503620(category, id)), with who asked. A prompt on screen is a
+    // text looked up every frame, and its caller is where to start.
+    constexpr size_t kTextLookupOffset = 0x503620;
+    constexpr uint8_t kTextLookupPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x56 };
+    using TextLookup_p = const wchar_t*(*)(int Category, int Id);
+    TextLookup_p s_original_text = nullptr;
+    std::atomic<bool> s_text_on{ false };
+    std::chrono::steady_clock::time_point s_text_deadline;
+    std::string s_text_label;
+    struct TextSeen
+    {
+        uint64_t Count = 0;
+        std::wstring Sample;
+    };
+    std::mutex s_text_mutex;
+    std::map<std::tuple<int, int, uintptr_t>, TextSeen> s_text_seen;
+
+    const wchar_t* TextLookupHook(int Category, int Id)
+    {
+        const wchar_t* Text = s_original_text(Category, Id);
+        if (s_text_on.load(std::memory_order_relaxed))
+        {
+            const uintptr_t Caller = (uintptr_t)_ReturnAddress() - s_base;
+            std::scoped_lock Lock(s_text_mutex);
+            if (s_text_seen.size() < 512)
+            {
+                TextSeen& Seen = s_text_seen[{ Category, Id, Caller }];
+                if (Seen.Count++ == 0 && Text != nullptr && !IsBadReadPtr(Text, 2))
+                {
+                    for (size_t i = 0; i < 60 && !IsBadReadPtr(Text + i, sizeof(wchar_t)) && Text[i] != 0; ++i)
+                    {
+                        Seen.Sample.push_back(Text[i]);
+                    }
+                }
+            }
+        }
+        return Text;
+    }
+
     uint64_t EsdQueryHook(void* This, uint32_t* Out, void** Arguments, void* P4)
     {
         return EsdRecord(s_original_esd, 0, This, Out, Arguments, P4);
@@ -791,6 +832,29 @@ namespace
                     Append(StringFormat("=== esd: consultas por %d ms (%s) ===\n", Ms, Label.c_str()));
                 }
             }
+            else if (Kind == "texto")
+            {
+                int Ms = 1500;
+                std::string Label;
+                Parts >> Ms >> Label;
+                if (Ms < 100) { Ms = 100; }
+                if (Ms > 20000) { Ms = 20000; }
+                if (s_original_text == nullptr)
+                {
+                    Append("=== texto: a busca de texto nao foi instalada ===\n");
+                }
+                else
+                {
+                    {
+                        std::scoped_lock Lock(s_text_mutex);
+                        s_text_seen.clear();
+                        s_text_label = Label;
+                    }
+                    s_text_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(Ms);
+                    s_text_on.store(true);
+                    Append(StringFormat("=== texto: buscas por %d ms (%s) ===\n", Ms, Label.c_str()));
+                }
+            }
             else if (Kind == "wpclear")
             {
                 DisarmWatch("pedido");
@@ -815,6 +879,30 @@ namespace
         {
             Append(StringFormat("\n=== armados %zu enderecos ===\n", Added));
         }
+    }
+
+    void FlushText()
+    {
+        s_text_on.store(false);
+        std::map<std::tuple<int, int, uintptr_t>, TextSeen> Seen;
+        std::string Label;
+        {
+            std::scoped_lock Lock(s_text_mutex);
+            Seen.swap(s_text_seen);
+            Label = s_text_label;
+        }
+        std::string Text = StringFormat("=== texto (%s): %zu textos distintos ===\n", Label.c_str(), Seen.size());
+        for (const auto& [Key, Entry] : Seen)
+        {
+            std::string Sample;
+            for (wchar_t C : Entry.Sample)
+            {
+                Sample.push_back(C >= 0x20 && C < 0x7f ? (char)C : '?');
+            }
+            Text += StringFormat("  texto %s cat %d id %d de +0x%zx x%llu: %s\n", Label.c_str(), std::get<0>(Key), std::get<1>(Key),
+                (size_t)std::get<2>(Key), (unsigned long long)Entry.Count, Sample.c_str());
+        }
+        Append(Text);
     }
 
     void FlushEsd()
@@ -851,6 +939,10 @@ namespace
             if (s_esd_on.load() && std::chrono::steady_clock::now() >= s_esd_deadline)
             {
                 FlushEsd();
+            }
+            if (s_text_on.load() && std::chrono::steady_clock::now() >= s_text_deadline)
+            {
+                FlushText();
             }
             if (s_watch_armed.load() && std::chrono::steady_clock::now() >= s_watch_deadline)
             {
@@ -900,10 +992,16 @@ bool DS2_TraceHook::Install(Injector& injector)
             s_original_esd_inner = (EsdQuery_p)(s_base + kEsdInnerOffset);
             DetourAttach(&(PVOID&)s_original_esd_inner, EsdInnerHook);
         }
+        if (memcmp((const void*)(s_base + kTextLookupOffset), kTextLookupPrologue, sizeof(kTextLookupPrologue)) == 0)
+        {
+            s_original_text = (TextLookup_p)(s_base + kTextLookupOffset);
+            DetourAttach(&(PVOID&)s_original_text, TextLookupHook);
+        }
         if (DetourTransactionCommit() != NO_ERROR)
         {
             s_original_esd = nullptr;
             s_original_esd_inner = nullptr;
+            s_original_text = nullptr;
             Error("[DS2Trace] nao consegui instalar o espiao de EzState");
         }
     }
@@ -935,6 +1033,12 @@ void DS2_TraceHook::Uninstall()
         if (s_original_esd_inner != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_esd_inner, EsdInnerHook);
+        }
+        if (s_original_text != nullptr)
+        {
+            s_text_on.store(false);
+            DetourDetach(&(PVOID&)s_original_text, TextLookupHook);
+            s_original_text = nullptr;
         }
         DetourTransactionCommit();
         s_original_esd = nullptr;
