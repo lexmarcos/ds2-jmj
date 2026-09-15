@@ -49,9 +49,8 @@
 /// bonfire's prompt for someone in another world (FUN_140453ce0, patched only
 /// while the local player is a white phantom), the bonfire's event script is
 /// told the player is not a guest (query 130602), the rest heals the guest
-/// (measured 15/09: 400 -> 914), and instead of
-/// resetting its own copy the guest tells the host, who shows "A player is
-/// resting at a bonfire.", resets its world and sends the reset to everyone.
+/// (measured 15/09: 400 -> 914), and instead of resetting its own copy the
+/// guest tells the host, who resets its world and sends the reset to everyone.
 ///
 /// Travel is a vote anyone can start, and when it passes nobody leaves the
 /// session: each machine takes its own player to the bonfire the way a respawn
@@ -62,15 +61,18 @@
 /// travelling together; it is what is left when the destination's map cannot
 /// be brought in.
 ///
-/// The old shape, for reference: The host picking a bonfire, or a guest
-/// picking one (a proposal the host refuses if it has not lit that bonfire),
-/// opens a Yes/No box naming the bonfire and its area for everyone who did not
-/// pick. On a no, or no answer in 30 s, everyone is told. When all say yes the
-/// guests leave the session the legal way (the end a host's travel causes,
-/// which costs no penalty), the host travels - its own pick, or the game's
-/// travel functions for a guest's - and the party joins everyone again at the
-/// new bonfire. A host that travelled with a phantom still in its world closed
-/// twice, and holding the travel any later than the pick froze the host (15/09).
+/// The host picking a bonfire, or a guest picking one (a proposal the host
+/// refuses if it has not lit that bonfire), opens a Yes/No box naming the
+/// bonfire and its area for everyone who did not pick. On a no, or no answer
+/// in 30 s, everyone is told. When all say yes the pick is dropped and every
+/// machine moves its own player.
+///
+/// The fallback, kept for a map the backread hook cannot bring in: the guests
+/// leave the session the legal way (the end a host's travel causes, which
+/// costs no penalty), the host travels with the game's own travel, and the
+/// party joins everyone again at the new bonfire about 75 s later. A host that
+/// travelled with a phantom still in its world closed twice, and holding the
+/// travel any later than the pick froze the host (15/09).
 class DS2_BonfireInSessionHook : public Hook
 {
 public:
