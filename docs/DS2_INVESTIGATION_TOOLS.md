@@ -391,6 +391,29 @@ Um log só com essa linha, num jogo que fechou, quer dizer que a falta não foi
 numa instrução do jogo — ou que o processo morreu sem exceção. As leituras
 protegidas dos hooks nunca aparecem ali: a instrução delas é da DLL.
 
+## As consultas de EzState: `esd` no `DS2_Trace.req`
+
+```
+esd <ms> [rotulo]
+```
+
+Liga por `<ms>` (até 20000) um registro de toda consulta de ambiente de
+EzState que o jogo avalia, nos dois avaliadores: o despachante
+`FUN_140456a90` (marcado `e`) e o interno `FUN_14045c6a0`, que os scripts de
+evento de mapa chamam direto (marcado `i`). No fim da janela o
+`DS2_Trace.log` recebe uma linha por id:
+
+    esd sozinho e 0001fcfd (130301) x150: 000011e4/2
+
+o id em hex e decimal, quantas vezes foi consultado e até quatro respostas
+distintas (`valor/tipo`; tipo 2 é número). Serve para achar a consulta que um
+script usa para decidir algo: rode a mesma ação com e sem a condição, com
+rótulos diferentes, e compare. Os detours ficam instalados sempre; fora da
+janela custam uma leitura atômica por consulta.
+
+Medido 15/09: descansar na fogueira com e sem sessão deu as mesmas quatro
+consultas, então aquela trava não passa por aqui.
+
 ## A varredura de breakpoints, com a lista vinda do Ghidra
 
 O `pdata.py` mencionado acima não existe mais. `Entries.java`, em

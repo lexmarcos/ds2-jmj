@@ -628,7 +628,26 @@ quest.
 
 ---
 
-## M8 — fogueira e viagem
+## M8 — fogueira e viagem — **investigação começada em 15/09**
+
+**Medido 15/09:** com sessão, o host em cima da fogueira recebe o prompt "Rest
+at bonfire" e, ao apertar A, a caixa "Cannot use bonfire"; sem sessão o menu
+abre. **A trava não é uma consulta de EzState**: o espião `esd` (em
+[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)) viu as mesmas quatro
+consultas (`130301`, `130311`, `130321`, `132003`), com os mesmos valores, com e
+sem sessão, nos dois avaliadores.
+
+**Lido:** `FUN_1401cb950` é o descanso (comando de evento via `FUN_140452790`):
+em sessão, se `FUN_14025f690` (estado da sessão diferente de 1 e 2) e
+`FUN_1401cb3d0` (um personagem de outro time vivo no raio da fogueira) e a
+fogueira passa por `FUN_14017dc40`, ele **não** manda o evento `0x453` que
+abre o menu. Candidato forte à trava, **não confirmado**: o breakpoint nele não
+chegou a ser medido com a sessão viva.
+
+**Cuidado:** o Samuel morreu duas vezes nesta investigação, uma por teleporte
+para a origem de um objeto e outra por `press b` às cegas com o menu que não
+abriu (B no mundo é rolar, e a fogueira de Heide's Ruin fica na beira da água).
+Hollow 3 → 5. Feche menus só depois de ver o menu na captura.
 
 - descansar reseta o mundo para todos, com aviso antes
   ("A player is resting at a bonfire");
