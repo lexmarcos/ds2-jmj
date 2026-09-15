@@ -112,6 +112,11 @@ namespace
     constexpr int kNothing = -1;
     std::atomic<int> s_pending_place{ kNothing };
     std::atomic<bool> s_pending_status{ false };
+    // "pausa" in the request file: no sign placed, none accepted, until
+    // "retoma". Without it a session ended on purpose is rejoined within a
+    // minute, which is the point for players and the opposite of what a test
+    // tearing down wants.
+    std::atomic<bool> s_paused{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
 
@@ -122,6 +127,12 @@ namespace
     ULONGLONG s_next_check = 0;
     int s_last_role = -1;
     bool s_back_home = false;
+    // When the sign last went away while the guest stayed in its own world.
+    // Being summoned removes the sign seconds before the guest's role changes,
+    // and placing again inside that window would race the join (seen 15/09,
+    // harmless that time).
+    ULONGLONG s_gone_since = 0;
+    constexpr ULONGLONG kJoinGraceMs = 30000;
     std::string s_last_guest_line;
 
     std::filesystem::path s_log_path;
@@ -252,12 +263,31 @@ namespace
 
         std::string Line;
         const SignState State = ReadSign(Manager);
-        if (Role != 0)
+        const bool Missing = !State.Placed || State.Type != kWhiteSign;
+        if (!Missing)
+        {
+            s_gone_since = 0;
+        }
+        if (s_paused.load())
+        {
+            Line = "pausado";
+        }
+        else if (Role != 0)
         {
             Line = StringFormat("fora do proprio mundo (papel %d): nenhuma placa", Role);
         }
-        else if (!State.Placed || State.Type != kWhiteSign || s_back_home)
+        else if (Missing && !s_back_home && s_last_guest_line == "placa no chao" && s_gone_since == 0)
         {
+            s_gone_since = Now;
+            Line = "a placa sumiu; espero 30 s antes de repor (pode ser a invocacao)";
+        }
+        else if (Missing && !s_back_home && s_gone_since != 0 && Now - s_gone_since < kJoinGraceMs)
+        {
+            Line = "a placa sumiu; espero 30 s antes de repor (pode ser a invocacao)";
+        }
+        else if (Missing || s_back_home)
+        {
+            s_gone_since = 0;
             s_back_home = false;
             PlaceSign(Manager, kWhiteSign, State.Placed ? "convidado de volta: repondo" : "convidado");
             const SignState After = ReadSign(Manager);
@@ -302,8 +332,9 @@ namespace
         }
         if (s_pending_status.exchange(false))
         {
-            Append(StringFormat("%s  === status: manager %p, %s, papel %d, convidado %u, aceita %zu steam id(s) ===\n",
-                Clock().c_str(), Manager, Describe(ReadSign(Manager)).c_str(), LocalRole(), (unsigned)s_guest, s_accept.size()));
+            Append(StringFormat("%s  === status: manager %p, %s, papel %d, convidado %u, aceita %zu steam id(s), pausado %u ===\n",
+                Clock().c_str(), Manager, Describe(ReadSign(Manager)).c_str(), LocalRole(), (unsigned)s_guest, s_accept.size(),
+                (unsigned)s_paused.load()));
         }
         if (s_guest)
         {
@@ -339,6 +370,11 @@ namespace
         uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
         if (s_accept.empty() || OutHandle == nullptr || *OutHandle == 0 || Type != kWhiteSign)
         {
+            return Result;
+        }
+        if (s_paused.load())
+        {
+            Append(StringFormat("%s  host: placa %08x chegou com o party pausado; ignorada\n", Clock().c_str(), *OutHandle));
             return Result;
         }
 
@@ -390,6 +426,12 @@ namespace
                     {
                         s_pending_place.store(Type);
                         Append(StringFormat("%s  === pedido de placa tipo %d, no proximo quadro ===\n", Clock().c_str(), Type));
+                    }
+                    else if (Line.rfind("pausa", 0) == 0 || Line.rfind("retoma", 0) == 0)
+                    {
+                        const bool Pause = Line.rfind("pausa", 0) == 0;
+                        s_paused.store(Pause);
+                        Append(StringFormat("%s  === party %s ===\n", Clock().c_str(), Pause ? "pausado" : "retomado"));
                     }
                     else if (Line.rfind("status", 0) == 0)
                     {

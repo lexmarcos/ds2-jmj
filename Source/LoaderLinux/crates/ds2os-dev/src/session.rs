@@ -409,6 +409,23 @@ pub fn end(env: &Environment, timeout: Duration) -> Result<Value, String> {
     let server_from = std::fs::metadata(&server_log).map(|m| m.len()).unwrap_or(0);
     let started = Instant::now();
 
+    // With --party the guest would put its sign back and the host summon it
+    // again within a minute, so an ended session would not stay ended.
+    let mut party_paused = Vec::new();
+    for party_install in [host_install, guest_install] {
+        let installed = crate::observe::hooks(&party_install.game_dir)
+            .and_then(|r| r.get("hooks").and_then(|h| h.get("DS2 Party")).and_then(Value::as_bool)) == Some(true);
+        if installed {
+            crate::hook_request::exchange(&party_install.game_dir, "DS2_Party", "pausa\n", Duration::from_secs(5), |appended| {
+                Ok(crate::hook_request::lines(appended).iter().any(|l| l.ends_with("=== party pausado ===")).then_some(()))
+            })?;
+            party_paused.push(party_install.account);
+        }
+    }
+    if !party_paused.is_empty() {
+        crate::output::line(format_args!("party pausado nas contas {party_paused:?}; `retoma` em DS2_Party.req o religa"));
+    }
+
     let attempt = (|| -> Result<(Value, u128), String> {
         crate::death::send(host_install, &[crate::death::Order::feature("copias", false)?], Duration::from_secs(5))?;
         crate::death::send(guest_install, &[crate::death::Order::Mode(crate::death::Mode::Observe)], Duration::from_secs(5))?;
@@ -443,6 +460,7 @@ pub fn end(env: &Environment, timeout: Duration) -> Result<Value, String> {
     let restore_errors: Vec<&String> = [restored_host.as_ref().err(), restored_guest.as_ref().err()].into_iter().flatten().collect();
     let mut data = json!({"host": host, "guest": guest, "before": {"hostCopias": host_copies, "guestMode": guest_mode},
         "restored": {"hostCopias": restored_host.is_ok(), "guestMode": restored_guest.is_ok()},
+        "partyPaused": party_paused,
         "restoreErrors": restore_errors,
         "serverLines": server_lines, "notes": notes});
     match attempt {
