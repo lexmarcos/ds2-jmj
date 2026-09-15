@@ -117,6 +117,8 @@ namespace
     CreateSign_p s_original_create_sign = nullptr;
     SignList_p s_original_sign_list = nullptr;
     std::atomic<bool> s_probe{ false };
+    std::atomic<int> s_probe_index{ 0 };
+    std::atomic<uint32_t> s_probe_value{ 0 };
     std::atomic<bool> s_list_logged{ false };
 
     Tick_p s_original_tick = nullptr;
@@ -441,13 +443,11 @@ namespace
     {
         if (Matching != nullptr && s_probe.exchange(false))
         {
-            // Distinct values in the words that read 0 on both characters, so
-            // the server's log names each one.
-            Matching[5] = 0x55;
-            Matching[6] = 0x66;
-            Matching[10] = 0xAA;
-            Matching[11] = 0xBB;
-            Append(StringFormat("%s  sonda: [5]=0x55 [6]=0x66 [10]=0xAA [11]=0xBB nesta placa\n", Clock().c_str()));
+            // One word at a time, with a small value: four large ones at once
+            // kept the sign from ever leaving the client (15/09).
+            const int Index = s_probe_index.load();
+            Matching[Index] = s_probe_value.load();
+            Append(StringFormat("%s  sonda: [%d]=%u nesta placa\n", Clock().c_str(), Index, s_probe_value.load()));
         }
         if (Matching != nullptr)
         {
@@ -482,13 +482,17 @@ namespace
                 while (std::getline(Stream, Line))
                 {
                     int Type = 0;
+                    int ProbeIndex = 0;
+                    unsigned ProbeValue = 0;
                     if (sscanf(Line.c_str(), "placa %d", &Type) == 1 && Type >= 0 && Type < 0x14)
                     {
                         s_pending_place.store(Type);
                         Append(StringFormat("%s  === pedido de placa tipo %d, no proximo quadro ===\n", Clock().c_str(), Type));
                     }
-                    else if (Line.rfind("sonda", 0) == 0)
+                    else if (sscanf(Line.c_str(), "sonda %d %u", &ProbeIndex, &ProbeValue) == 2 && ProbeIndex >= 0 && ProbeIndex < (int)kMatchingWords)
                     {
+                        s_probe_index.store(ProbeIndex);
+                        s_probe_value.store(ProbeValue);
                         s_probe.store(true);
                         s_list_logged.store(false);
                         Append(StringFormat("%s  === sonda armada para a proxima placa ===\n", Clock().c_str()));
