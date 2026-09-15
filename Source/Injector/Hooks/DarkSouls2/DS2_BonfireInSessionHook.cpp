@@ -318,6 +318,8 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
+    ULONGLONG s_job_unpatched_at = 0;
+    constexpr ULONGLONG kJobUnpatchMs = 1500;
     ULONGLONG s_lit_tick = 0;
     uint8_t s_lit_applied_count = 0;
     uint32_t s_lit_applied[3] = {};
@@ -386,6 +388,7 @@ namespace
     void Append(const std::string& Text);
     void ShowMessage(const wchar_t* Text);
     void WorldResetHook();
+    bool WriteCode(uintptr_t Address, const uint8_t* From, size_t Length);
 
     // 0xff without a local character.
     uint8_t LocalRole()
@@ -590,25 +593,61 @@ namespace
         }
     }
 
-    // The bonfire menu, closed the way the game closes it. True when there
-    // was one open.
-    bool CloseBonfireMenu()
+    // Is a bonfire menu open here (the queue in state 10)?
+    bool BonfireMenuOpen()
     {
         uintptr_t Context = 0, Events = 0, Queue = 0;
         int32_t State = 0;
-        if (s_menu_cancel == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+        if (!ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
             !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
             !ReadPointer(Events + kMenuQueue, Queue) || Queue == 0)
         {
             return false;
         }
         memcpy(&State, (const void*)(Queue + kQueueState), sizeof(State));
-        if (State != kQueueBonfireMenu)
+        return State == kQueueBonfireMenu;
+    }
+
+    // The bonfire menu is closed by the game, not by us: calling
+    // FUN_1401994e0 from this tick closed it on a host and killed a guest
+    // twice (15/09, c0000005 writing to 0 inside the menu teardown, on the
+    // frame of the call). What the game itself does, and what was measured
+    // live, is the rest job cancelling the menu because a session is up: so
+    // the job's branch patch comes off for a moment and the job does it.
+    // True when there was a menu to close.
+    bool CloseBonfireMenu()
+    {
+        if (!BonfireMenuOpen())
         {
             return false;
         }
-        s_menu_cancel((void*)Queue);
+        if (s_job_patched && WriteCode(s_base + kJobBranch, kJobExpected, sizeof(kJobExpected)))
+        {
+            s_job_patched = false;
+            s_job_unpatched_at = GetTickCount64();
+            Append("menu da fogueira: a trava do job sai por um instante para o jogo fechar o menu\n");
+        }
         return true;
+    }
+
+    // Put the job's branch back once the menu is gone (or after a second).
+    void KeepJobPatch(ULONGLONG Now)
+    {
+        if (s_job_patched || s_job_unpatched_at == 0)
+        {
+            return;
+        }
+        if (BonfireMenuOpen() && Now - s_job_unpatched_at < kJobUnpatchMs)
+        {
+            return;
+        }
+        if (WriteCode(s_base + kJobBranch, kJobPatch, sizeof(kJobPatch)))
+        {
+            s_job_patched = true;
+            Append(StringFormat("menu da fogueira: trava do job de volta depois de %llu ms\n",
+                (unsigned long long)(Now - s_job_unpatched_at)));
+        }
+        s_job_unpatched_at = 0;
     }
 
     // Whether the local character stands within a few metres of a loaded bonfire.
@@ -716,6 +755,7 @@ namespace
         // forcing a map in at the same instant is the shape the two crashes
         // of 15/09 had (docs/DS2_SEAMLESS_COOP_TASKS.md, M8).
         s_go.At = GetTickCount64() + (Closed || !OwnsTheWorld() ? kStandUpMs : 0);
+        (void)s_menu_cancel;
         Append(StringFormat("viagem para a fogueira %04x (mapa %08x)%s\n", (unsigned)Bonfire, Map,
             Closed ? "; menu da fogueira fechado, esperando levantar" : ""));
     }
@@ -1130,6 +1170,8 @@ void DS2_BonfireInSession_Tick()
             }
         }
     }
+
+    KeepJobPatch(Now);
 
     if (s_go.Active && Now >= s_go.At)
     {
