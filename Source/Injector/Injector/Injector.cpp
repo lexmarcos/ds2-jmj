@@ -32,6 +32,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ProgressCarryHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
@@ -223,6 +224,8 @@ bool Injector::Init()
                 // What was done together goes into the guest's save (M7);
                 // its per-frame work rides on DS2_PartyHook's tick.
                 Hooks.push_back(std::make_unique<DS2_ProgressCarryHook>());
+                // The owner of the world rests with phantoms in it (M8).
+                Hooks.push_back(std::make_unique<DS2_BonfireInSessionHook>());
                 Hooks.push_back(std::make_unique<DS2_BackreadHook>());
             }
 
