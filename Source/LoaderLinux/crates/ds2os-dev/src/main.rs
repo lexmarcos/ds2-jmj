@@ -15,6 +15,7 @@ macro_rules! println {
 mod control;
 mod death;
 mod doctor;
+mod flags;
 mod hook_request;
 mod hooks;
 mod human;
@@ -127,6 +128,18 @@ enum Command {
         /// 1, 2, or both
         #[arg(long, default_value = "both")]
         instance: String,
+    },
+    /// The event flags each game has loaded, from EventFlagManager; with both, what differs
+    Flags {
+        /// 1, 2, or both
+        #[arg(long, default_value = "both")]
+        instance: String,
+        /// One flag id (decimal): its value on each instance
+        #[arg(long)]
+        flag: Option<u64>,
+        /// Only this category (flag / 10000), with every set flag listed
+        #[arg(long)]
+        group: Option<u32>,
     },
     /// Run a declarative scenario file, or the built-in world-ready check
     Scenario {
@@ -803,7 +816,7 @@ fn main() {
     // Read-only observation and the pad daemon do not monopolize the control lock.
     let reads_only = matches!(&cli.command, Command::Probe { lines, .. } if lines.iter().all(|l| !l.trim_start().starts_with("poke")));
     let exclusive = !reads_only && !matches!(&cli.command,
-        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Session { action: None } | Command::Players |
+        Command::Doctor | Command::Status | Command::Observe { .. } | Command::Character { .. } | Command::Flags { .. } | Command::Session { action: None } | Command::Players |
         Command::Where { .. } | Command::Watch { .. } | Command::Logs { .. } | Command::Timeline { .. } |
         Command::Bonfires { .. } | Command::Injector { .. } | Command::Backread { action: BackreadAction::Status, .. } |
         Command::Scenario { action: ScenarioAction::Validate { .. } } |
@@ -857,6 +870,7 @@ fn run(command: Command) -> Result<(), String> {
             session::end(&environment, std::time::Duration::from_secs(seconds)).map(|_| ()),
         Command::Hooks { action: HooksAction::Reset { instance } } => hooks_reset(&environment, &accounts(&instance)?),
         Command::Character { instance } => character_command(&environment, &accounts(&instance)?),
+        Command::Flags { instance, flag, group } => flags_command(&environment, &accounts(&instance)?, flag, group),
         Command::Scenario { action: ScenarioAction::Run { scenario } } => scenario::run(&environment, &scenario),
         Command::Scenario { action: ScenarioAction::Validate { scenario } } => scenario::validate_file(&scenario),
         Command::Up { timer_seconds, no_timer, probe_area, no_enter, no_force_zone, keep_fog, auto_rematch, seamless, party, party_password } => {
@@ -1432,6 +1446,61 @@ fn players(environment: &Environment) -> Result<(), String> {
             player.location, player.status, player.play_time
         );
     }
+    Ok(())
+}
+
+/// Reads each instance's loaded event flags; a flag, a category, or the difference.
+fn flags_command(environment: &Environment, accounts: &[u8], flag: Option<u64>, group: Option<u32>) -> Result<(), String> {
+    let mut read = Vec::new();
+    for &account in accounts {
+        let install = install_for(environment, account)?;
+        if observe::processes(environment, account).is_empty() {
+            return Err(format!("instance_stopped: conta {account} sem processo do jogo"));
+        }
+        read.push((account, flags::read(install)?));
+    }
+    let mut data = serde_json::json!({"instances": read.iter().map(|(account, groups)| serde_json::json!({
+        "instance": account,
+        "categories": groups.iter().filter(|(c, _)| group.is_none_or(|g| g == **c)).map(|(c, b)| serde_json::json!({
+            "category": c, "bytes": b.len(), "set": flags::set_flags(*c, b)})).collect::<Vec<_>>(),
+    })).collect::<Vec<_>>()});
+    if let Some(flag) = flag {
+        let values: Vec<_> = read.iter().map(|(account, groups)| serde_json::json!({"instance": account, "value": flags::flag_value(groups, flag)})).collect();
+        for (account, groups) in &read {
+            match flags::flag_value(groups, flag) {
+                Some(v) => println!("conta {account}: flag {flag} = {}", if v { "ligada" } else { "desligada" }),
+                None => println!("conta {account}: flag {flag} fora das categorias carregadas"),
+            }
+        }
+        data["flag"] = serde_json::json!({"id": flag, "values": values});
+    } else {
+        for (account, groups) in &read {
+            for (category, bytes) in groups.iter().filter(|(c, _)| group.is_none_or(|g| g == **c)) {
+                let set = flags::set_flags(*category, bytes);
+                if group.is_some() { println!("conta {account}: categoria {category}, {} bytes, ligadas {:?}", bytes.len(), set); }
+                else { println!("conta {account}: categoria {category}, {} bytes, {} ligadas", bytes.len(), set.len()); }
+            }
+        }
+    }
+    if let [(a, ga), (b, gb)] = read.as_slice() {
+        let mut differences = Vec::new();
+        for category in ga.keys().chain(gb.keys()).collect::<std::collections::BTreeSet<_>>() {
+            if group.is_some_and(|g| g != *category) { continue; }
+            let sa: std::collections::BTreeSet<u64> = ga.get(category).map(|x| flags::set_flags(*category, x)).unwrap_or_default().into_iter().collect();
+            let sb: std::collections::BTreeSet<u64> = gb.get(category).map(|x| flags::set_flags(*category, x)).unwrap_or_default().into_iter().collect();
+            let only_a: Vec<u64> = sa.difference(&sb).copied().collect();
+            let only_b: Vec<u64> = sb.difference(&sa).copied().collect();
+            let loaded = (ga.contains_key(category), gb.contains_key(category));
+            if !only_a.is_empty() || !only_b.is_empty() || loaded.0 != loaded.1 {
+                println!("categoria {category}: só na conta {a} {only_a:?}, só na conta {b} {only_b:?}{}",
+                    if loaded.0 != loaded.1 { " (carregada só num lado)" } else { "" });
+                differences.push(serde_json::json!({"category": category, "onlyIn": {a.to_string(): only_a, b.to_string(): only_b}, "loaded": [loaded.0, loaded.1]}));
+            }
+        }
+        if differences.is_empty() && flag.is_none() { println!("as duas contas têm as mesmas flags ligadas"); }
+        data["differences"] = serde_json::json!(differences);
+    }
+    output::data(data);
     Ok(())
 }
 

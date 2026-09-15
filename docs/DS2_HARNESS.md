@@ -425,6 +425,23 @@ Sem resposta completa, o erro é o motivo do `locate` (`request_not_consumed`,
 um controlador; uma linha `poke*` toma o `control.lock`. Todo pedido fica no
 `events.jsonl` como evento `probe`, com as linhas enviadas e as respostas.
 
+## As event flags: `flags`
+
+```bash
+ds2os-dev flags                          # as duas contas: categorias e o que difere
+ds2os-dev flags --flag 131000022         # uma flag em cada conta
+ds2os-dev flags --instance 1 --group 13100 --json
+```
+
+Lê o `EventFlagManager` (`*(*(*0x1416148f0+0x70)+0x20)`, vftable conferida) em
+três ou quatro pedidos de MemProbe: o gerenciador, os nós dos 31 baldes nível a
+nível, e os bytes de cada categoria carregada. `data.instances[].categories`
+traz `category`, `bytes` e os ids ligados em `set`; com `--flag`, `data.flag`
+diz `true`/`false`/`null` (categoria não carregada) por conta; com as duas
+contas, `data.differences` lista por categoria o que só uma tem ligado. Só as
+categorias do mapa carregado e as globais (`10`, `20`) existem na memória. O
+layout e o que a sessão faz com elas estão em `docs/DS2_WORLD_STATE.md`.
+
 ## O personagem: `character`
 
 ```bash

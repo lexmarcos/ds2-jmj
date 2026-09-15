@@ -65,6 +65,7 @@ cargo build -p ds2os-dev      # from Source/LoaderLinux
 | `timeline --last 10m \| --since HH:MM \| --run <id>` | server, hook and harness logs merged, ordered and classified; hook logs without a clock only appear with `--run` |
 | `where` | where each character is standing, from the game's own memory |
 | `character --instance N` | the local character from memory: HP, souls, hollowing, deaths, role, bonfire |
+| `flags [--flag ID] [--group G]` | the event flags each game has loaded (`EventFlagManager`), and what differs between the two; a guest in a session carries the host's, see `docs/DS2_WORLD_STATE.md` |
 | `human --instance N` | burns a Human Effigy through Inventory and passes only when hollowing and the hollow state read 0 in memory; presses nothing if already human |
 | `death --instance N mode\|feature\|status` / `death profile set` | the death hook's mode and bill, confirmed by its echo; the profile is reapplied on every `game enter` |
 | `session` | both instances: roles, members, session machine states, channel counters, and `p2pSessionVerified` |
