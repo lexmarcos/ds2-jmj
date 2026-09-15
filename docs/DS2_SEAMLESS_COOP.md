@@ -2018,3 +2018,44 @@ Com a carência e a pausa (build `cc2a3272`): às 00:50:18 o convidado registrou
 "a placa sumiu; espero 30 s", às 00:50:22 já era fantasma, e a sessão formou;
 `session end` pausou as duas contas e em dois minutos o servidor não viu
 placa, summon nem join.
+
+### A senha (15/09)
+
+**O canal.** O `MatchingParameter` do protocolo DS2 tem `name_engraved_ring`
+(o anel de nome gravado, o "senha" nativo do jogo), e ele vai tanto no
+`RequestCreateSign` quanto no `RequestGetSignList`. O `DS2_PartyHook` faz
+detour de `NetSvrSummonSignInterface::CreateSummonSign` (`+0x29dfa0`, o
+parâmetro no 4º argumento) e `GetSummonSignList` (`+0x29e230`, no 5º) e escreve
+nele `0x80000000 | (FNV-1a(senha) & 0x7fffffff)`.
+
+**Qual palavra da estrutura.** O cliente guarda o parâmetro como 16 `uint32`
+numa ordem que não é a do `.proto`. Escrevendo 3 numa palavra por vez e lendo
+o servidor (que agora registra os campos nomeados de cada placa criada):
+
+| palavra | campo | palavra | campo |
+| --- | --- | --- | --- |
+| [0] | calibration (20200) | [5] | **name_engraved_ring** |
+| [1] | soul_memory | [6] | covenant |
+| [2] | soul_level | [7] | unknown_7 |
+| [3] | clear_count | [8] | cross_region |
+| [4] | unknown_4 | [9] | unknown_9 |
+
+`[10]` e `[11]` não chegam a nenhum campo. Até `0x80000000` o anel chega
+intacto; a primeira sonda, com valores grandes em [5], [6], [10] e [11] juntos,
+impediu a placa de sair do cliente (sem `RequestCreateSign` no servidor).
+
+**O servidor.** `DS2_SignManager::CanMatchWith`, antes das regras de tipo e de
+Soul Memory: se a placa ou o poll têm o bit 31 no anel, casa só se os dois têm
+e o código é igual. O log do poll diz o anel de quem pediu.
+
+**Medido** (build `d5219e06`, servidor com o filtro), sempre sem tecla:
+
+| caso | poll de quem pede | resultado |
+| --- | --- | --- |
+| mesma senha, host **sem** lista de steam ids | Samuel, anel 2900300237 | `sent 1`; o host invoca pela senha; `JoinGuestPlayer`, `JoinSession`, `p2pSessionVerified: true` |
+| senhas diferentes | Samuel, anel 2594159542, placa com 2900300237 | `refused by matching 1` em três polls, nenhum summon |
+| host público, convidado com senha | Samuel, anel 0 | `refused by matching 1` |
+| host com senha, placa pública | Chico, anel 2900300237, placa 1002 com anel 0 | `refused by matching 1` em cada poll, nenhum summon |
+
+Detalhe do último: com a própria placa no chão o cliente não pede placas
+alheias, então para ver o poll do Chico ele teve de ser host, não convidado.

@@ -475,10 +475,12 @@ ordem (ver "Sem efígie" e "Entrar sem soapstone" em
    some no próprio mundo) e `DS2PartyAccept` (steam ids cujas placas o host
    invoca sozinho); `ds2os-dev up --seamless --party`. Entrada, `session end`
    e reentrada automática medidas sem tecla nem arquivo.
-2. **A senha.** O host hoje aceita por id de jogador do servidor, que o
-   jogador não conhece. Falta o par se reconhecer por uma senha — e o
-   servidor entregar a placa só a quem tem a mesma, para um estranho não a
-   ver.
+2. ~~**A senha.**~~ **Feito 15/09**: `DS2PartyPassword` vira o
+   `name_engraved_ring` (bit 31 ligado) da placa e do poll; o servidor só casa
+   party com party do mesmo código, antes de tipo e Soul Memory. Um jogador com
+   senha que não é convidado invoca as placas brancas que chegam. Medidos a
+   entrada só pela senha, senhas diferentes, host público contra placa com
+   senha e host com senha contra placa pública.
 3. **Longe um do outro.** Medido só com os dois na mesma fogueira. Placa é
    por área e célula; em áreas diferentes o host nem recebe a placa (ver
    `DS2_StickySigns`).
