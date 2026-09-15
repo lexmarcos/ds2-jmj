@@ -39,6 +39,16 @@
 /// guest runs the same reset on its copy of the host's world, so enemies the
 /// host sees come back come back on the guest too. `DS2_Bonfire.log` says what
 /// was sent and received.
+///
+/// A travel picked by the owner of the world while guests are in it is held
+/// before its load transition starts (FUN_140184a10, phase 1): every guest gets
+/// a Yes/No box; on a no, or no answer in 30 s, the travel is dropped
+/// (FUN_140184bd0(travel, 0)), the bonfire menu closed, the respawn record put
+/// back and the host told why. When all say yes they leave the session the
+/// legal way (the end a host's travel causes, which costs no penalty), the
+/// travel goes ahead with the world empty, and the party joins them again at
+/// the new bonfire. A host that travelled with a phantom still in its world
+/// closed twice (15/09).
 class DS2_BonfireInSessionHook : public Hook
 {
 public:
@@ -51,11 +61,3 @@ public:
 /// the host's rest events.
 void DS2_BonfireInSession_Tick();
 
-/// From the warp hook, on the game's thread: a travel the owner of the world
-/// asked for while guests are in it. True when it is held: every guest gets a
-/// Yes/No box; on a no, or no answer in 30 s, the travel is canceled with a
-/// message. When all say yes they leave the session the legal way (the end a
-/// host's travel causes, which costs no penalty), the host travels with its
-/// world empty, and the party joins them again at the new bonfire. A host
-/// that travelled with a phantom still in its world closed twice (15/09).
-bool DS2_BonfireInSession_HoldTravel(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag);

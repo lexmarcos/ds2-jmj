@@ -8,7 +8,6 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
-#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -51,9 +50,6 @@ namespace
     // What the warp entry reads out of the request before it queues it.
     constexpr uint32_t kReasonBonfire = 1;
     constexpr uint32_t kReasonSession = 4;
-    // Travelling from the bonfire menu (measured 15/09, from +0x184af9).
-    constexpr uint32_t kReasonTravel = 2;
-    bool s_replaying_travel = false;   // game thread only
 
     // Motive 4 alone is not "go home": the same motive carries a guest into
     // the host's world. The game separates the two on the third argument, and
@@ -148,17 +144,6 @@ namespace
 
         Describe(Reentrant ? "(reentrada)" : "warp", Request, Flag, From);
 
-        // A host with guests does not travel with them still in its world:
-        // the session teardown and the unload overlapped once and the host's
-        // game closed (15/09). The travel waits until they have left, and
-        // DS2_BonfireInSessionHook sends it again.
-        if (!Reentrant && !s_replaying_travel && Request != nullptr && Request->Reason == kReasonTravel &&
-            DS2_BonfireInSession_HoldTravel(Context, (const uint8_t*)Request, sizeof(WarpRequest), Flag))
-        {
-            Append("  viagem segurada: os convidados saem da sessao antes\n");
-            return 0;
-        }
-
         // The third argument is the whole test. The entry point reads it
         // itself: motive 4 skips the permission gate only when the argument is
         // zero, and that is the forced return home the session teardown asks
@@ -220,25 +205,6 @@ namespace
         }
     }
 
-#endif
-}
-
-uint8_t DS2_SeamlessCoop_ReplayWarp(void* Context, const uint8_t* Request, size_t Size, uint8_t Flag)
-{
-#ifdef _WIN32
-    if (s_original_warp == nullptr || Size != sizeof(WarpRequest))
-    {
-        return 0;
-    }
-    WarpRequest Copy;
-    memcpy(&Copy, Request, sizeof(Copy));
-    Append("  viagem retomada\n");
-    s_replaying_travel = true;
-    const uint8_t Accepted = WarpHook(Context, &Copy, Flag);
-    s_replaying_travel = false;
-    return Accepted;
-#else
-    return 0;
 #endif
 }
 
