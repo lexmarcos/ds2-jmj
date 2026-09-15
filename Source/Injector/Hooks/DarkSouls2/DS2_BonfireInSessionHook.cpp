@@ -348,6 +348,8 @@ namespace
     wchar_t s_message[512] = {};
     std::atomic<bool> s_events_ready{ false };
     std::filesystem::path s_log_path;
+    std::filesystem::path s_request_path;
+    ULONGLONG s_request_tick = 0;
     std::mutex s_log_mutex;
     uintptr_t s_base = 0;
     bool s_job_patched = false;
@@ -984,6 +986,7 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
 
     // The guest's half: optional, the rest in session works without it.
     s_log_path = injector.GetDllPath() / "DS2_Bonfire.log";
+    s_request_path = injector.GetDllPath() / "DS2_Bonfire.req";
     if (Matches(Base + kRestStartOffset, kRestStartPrologue, sizeof(kRestStartPrologue)) &&
         Matches(Base + kWorldResetOffset, kWorldResetPrologue, sizeof(kWorldResetPrologue)) &&
         Matches(Base + kDialogOffset, kDialogPrologue, sizeof(kDialogPrologue)) &&
@@ -1105,6 +1108,32 @@ void DS2_BonfireInSession_Tick()
         DS2_DeathIntercept::GoToBonfire(s_go.Map, s_go.Bonfire);
         Append(StringFormat("indo para a fogueira %04x (mapa %08x) sem warp e sem sair da sessao\n",
             (unsigned)s_go.Bonfire, s_go.Map));
+    }
+
+    // `DS2_Bonfire.req`: `ir <mapa hex> <fogueira hex>` takes this machine's
+    // player to that bonfire the way a travel does, with no session and no
+    // vote - the control for a travel that closed the game.
+    if (Now - s_request_tick >= 500)
+    {
+        s_request_tick = Now;
+        std::error_code Error;
+        if (!s_request_path.empty() && std::filesystem::exists(s_request_path, Error))
+        {
+            std::ifstream Stream(s_request_path);
+            std::string Line;
+            while (std::getline(Stream, Line))
+            {
+                unsigned Map = 0, Bonfire = 0;
+                if (sscanf_s(Line.c_str(), "ir %x %x", &Map, &Bonfire) == 2)
+                {
+                    Append(StringFormat("pedido: ir para a fogueira %04x do mapa %08x (alcancavel: %s)\n", Bonfire, Map,
+                        DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
+                    StartGo(Map, (uint16_t)Bonfire);
+                }
+            }
+            Stream.close();
+            std::filesystem::remove(s_request_path, Error);
+        }
     }
 
     if (Now - s_lit_tick >= kLitEveryMs)
