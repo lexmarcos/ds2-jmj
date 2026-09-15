@@ -31,6 +31,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
@@ -216,6 +217,8 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_CoopChannelHook>());
                 // Seamless co-op does not gate multiplayer on the effigy.
                 Hooks.push_back(std::make_unique<DS2_HollowSummonHook>());
+                // Entering without a soapstone (M3).
+                Hooks.push_back(std::make_unique<DS2_PartyHook>());
                 Hooks.push_back(std::make_unique<DS2_BackreadHook>());
             }
 
