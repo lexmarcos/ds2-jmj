@@ -5,6 +5,72 @@ abertos pelo host apareçam abertos para quem entrou, e que isso **não** vá pa
 o mundo do convidado. Antes de construir qualquer coisa, a pergunta é o que o
 jogo já faz. Este arquivo é o que foi medido em 15/09.
 
+## Estado: pausado em 15/09 — como retomar
+
+**Por que parou.** Tudo o que dá para medir sem jogar está medido. O que falta
+precisa de um mecanismo que nenhum dos dois personagens acionou, e em Heide
+não há nenhum: flags e estado de objetos são iguais nos dois mundos. Achar e
+acionar um exige teste manual, e isso não estava disponível.
+
+**O que já está feito** (detalhes nas seções abaixo):
+
+1. O convidado recebe **todas** as event flags do host na entrada, no lugar das
+   próprias, e recupera as próprias em casa — medido com bits ligados só num
+   lado.
+2. A entrada é um **instantâneo** que o host exporta e o convidado importa no
+   warp (`FUN_1402bf8f0` → `FUN_1402c2fa0`, um hit de cada, medido), e ele traz
+   também `EventValueManager`, `EventBonfireManager`, `MapStateActManager` e
+   `EnemyGeneratorDeadCounter` (lido).
+3. Em sessão o host propaga cada flag que muda pelo pacote P2P `0x20`
+   (`FUN_140474a60` → `FUN_14051e6b0`); o convidado só consegue mudar flags de
+   mapa (`FUN_14025cdb0`) (lido; nenhuma flag mudou nas sessões medidas).
+4. O save do convidado grava o estado de objetos do próprio mundo, não o do
+   host (`SaveDataObj`, lido).
+5. Ferramentas: `ds2os-dev flags` (lê e compara as flags das duas contas) e
+   `up --party --party-host 2` (o Chico hospeda).
+
+**O próximo passo, exatamente.** Com um mecanismo não acionado no mundo do
+host (alavanca, porta, elevador, parede ilusória):
+
+1. `up --seamless --keep-fog --party [--party-host N]`, `death --instance
+   <host> mode respawn` se houver luta;
+2. traço nas duas instalações: `bp 474a60` (flag em `rdx`, valor em `r8`),
+   `bp 25ce10 deref rdx 8`, `bp 25cec0 deref rdx 8` e `bp 240270` (troca de
+   estado de um `StateActCtrl`, estado novo em `rdx`);
+3. `ds2os-dev flags` e o estado dos objetos (abaixo) nos dois, antes;
+4. **(a)** o host aciona em sessão → hits e diferenças no convidado;
+   **(c)** `session end` → o convidado em casa volta ao próprio estado;
+   **(b)** `retoma` → nova entrada → o convidado vê acionado sem `0x20`.
+
+Mecanismos são de uso único no save; a ordem (a), (c), (b) aproveita o mesmo.
+
+## Estado de objetos de mapa, pela memória
+
+Os objetos com máquina de estado são `MapObjStateActComponent` (vftable
+`0x1410c6d78`, com `0x1410c6dc8` em `+0x30`): `scan 1410c6d78 8 400` acha uns
+120 em Heide. Em cada componente, `+0x08` é o `MapEntity` (posição em
+`+0x70`, `float` x, y, z; `*(+0x28)+8` o id do mapa) e `+0x48` o
+`StateActCtrl` (vftable `0x1410cf668`), onde `+0x1c` é o estado atual, `+0x1d`
+o índice e `+0x1f` uma marca. As fogueiras são objetos destes: a 1,1 m do
+ponto de nascimento de cada uma, estado `30` acesa.
+
+**Uma leitura errada, para não repetir.** A fogueira `0x7bac`, a 170 m de
+Heide's Ruin, leu `10` num cliente e `30` no outro, e pareceu um mecanismo que
+um só acionou. Não era: quem **voltou de uma sessão** lê `10` nos objetos
+distantes (com `+0x1f = 2`) até eles carregarem de novo, e quem carregou o mapa
+do zero lê o estado salvo. Os dois personagens têm as três fogueiras de Heide
+acesas. Compare só objetos com `+0x1f = 0`, ou depois de um carregamento
+limpo nos dois.
+
+`SetState` do `StateActCtrl` é o slot `+0xe8` (`FUN_14023ff60` →
+`FUN_1402410d0` no gerenciador `*(*0x1416148f0+0xa0)+0x280`); o estado atual
+sai do slot `+0x50`. A importação do instantâneo aplica pares `(índice,
+estado)` por esse slot (`FUN_1401f30e0`).
+
+**Cuidado com teleporte.** A origem de um `MapEntity` não é chão: um teleporte
+para a grade de objetos na água a oeste de Heide's Ruin matou o Samuel (hollow
+3 → 4, cobrado pelo modo `respawn`). Use `teleport --to-bonfire` ou `goto`.
+
 ## O jogo já sincroniza event flags por P2P
 
 Os pacotes P2P são registrados em `FUN_14051e3d0`, e o de tipo `0x20` é

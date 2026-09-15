@@ -526,7 +526,7 @@ Tirar da entrada tudo que hoje é cerimônia:
 
 ---
 
-## M4 — estado de mundo autoritativo — **começado em 15/09**
+## M4 — estado de mundo autoritativo — **pausado em 15/09** (falta teste manual; retomar por [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md), "Estado: pausado")
 
 Portas, alavancas, elevadores, atalhos, illusory walls e mecanismos de Pharros
 abertos pelo host aparecem abertos para quem entrou. O trabalho vizinho mais
