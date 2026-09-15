@@ -1987,7 +1987,8 @@ poll de placas do host. A sessão terminou com `session end`.
 
 `DS2PartyGuest` e `DS2PartyAccept` no `Injector.config` (com `DS2SeamlessCoop`);
 no harness, `up --seamless --party` faz da conta 2 convidado e da conta 1 o host
-que aceita a steam id configurada da conta 2.
+que aceita a steam id configurada da conta 2; `--party-host 2` inverte (medido
+15/09: Chico hospedou, Samuel entrou sozinho, `p2pSessionVerified: true`).
 
 - **Convidado**, a cada segundo no quadro do `SummonSignSetCtrl`: no próprio
   mundo (papel 0) sem placa branca, põe uma. Ao voltar de outro mundo (papel

@@ -576,17 +576,18 @@ mod tests {
 /// `--party`: instance 2 keeps its white sign down, instance 1 summons the
 /// signs of instance 2's configured Steam ID. Written over the config `prepare`
 /// just wrote, so every other flag stays as given.
-pub fn prepare_party(environment: &Environment, password: &str) -> Result<Vec<serde_json::Value>, String> {
+pub fn prepare_party(environment: &Environment, password: &str, host: u8) -> Result<Vec<serde_json::Value>, String> {
     let settings = crate::settings::HarnessConfig::load();
-    let guest_id = settings.steam_ids.get(&2).cloned()
-        .ok_or("identity_missing: `ds2os-dev game identity --instance 2 <SteamID64>` antes de --party")?;
+    let guest = if host == 1 { 2 } else { 1 };
+    let guest_id = settings.steam_ids.get(&guest).cloned()
+        .ok_or_else(|| format!("identity_missing: `ds2os-dev game identity --instance {guest} <SteamID64>` antes de --party"))?;
     let mut applied = Vec::new();
     for install in &environment.installs {
         let path = install.game_dir.join(ds2os_core::config::INJECTOR_CONFIG_FILE);
         let mut config: ds2os_core::config::InjectorConfig = serde_json::from_slice(
             &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
-        config.DS2PartyGuest = install.account == 2;
-        config.DS2PartyAccept = if install.account == 1 { guest_id.clone() } else { String::new() };
+        config.DS2PartyGuest = install.account == guest;
+        config.DS2PartyAccept = if install.account == host { guest_id.clone() } else { String::new() };
         config.DS2PartyPassword = password.to_owned();
         config.write_to(&install.game_dir).map_err(|e| format!("{}: {e}", path.display()))?;
         applied.push(serde_json::json!({"instance": install.account, "guest": config.DS2PartyGuest, "accept": config.DS2PartyAccept,
