@@ -676,10 +676,17 @@ namespace
             At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f));
     }
 
-    // A component whose embedded object at +0x50 no longer carries a vftable of
-    // this module. That word is called through (`call *0x18(%rax)` at
-    // +0x3f4230), so it is a vftable whenever the component is alive, which
-    // makes it a check with no opinion in it.
+    // A component holding a word that **cannot be an address on this machine**:
+    // anything with a bit set above bit 47. Every corruption sample of 15 and
+    // 16/09 has exactly that shape, the low half of the pointer still right and
+    // the top written over (`00b54001410e86d8`, `000b0010e81d77b0`).
+    //
+    // A first version demanded instead that `+0x50` hold a vftable **of this
+    // module**, and that was simply wrong: the field legitimately points
+    // outside it, and the very same heap address turns up in dozens of
+    // components at once. Forty false positives in one run, 16/09. The bit-47
+    // test has no opinion about what a field means; it only says the word is
+    // not an address, and a real pointer never trips it.
     //
     // This only **writes down** the address; it changes nothing and skips
     // nothing. Its whole job is to hand a live, already-corrupted address to
@@ -690,22 +697,30 @@ namespace
     // boot; detection and action are kept apart on purpose.
     void NoteIfCorrupt(uintptr_t Component)
     {
-        uintptr_t Embedded = 0;
-        if (Component == 0 || !Peek(Component + kEmbedded, &Embedded, sizeof(Embedded)) ||
-            Embedded == 0 || (InModule(Embedded) && (Embedded & 7) == 0))
+        if (Component == 0)
         {
             return;
         }
-        if (Component == s_corrupt_last)
+        static const size_t Fields[] = { kEmbedded, kModelInstance, kComponentRegistered, kModelFollower };
+        for (const size_t At : Fields)
         {
-            return;   // the same one every frame says nothing new
-        }
-        s_corrupt_last = Component;
-        if (s_corrupt_seen.fetch_add(1) < 40)
-        {
-            Append(StringFormat("%s  t%lu  COMPONENTE CORROMPIDO %p campo +0x50 vale %016llx; pagina %p; %s\n",
-                Clock().c_str(), GetCurrentThreadId(), (void*)Component, (unsigned long long)Embedded,
-                (void*)(Component & ~(uintptr_t)0xfff), DescribeOwner(Component).c_str()));
+            uintptr_t Value = 0;
+            if (!Peek(Component + At, &Value, sizeof(Value)) || Value == 0 || (Value >> 47) == 0)
+            {
+                continue;
+            }
+            if (Component == s_corrupt_last)
+            {
+                return;   // the same one every frame says nothing new
+            }
+            s_corrupt_last = Component;
+            if (s_corrupt_seen.fetch_add(1) < 40)
+            {
+                Append(StringFormat("%s  t%lu  COMPONENTE CORROMPIDO %p campo +0x%zx vale %016llx; pagina %p; %s\n",
+                    Clock().c_str(), GetCurrentThreadId(), (void*)Component, At, (unsigned long long)Value,
+                    (void*)(Component & ~(uintptr_t)0xfff), DescribeOwner(Component).c_str()));
+            }
+            return;
         }
     }
 
