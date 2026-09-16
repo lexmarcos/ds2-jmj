@@ -701,13 +701,26 @@ namespace
         {
             return;
         }
-        static const size_t Fields[] = { kEmbedded, kModelInstance, kComponentRegistered, kModelFollower };
-        for (const size_t At : Fields)
+        // **Only +0x50**, and only the bit-47 test. Both halves of that matter,
+        // and each was learned by getting it wrong on 16/09:
+        //
+        //  - the field has to be one that is provably a pointer. `+0x50` is:
+        //    the game loads it and calls through it (`call *0x18(%rax)`).
+        //    `+0x40`, `+0xc8` and `+0xd0` are **not** pointers in many kinds of
+        //    component, and watching them reported UTF-16 text from a file path
+        //    (`005c003200470053` is "SG2\\"), the float 1.0
+        //    (`3f80000000000001`) and a pair of coordinates
+        //    (`c1ed107bc204b5c5`) as if they were damage;
+        //  - the test has to be "this is not an address", not "this is not a
+        //    vftable of my module". `+0x50` legitimately points outside the
+        //    module, and demanding otherwise reported forty live components at
+        //    once.
         {
+            const size_t At = kEmbedded;
             uintptr_t Value = 0;
             if (!Peek(Component + At, &Value, sizeof(Value)) || Value == 0 || (Value >> 47) == 0)
             {
-                continue;
+                return;
             }
             if (Component == s_corrupt_last)
             {
