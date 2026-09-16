@@ -1417,6 +1417,7 @@ void DS2_BonfireInSession_Tick()
         {
             s_call.Active = false;
             s_barrier.HostArrived = true;
+            SetRecord(s_call.Bonfire);
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire,
                 (int32_t)s_barrier.Vote);
             Append(StringFormat("host: cheguei na fogueira %04x em %llu ms; os convidados podem vir (votacao %u)\n",
@@ -1645,7 +1646,14 @@ void DS2_BonfireInSession_Tick()
             if (Together)
             {
                 s_travel.Active = false;
-                SetRecord(s_travel.Bonfire);
+                // The respawn record is written **after** the host lands, not
+                // here. Writing it first means calling the game's own travel
+                // request builder (FUN_1401843b0) before the move, and with
+                // that done the backread never brings the destination in: the
+                // owner sits at state 0 for the full thirty seconds. Measured
+                // 16/09, twice, from a position where the same travel asked
+                // for by `ir` - which does not touch the record - worked
+                // twenty-three times out of twenty-four.
                 StartGo(s_travel.Map, s_travel.Bonfire);
                 s_call = CallGuests();
                 s_call.Active = true;
