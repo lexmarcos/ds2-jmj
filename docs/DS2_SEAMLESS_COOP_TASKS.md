@@ -1540,6 +1540,58 @@ o nó enquanto ele ainda existe. É a ferramenta que achou o corpo rígido, é a
 única que responde **quem escreve**, e nesta sessão ela foi adiada três vezes em
 favor de hipóteses que a medição derrubou uma a uma.
 
+### A terceira família de queda, e a decisão de refazer a viagem (16/09, 20:44)
+
+Com os jogos entregues ao usuário para uso normal, **o host caiu** numa viagem
+para um destino que os testes nunca tocaram: **Throne Floor (Brume Tower), mapa
+`32240000`**, de DLC. Os dois testes automatizados sempre foram entre
+`0a040000` e `0a1f0000`.
+
+    excecao c0000005 em +0xfd8592, lendo 0x0
+    rax=0  rbx=00007fffed419d30
+    retornos: +0xfd7fcd +0xfd7db2 +0xfd8442 +0xa34e93 +0xa27435
+
+    140fd8585:  call FUN_140a11100
+    140fd858a:  lea  0x30(%rsp),%rdx
+    140fd858f:  mov  %rbx,%r8
+    140fd8592:  mov  (%rax),%r9      <- rax veio nulo
+    140fd8598:  call *0x50(%r9)
+
+**Isto não é a mesma doença.** Não há ponteiro liberado nem carimbo do
+alocador: uma busca (`FUN_140a11100`) devolveu **nulo** e o chamador leu
+`(%rax)` sem conferir. É uma busca por algo que deveria estar carregado e não
+estava. Contadores no momento da queda: tudo zero, `elos podres cortados: 0`.
+
+O convidado não pagou penalidade (ficou em 70); o host caiu antes de dar para
+ler a dele.
+
+**A conclusão do usuário, e ela encerra esta linha de trabalho:** a abordagem é
+**insegura por construção**. Trazer o mapa de destino ao lado do atual e
+teleportar deixa o mundo meio inicializado, e os modos de falha são abertos —
+cada conserto revela o próximo, agora em três famílias distintas:
+
+1. ponteiro liberado com reuso de endereço (corpo rígido — consertado);
+2. nó morto numa lista andada por 74 cópias do mesmo laço (nunca reproduzido
+   depois da varredura, nunca creditado);
+3. busca que devolve nulo porque o destino não está de fato carregado (hoje).
+
+Só a terceira já basta: ela diz que o mapa forçado ao lado **não é equivalente
+a um mapa carregado**, e nenhuma guarda conserta isso — guarda evita fechar o
+jogo, não faz o recurso existir.
+
+**Decidido: a viagem será refeita pela alternativa D** do
+`DS2_PRESENCE_ASTRA_REVIEW.md` — jogar fora o transporte atual e usar o
+carregamento nativo do jogo nos dois lados, para que tudo seja reconstruído e a
+classe inteira de falhas deixe de existir por construção. O plano está sendo
+levantado à parte.
+
+**O que sobrevive, na leitura de hoje e sujeito ao plano:** o contrato
+`Idle/Moving/Arrived/Failed`, a barreira de grupo e a `TravelRelease`, host
+primeiro, as provas de tipo, as guardas `__try` como rede com a regra de que
+disparo é falha arquitetural, e o canal entre as máquinas. O transporte
+(backread forçado, teleporte, contato) e a cortina desenhada por nós é o que
+sai.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
