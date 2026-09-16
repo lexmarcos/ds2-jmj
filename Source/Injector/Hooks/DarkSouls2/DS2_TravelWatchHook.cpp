@@ -167,6 +167,8 @@ namespace
     using TaskWork_p = void(*)(void* Owner, void* Argument, void* Info);
     using TaskDone_p = void(*)(void* Task, int32_t Flag);
     std::atomic<uint64_t> s_caught_task{ 0 };
+    std::atomic<uint64_t> s_corrupt_seen{ 0 };
+    uintptr_t s_corrupt_last = 0;     // game thread only
     std::atomic<uint64_t> s_skipped_physics{ 0 };
     std::atomic<uint64_t> s_caught{ 0 };
 
@@ -674,8 +676,42 @@ namespace
             At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f));
     }
 
+    // A component whose embedded object at +0x50 no longer carries a vftable of
+    // this module. That word is called through (`call *0x18(%rax)` at
+    // +0x3f4230), so it is a vftable whenever the component is alive, which
+    // makes it a check with no opinion in it.
+    //
+    // This only **writes down** the address; it changes nothing and skips
+    // nothing. Its whole job is to hand a live, already-corrupted address to
+    // the page watch of DS2_TraceHook (`wp` in DS2_Trace.req) while the object
+    // still exists, because a watch armed after the fact cannot recover the
+    // write that already happened. An earlier version of this file tried to
+    // *act* on guesses like this one and threw away six hundred good updates a
+    // boot; detection and action are kept apart on purpose.
+    void NoteIfCorrupt(uintptr_t Component)
+    {
+        uintptr_t Embedded = 0;
+        if (Component == 0 || !Peek(Component + kEmbedded, &Embedded, sizeof(Embedded)) ||
+            Embedded == 0 || (InModule(Embedded) && (Embedded & 7) == 0))
+        {
+            return;
+        }
+        if (Component == s_corrupt_last)
+        {
+            return;   // the same one every frame says nothing new
+        }
+        s_corrupt_last = Component;
+        if (s_corrupt_seen.fetch_add(1) < 40)
+        {
+            Append(StringFormat("%s  t%lu  COMPONENTE CORROMPIDO %p campo +0x50 vale %016llx; pagina %p; %s\n",
+                Clock().c_str(), GetCurrentThreadId(), (void*)Component, (unsigned long long)Embedded,
+                (void*)(Component & ~(uintptr_t)0xfff), DescribeOwner(Component).c_str()));
+        }
+    }
+
     void ModelUpdateHook(void* Component, float* Delta)
     {
+        NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
         uintptr_t Fields[3] = {};
         const char* Why = "";
@@ -739,6 +775,7 @@ namespace
     // component is checked, and a fault is skipped instead of fatal.
     void PostPhysicsHook(void* Component, void* Argument)
     {
+        NoteIfCorrupt((uintptr_t)Component);
         uintptr_t Fields[3] = {};
         const char* Why = "";
         if (!ModelHealthy((uintptr_t)Component, Fields, Why))
