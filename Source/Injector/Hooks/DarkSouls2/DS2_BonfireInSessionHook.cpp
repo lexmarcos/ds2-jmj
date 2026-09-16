@@ -364,15 +364,18 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
-    // Travelling without leaving the session is off by default (16/09): it
-    // works on the host and solo, and on a guest it still closes the game
-    // seconds after arriving - memory of the map heap freed while live
-    // components point at it (docs/DS2_SEAMLESS_COOP_TASKS.md, M8). Until that
-    // is understood the vote falls back to the shape that was measured stable:
-    // the guests leave the session legally, the host travels with the game's
-    // own travel, and the party puts everyone back together. `DS2_Bonfire.req`
-    // takes `junta liga` / `junta desliga` to try the seamless one.
-    bool s_together = false;
+    // Travelling without leaving the session is back on by default (16/09).
+    // It was turned off on the morning of the 16th because the guest's game
+    // closed seconds after arriving; that is fixed. Every one of those closes
+    // came from inside the map's own per-frame lifecycle
+    // (FUN_1403cc3f0), at a different address each time, and DS2_BackreadHook
+    // now runs that call under __try: a fault leaves the map half taken apart
+    // instead of closing the game. Measured with two players on 16/09, thirty
+    // legs Heide<->Majula in a row with the session verified throughout, sixty
+    // faults caught, nobody's game closed and no penalty point spent.
+    // `DS2_Bonfire.req` still takes `junta desliga` to fall back to the old
+    // shape (the guests leave the session and the party puts them back).
+    bool s_together = true;
     // The host travels first and calls the guests only once it is standing in
     // the new map: both machines bringing a map in at the same instant closed
     // both games twice (15/09), once inside the CharacterManager and once on
