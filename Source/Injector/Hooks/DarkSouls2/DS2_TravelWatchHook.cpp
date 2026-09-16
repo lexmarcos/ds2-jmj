@@ -47,6 +47,42 @@ namespace
     constexpr size_t kComponentEntity = 0x08;
     constexpr size_t kComponentRegistered = 0xc8;
     constexpr size_t kComponentId = 0xc0;
+    constexpr size_t kEntityAllocator = 0x20;
+
+    // A character's per-frame update, FUN_1403152f0(chr, delta): its model
+    // component at chr+0xf0 (slot +0x30 of it is FUN_1403f4f60, the pre-draw),
+    // its physics at chr+0x100, its roles at chr+0xb0. The guest's game closed
+    // twice inside that pre-draw (15/09 +0x3f4fac and +0x3f510f, 16/09
+    // +0x3f687a): the component's memory had been freed with a heap - its
+    // +0xd0 held allocator metadata, not a pointer - while the character was
+    // still being updated. Before the update runs, the component and the
+    // three objects it points at (+0x40 the model instance, +0xc8 the frame
+    // registration, +0xd0 the follower) are checked; a character whose
+    // component is gone is written down with everything that names it, and
+    // skipped for that frame.
+    constexpr size_t kChrUpdateOffset = 0x3152f0;
+    constexpr uint8_t kChrUpdatePrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00 };
+    constexpr size_t kChrModel = 0xf0;
+    constexpr size_t kChrType = 0x54;              // 2: another player's copy
+    constexpr size_t kChrRoles = 0xb0;
+    constexpr size_t kRole = 0x3c;
+    constexpr size_t kChrPosition = 0x90;
+    constexpr size_t kChrPhysics = 0x100;
+    constexpr size_t kPhysicsContact = 0x10;
+    constexpr size_t kContactHandle = 0xe0;
+    constexpr size_t kModelInstance = 0x40;
+    constexpr size_t kModelFollower = 0xd0;
+
+    // The heaps, the way FUN_1408389e0 finds the one a pointer belongs to:
+    // the manager at 0x141627ac0, +0x488 a pointer to {begin, end} of entries
+    // of 0x18 bytes, {heap, low, high}. A map part brings its own; when the
+    // part goes, its entry goes, and everything allocated from it is freed at
+    // once - whatever still points there is what the crashes read.
+    constexpr size_t kHeapManagerGlobal = 0x1627ac0;
+    constexpr size_t kHeapRanges = 0x488;
+    constexpr size_t kHeapEntry = 0x18;
+    constexpr int kMaxHeaps = 512;
+    constexpr int kGoneRing = 64;
 
     // The per-frame broadcast of every registered component:
     // FUN_14040d2e0(registry, delta, first bucket, count) walks the buckets at
@@ -79,6 +115,30 @@ namespace
     using ByMap_p = void(*)(void* Object, int32_t MapIndex);
     using Broadcast_p = void(*)(void* Registry, void* Argument, uint32_t First, int32_t Count);
     using Update_p = void(*)(void* Owner, void* Argument);
+    using ChrUpdate_p = void(*)(void* Chr, float* Delta);
+    ChrUpdate_p s_original_chr_update = nullptr;
+
+    struct HeapRange
+    {
+        uintptr_t Heap = 0;
+        uintptr_t Low = 0;
+        uintptr_t High = 0;
+    };
+    // Game thread only.
+    HeapRange s_heaps[kMaxHeaps];
+    int s_heap_count = 0;
+    bool s_heaps_known = false;
+    ULONGLONG s_heaps_polled = 0;
+    struct GoneHeap
+    {
+        HeapRange Range;
+        ULONGLONG At = 0;
+    };
+    GoneHeap s_gone[kGoneRing];
+    int s_gone_next = 0;
+    std::atomic<uint64_t> s_skipped_characters{ 0 };
+    uintptr_t s_last_skipped_chr = 0;
+    ULONGLONG s_last_skipped_at = 0;
 
     EntityDtor_p s_original_entity = nullptr;
     ComponentFree_p s_original_component = nullptr;
@@ -110,6 +170,8 @@ namespace
             Stream << Text;
         }
     }
+
+    void Note(const std::string& Text);
 
     bool WindowOpen()
     {
@@ -171,6 +233,139 @@ namespace
         }
     }
 
+    // A pointer the game could have handed out: user space, and not a value
+    // the allocator stamped over a freed block (those carry bits above 47).
+    bool PointerShape(uintptr_t P)
+    {
+        return P >= 0x10000 && (P >> 47) == 0;
+    }
+
+    bool InModule(uintptr_t At)
+    {
+        return At >= s_base && At < s_base + kModuleSpan;
+    }
+
+    // Null, or a live object: pointer-shaped, readable, vftable in the module.
+    bool ObjectOrNull(uintptr_t P)
+    {
+        uintptr_t Vftable = 0;
+        return P == 0 || (PointerShape(P) && Peek(P, &Vftable, sizeof(Vftable)) && InModule(Vftable) && (Vftable & 7) == 0);
+    }
+
+    // The heap table as it is now. False when it cannot be read.
+    bool ReadHeaps(HeapRange* Out, int& Count)
+    {
+        uintptr_t Manager = 0, Vector = 0, Begin = 0, End = 0;
+        Count = 0;
+        if (!Peek(s_base + kHeapManagerGlobal, &Manager, sizeof(Manager)) || Manager == 0 ||
+            !Peek(Manager + kHeapRanges, &Vector, sizeof(Vector)) || Vector == 0 ||
+            !Peek(Vector, &Begin, sizeof(Begin)) || !Peek(Vector + 8, &End, sizeof(End)) ||
+            Begin == 0 || End < Begin || (End - Begin) % kHeapEntry != 0)
+        {
+            return false;
+        }
+        const size_t Many = (End - Begin) / kHeapEntry;
+        if (Many > (size_t)kMaxHeaps)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < Many; ++i)
+        {
+            uintptr_t Entry[3] = {};
+            if (!Peek(Begin + i * kHeapEntry, Entry, sizeof(Entry)))
+            {
+                return false;
+            }
+            Out[Count].Heap = Entry[0];
+            Out[Count].Low = Entry[1];
+            Out[Count].High = Entry[2];
+            ++Count;
+        }
+        return true;
+    }
+
+    // Once a frame: which heaps went since the last look. Written down only
+    // while the window is open; remembered always, so a dead character can be
+    // matched to the heap that took its component.
+    void PollHeaps()
+    {
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_heaps_polled < 15)
+        {
+            return;
+        }
+        s_heaps_polled = Now;
+        HeapRange Next[kMaxHeaps];
+        int Count = 0;
+        if (!ReadHeaps(Next, Count))
+        {
+            return;
+        }
+        if (s_heaps_known)
+        {
+            for (int i = 0; i < s_heap_count; ++i)
+            {
+                bool Still = false;
+                for (int k = 0; k < Count && !Still; ++k)
+                {
+                    Still = Next[k].Heap == s_heaps[i].Heap && Next[k].Low == s_heaps[i].Low;
+                }
+                if (!Still)
+                {
+                    s_gone[s_gone_next] = { s_heaps[i], Now };
+                    s_gone_next = (s_gone_next + 1) % kGoneRing;
+                    if (WindowOpen())
+                    {
+                        Note(StringFormat("heap %p [%p..%p, %zu KB] sumiu", (void*)s_heaps[i].Heap, (void*)s_heaps[i].Low,
+                            (void*)s_heaps[i].High, (size_t)((s_heaps[i].High - s_heaps[i].Low) / 1024)));
+                    }
+                }
+            }
+            if (WindowOpen())
+            {
+                for (int k = 0; k < Count; ++k)
+                {
+                    bool Was = false;
+                    for (int i = 0; i < s_heap_count && !Was; ++i)
+                    {
+                        Was = s_heaps[i].Heap == Next[k].Heap && s_heaps[i].Low == Next[k].Low;
+                    }
+                    if (!Was)
+                    {
+                        Note(StringFormat("heap %p [%p..%p, %zu KB] criado", (void*)Next[k].Heap, (void*)Next[k].Low,
+                            (void*)Next[k].High, (size_t)((Next[k].High - Next[k].Low) / 1024)));
+                    }
+                }
+            }
+        }
+        memcpy(s_heaps, Next, sizeof(HeapRange) * (size_t)Count);
+        s_heap_count = Count;
+        s_heaps_known = true;
+    }
+
+    // Which heap an address sits in: a live one, or one that went (and when).
+    std::string WhoseHeap(uintptr_t At)
+    {
+        for (int i = 0; i < s_heap_count; ++i)
+        {
+            if (At >= s_heaps[i].Low && At < s_heaps[i].High)
+            {
+                return StringFormat("heap vivo %p [%p..%p]", (void*)s_heaps[i].Heap, (void*)s_heaps[i].Low, (void*)s_heaps[i].High);
+            }
+        }
+        const ULONGLONG Now = GetTickCount64();
+        for (int i = 0; i < kGoneRing; ++i)
+        {
+            const GoneHeap& G = s_gone[i];
+            if (G.At != 0 && At >= G.Range.Low && At < G.Range.High)
+            {
+                return StringFormat("heap %p [%p..%p] que sumiu ha %llu ms", (void*)G.Range.Heap, (void*)G.Range.Low,
+                    (void*)G.Range.High, (unsigned long long)(Now - G.At));
+            }
+        }
+        return "heap desconhecido";
+    }
+
     void Note(const std::string& Text)
     {
         s_lines.fetch_add(1);
@@ -202,8 +397,13 @@ namespace
             }
             Peek((uintptr_t)Component + kComponentRegistered, &Registered, sizeof(Registered));
             Peek((uintptr_t)Component + kComponentId, &Id, sizeof(Id));
-            Note(StringFormat("MapModelComponent %p solto (entidade %p, mapa %08x, tipo %u, +0xc8 %p, id %u, flag %d)",
-                Component, (void*)Entity, Map, (unsigned)Kind, (void*)Registered, Id, (int)Flag));
+            uintptr_t Allocator = 0;
+            if (Entity != 0)
+            {
+                Peek(Entity + kEntityAllocator, &Allocator, sizeof(Allocator));
+            }
+            Note(StringFormat("MapModelComponent %p solto (entidade %p, mapa %08x, tipo %u, +0xc8 %p, id %u, flag %d, heap %p)",
+                Component, (void*)Entity, Map, (unsigned)Kind, (void*)Registered, Id, (int)Flag, (void*)Allocator));
         }
         s_original_component(Component, Flag);
     }
@@ -224,6 +424,104 @@ namespace
             Note(StringFormat("personagens do mapa de indice %d desmontados (%p)", MapIndex, Object));
         }
         s_original_characters(Object, MapIndex);
+    }
+
+    // The character's model component and what it points at, checked before
+    // the game touches them. `Why` names the first thing wrong.
+    bool ModelHealthy(uintptr_t Chr, uintptr_t& Component, uintptr_t Fields[3], const char*& Why)
+    {
+        Component = 0;
+        Fields[0] = Fields[1] = Fields[2] = 0;
+        if (!Peek(Chr + kChrModel, &Component, sizeof(Component)))
+        {
+            Why = "personagem ilegivel";
+            return false;
+        }
+        if (Component == 0)
+        {
+            return true;   // a character without a model is the game's business
+        }
+        if (!ObjectOrNull(Component))
+        {
+            Why = "o componente de modelo (+0xf0) nao e um objeto vivo";
+            return false;
+        }
+        if (!Peek(Component + kModelInstance, &Fields[0], sizeof(Fields[0])) ||
+            !Peek(Component + kComponentRegistered, &Fields[1], sizeof(Fields[1])) ||
+            !Peek(Component + kModelFollower, &Fields[2], sizeof(Fields[2])))
+        {
+            Why = "componente ilegivel";
+            return false;
+        }
+        if (!ObjectOrNull(Fields[0]))
+        {
+            Why = "a instancia do modelo (+0x40) foi liberada";
+            return false;
+        }
+        if (!ObjectOrNull(Fields[1]))
+        {
+            Why = "o registro no quadro (+0xc8) foi liberado";
+            return false;
+        }
+        if (!ObjectOrNull(Fields[2]))
+        {
+            Why = "o seguidor (+0xd0) foi liberado";
+            return false;
+        }
+        return true;
+    }
+
+    // Everything that names a character, read with care.
+    std::string DescribeCharacter(uintptr_t Chr, uintptr_t Component)
+    {
+        uintptr_t Vftable = 0, Roles = 0, Physics = 0, Contact = 0, Entity = 0;
+        uint8_t Type = 0xff, Role = 0xff;
+        float At[3] = {};
+        uint32_t Handle = 0, Map = 0xffffffff;
+        uint16_t Kind = 0xffff;
+        Peek(Chr, &Vftable, sizeof(Vftable));
+        Peek(Chr + kChrType, &Type, 1);
+        if (Peek(Chr + kChrRoles, &Roles, sizeof(Roles)) && PointerShape(Roles))
+        {
+            Peek(Roles + kRole, &Role, 1);
+        }
+        Peek(Chr + kChrPosition, At, sizeof(At));
+        if (Peek(Chr + kChrPhysics, &Physics, sizeof(Physics)) && PointerShape(Physics) &&
+            Peek(Physics + kPhysicsContact, &Contact, sizeof(Contact)) && PointerShape(Contact))
+        {
+            Peek(Contact + kContactHandle, &Handle, sizeof(Handle));
+        }
+        if (Component != 0 && Peek(Component + kComponentEntity, &Entity, sizeof(Entity)) && PointerShape(Entity))
+        {
+            DescribeEntity(Entity, Map, Kind);
+        }
+        return StringFormat("personagem %p (vftable +0x%zx, tipo %u, papel %u, em (%.2f, %.2f, %.2f), contato %08x, indice de mapa %d; entidade %p mapa %08x tipo %u)",
+            (void*)Chr, InModule(Vftable) ? (size_t)(Vftable - s_base) : (size_t)0, (unsigned)Type, (unsigned)Role,
+            At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f), (void*)Entity, Map, (unsigned)Kind);
+    }
+
+    void ChrUpdateHook(void* Chr, float* Delta)
+    {
+        PollHeaps();
+        uintptr_t Component = 0, Fields[3] = {};
+        const char* Why = "";
+        if (ModelHealthy((uintptr_t)Chr, Component, Fields, Why))
+        {
+            s_original_chr_update(Chr, Delta);
+            return;
+        }
+        // Skipped, and said once a second per character.
+        const ULONGLONG Now = GetTickCount64();
+        const uint64_t Count = s_skipped_characters.fetch_add(1);
+        if (Count < 200 && ((uintptr_t)Chr != s_last_skipped_chr || Now - s_last_skipped_at >= 1000))
+        {
+            s_last_skipped_chr = (uintptr_t)Chr;
+            s_last_skipped_at = Now;
+            Append(StringFormat("%s  t%lu  UPDATE PULADO: %s; %s; componente %p (+0x40 %p, +0xc8 %p, +0xd0 %p); o componente esta no %s%s\n",
+                Clock().c_str(), GetCurrentThreadId(), Why, DescribeCharacter((uintptr_t)Chr, Component).c_str(), (void*)Component,
+                (void*)Fields[0], (void*)Fields[1], (void*)Fields[2], WhoseHeap(Component).c_str(), Stack().c_str()));
+            s_lines.fetch_add(1);
+        }
     }
 
     // A node whose owner is gone: unlinked the way FUN_14040d2b0 does, so the
@@ -330,10 +628,16 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_objects = (ByMap_p)(Base + kMapObjectsOffset);
     s_original_characters = (ByMap_p)(Base + kMapCharactersOffset);
     s_original_broadcast = (Broadcast_p)(Base + kBroadcastOffset);
+    const bool ChrUpdate = Matches(Base + kChrUpdateOffset, kChrUpdatePrologue, sizeof(kChrUpdatePrologue));
+    s_original_chr_update = ChrUpdate ? (ChrUpdate_p)(Base + kChrUpdateOffset) : nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_broadcast, BroadcastHook);
+    if (ChrUpdate)
+    {
+        DetourAttach(&(PVOID&)s_original_chr_update, ChrUpdateHook);
+    }
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
     DetourAttach(&(PVOID&)s_original_objects, MapObjectsHook);
@@ -346,7 +650,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     }
 
     s_ready.store(true);
-    Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar ===\n", Clock().c_str()));
+    Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar; update de personagem %s ===\n", Clock().c_str(),
+        ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
     Log("[DS2TravelWatch] pronto; so escreve enquanto uma viagem estiver aberta");
 #endif
     return true;
@@ -362,6 +667,10 @@ void DS2_TravelWatchHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_broadcast, BroadcastHook);
+        if (s_original_chr_update != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_chr_update, ChrUpdateHook);
+        }
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);
         DetourDetach(&(PVOID&)s_original_objects, MapObjectsHook);
