@@ -224,6 +224,7 @@ namespace
     }
 
     std::atomic<uint64_t> s_caught_update{ 0 };
+    std::atomic<uint64_t> s_not_owner{ 0 };
 
     void Force(uintptr_t Owner)
     {
@@ -277,6 +278,31 @@ namespace
 
     void OwnerUpdateHook(void* Owner, void* Arg)
     {
+        // Proof, not assumption, before anything is written. Everything below
+        // writes into this object at fixed offsets: the force byte at +0x1e9
+        // and **six blocks of sixteen bytes** of parts mask from +0x10 to
+        // +0x60. If it is ever not a MapAreaCtrlOwner, that is 96 bytes of
+        // part bits OR'd through the middle of something else - and a mask
+        // OR'd over the top half of a live pointer is precisely the corruption
+        // the guest and the host have been dying of: `00000001410e86d8`
+        // becoming `00b54001410e86d8` is `0x00000001 | 0x00b54000`, exactly a
+        // mask landing in the second half of the block at +0x50. The loop that
+        // reads these owners from the streamer has always checked the vftable;
+        // this one, which writes, never did (fixed 16/09).
+        uintptr_t Vftable = 0;
+        const bool IsOwner = Owner != nullptr && ReadPointer((uintptr_t)Owner, Vftable) &&
+            Vftable == s_base + kOwnerVftable;
+        if (!IsOwner)
+        {
+            if (s_not_owner.fetch_add(1) < 20)
+            {
+                Append(StringFormat("%s  ATENCAO: o ciclo do mapa foi chamado com %p, que nao e um MapAreaCtrlOwner (vftable +0x%zx); nao escrevo nada nele\n",
+                    Clock().c_str(), Owner, Vftable >= s_base ? (size_t)(Vftable - s_base) : (size_t)0));
+            }
+            GuardedOwnerUpdate(s_original_update, Owner, Arg);
+            return;
+        }
+
         uint32_t Map = 0;
         const bool HaveMap = Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMap, &Map, sizeof(Map)) && Map != 0;
         uint32_t KeptMask[4] = {};
