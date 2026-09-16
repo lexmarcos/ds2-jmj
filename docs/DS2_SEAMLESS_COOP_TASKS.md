@@ -1015,10 +1015,28 @@ ponteiro vivo aparece escrita por cima, e a metade baixa continua certa.
     000b0010e81d77b0   deveria ser 00007fffe81d77b0
 
 Os valores que aparecem são sempre da mesma família (`00b010`, `00b540`,
-`000b0010`). Não é memória reciclada — um bloco reaproveitado traria uma
-vftable completamente outra, não a certa com o topo sujo. É uma escrita perdida
-pequena, e acontece **só na máquina do convidado e só com a sessão de pé**:
-sozinho, catorze viagens seguidas em dois builds diferentes, nenhuma falha.
+`000b0010`, e uma vez `a140a140a140a140` no qword inteiro). Acontece **só com a
+sessão de pé** — sozinho, catorze viagens seguidas em dois builds diferentes,
+nenhuma falha — e **em qualquer uma das duas máquinas**: em 15 e 16/09 quase
+sempre no convidado, mas em 16/09 às 05:37 foi o **host** que fechou. O que as
+duas têm em comum na viagem junta é segurar a cópia de outro jogador que trocou
+de mapa.
+
+Duas leituras continuam de pé e não dá para escolher entre elas com esta
+amostra:
+
+- **escrita perdida de passo 2 bytes**: alguma cópia de 16 em 16 bits invade
+  objeto vivo, e os dois bytes trocados no meio de um ponteiro são a borda onde
+  ela começa ou termina;
+- **uso depois de liberar**: um bloco parcialmente reaproveitado dá exatamente
+  o mesmo desenho.
+
+Uma coisa já foi conferida e ajuda a separar: o `free` do `DLRegularHeap`
+(`FUN_1408572d0`, slot `+0x68` da vftable do alocador) **não preenche o bloco
+liberado com padrão nenhum** — ele grava ponteiros de lista livre nos vizinhos
+(`+0x10`, `+0x18`). Então um valor de 16 bits repetido não é veneno **deste**
+alocador; e a marca de um uso-depois-de-liberar aqui seria um endereço de heap
+(`00007fff...`) aparecendo onde devia haver outra coisa, não `a140a140`.
 
 **Duas teorias foram testadas e descartadas**, o que vale mais que as que
 sobraram:
@@ -1079,11 +1097,18 @@ vivos**; o valor muda a cada vez, então é dado sendo copiado, não um veneno
 constante. Não é ASCII em UTF-16 (o byte alto seria 0x00), então não são as
 caixas de texto deste hook.
 
-**Falta ainda:** achar quem faz essa escrita. O caminho que não foi tentado é o
-certo para isto: um breakpoint de **escrita em hardware** (registradores de
-depuração Dr0-Dr7 via `SetThreadContext`) sobre o endereço de um ponteiro que
-já foi corrompido uma vez. Tudo mais é adivinhação, e a adivinhação já custou
-quatro rodadas.
+**Falta ainda:** achar quem escreve. O caminho que não foi tentado é o certo
+para isto: um breakpoint de **escrita em hardware** (registradores de depuração
+Dr0-Dr7 via `SetThreadContext`) sobre o endereço de um ponteiro que já foi
+corrompido uma vez. Tudo mais é adivinhação, e a adivinhação já custou quatro
+rodadas.
+
+**Uma varredura que se provou desnecessária, e por que foi tirada.** Durante
+uma dessas rodadas o vigia passou a refazer os 32 baldes da lista do quadro a
+cada quadro. Em mais de quarenta trechos **nenhum balde precisou ser refeito** —
+a lista estava sempre íntegra. Além de não servir, ela guardava o ponteiro do
+registro de um quadro para usar noutro, que é um jeito de corromper memória
+dizendo que está protegendo. Saiu.
 
 **Por isso a viagem junta está desligada por padrão de novo.** Uma queda custa
 dez pontos de desconexão ilegal ao convidado e não há Bone of Order sobrando

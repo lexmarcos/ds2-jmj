@@ -163,7 +163,7 @@ namespace
             memcpy(Out, (const void*)Address, Length);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -176,7 +176,7 @@ namespace
             memcpy((void*)Address, In, Length);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -217,7 +217,7 @@ namespace
             Fn(Owner, Arg);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -390,7 +390,7 @@ namespace
         {
             return s_nav_find_map((void*)Manager, Key);
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return 0;
         }
@@ -402,7 +402,7 @@ namespace
         {
             return s_nav_find_cell((void*)NavMap, Position, kNavSearchRadius, kNavSearchLimit, nullptr);
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return -2;
         }

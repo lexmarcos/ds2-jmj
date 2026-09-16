@@ -107,9 +107,6 @@ namespace
     constexpr size_t kUpdateSlot = 0x30;
     constexpr uintptr_t kModuleSpan = 0x2000000;
     constexpr uint32_t kNodeGuard = 200000;   // a bucket is never this long
-    // The bucket sentinels run from Reg+8 to Reg+0x208, 0x10 apart: 32 of them.
-    constexpr uint32_t kBucketCount = (uint32_t)((kRegistryCurrent - 8) / kBucketStride);
-    constexpr uint32_t kMaxPerBucket = 2048;
 
     // The other two per-frame jobs of a MapModelComponent, besides the
     // pre-draw: FUN_1403f41d0(component, arg) is the post-physics task the
@@ -155,9 +152,6 @@ namespace
     Unregister_p s_original_unregister = nullptr;
     std::atomic<uint64_t> s_skipped_physics{ 0 };
     std::atomic<uint64_t> s_caught{ 0 };
-    std::atomic<uint64_t> s_excised{ 0 };
-    uintptr_t s_registry = 0;          // game thread only
-    ULONGLONG s_last_sweep = 0;        // game thread only
 
     struct HeapRange
     {
@@ -213,12 +207,10 @@ namespace
     }
 
     void Note(const std::string& Text);
-    void SweepNow(const char* Why);
     bool GuardedModelUpdate(ModelUpdate_p Fn, void* Component, float* Delta);
     bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument);
     bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
-    bool WritePointer(uintptr_t At, uintptr_t Value);
     bool GuardedUnregister(Unregister_p Fn, void* Registry, void* Node, char Free);
 
     bool WindowOpen()
@@ -254,7 +246,7 @@ namespace
             memcpy(Out, (const void*)At, Length);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -466,10 +458,6 @@ namespace
 
     void MapObjectsHook(void* Object, int32_t MapIndex)
     {
-        // Before a whole map's objects come apart, the frame's lists are made
-        // consistent: a node whose owner is already gone is what the teardown
-        // trips over (16/09, +0x40d2c7 writing through a freed neighbour).
-        SweepNow("desmontagem de objetos de mapa");
         if (WindowOpen())
         {
             Note(StringFormat("objetos do mapa de indice %d desmontados (%p)", MapIndex, Object));
@@ -479,7 +467,6 @@ namespace
 
     void MapCharactersHook(void* Object, int32_t MapIndex)
     {
-        SweepNow("desmontagem de personagens de mapa");
         if (WindowOpen())
         {
             Note(StringFormat("personagens do mapa de indice %d desmontados (%p)", MapIndex, Object));
@@ -521,7 +508,7 @@ namespace
             Fn(Component, Delta);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -534,7 +521,7 @@ namespace
             Fn(Component, Argument);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -547,7 +534,7 @@ namespace
             Fn(Component, Flag);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -561,23 +548,10 @@ namespace
             *Ok = true;
             return Result;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             *Ok = false;
             return nullptr;
-        }
-    }
-
-    bool WritePointer(uintptr_t At, uintptr_t Value)
-    {
-        __try
-        {
-            *(uintptr_t*)At = Value;
-            return true;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return false;
         }
     }
 
@@ -588,7 +562,7 @@ namespace
             Fn(Registry, Node, Free);
             return true;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
             return false;
         }
@@ -692,7 +666,7 @@ namespace
             *(uintptr_t*)Node = Node;
             *(uintptr_t*)(Node + kNodeNext) = Node;
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
         {
         }
     }
@@ -751,84 +725,6 @@ namespace
         return Result;
     }
 
-    // Every bucket of the frame's registry is rebuilt with the nodes whose
-    // owner is still a live object, in the order it found them. Splicing a
-    // dead node out one at a time writes through its neighbours, and the
-    // neighbour may be dead too; rebuilding touches only the sentinel and the
-    // live nodes. Returns how many buckets had to be rebuilt.
-    uint32_t SweepBuckets(uintptr_t Reg)
-    {
-        uint32_t Rebuilt = 0;
-        for (uint32_t Bucket = 0; Bucket < kBucketCount; ++Bucket)
-        {
-            const uintptr_t End = Reg + 8 + (uintptr_t)Bucket * kBucketStride;
-            uintptr_t Node = 0;
-            if (!Peek(End + kNodeNext, &Node, sizeof(Node)) || Node == 0)
-            {
-                continue;   // never seen used: left exactly as it is
-            }
-            uintptr_t Live[kMaxPerBucket];
-            uint32_t Count = 0;
-            bool Dead = false, Broken = false;
-            for (uint32_t Guard = 0; Node != End && Guard < kNodeGuard; ++Guard)
-            {
-                uintptr_t Next = 0;
-                if (!PointerShape(Node) || !Peek(Node + kNodeNext, &Next, sizeof(Next)))
-                {
-                    Broken = true;
-                    break;
-                }
-                if (OwnerAlive(Node - kNodeFromOwner))
-                {
-                    if (Count >= kMaxPerBucket)
-                    {
-                        Broken = true;
-                        break;
-                    }
-                    Live[Count++] = Node;
-                }
-                else
-                {
-                    Dead = true;
-                }
-                Node = Next;
-            }
-            if (!Dead && !Broken)
-            {
-                continue;
-            }
-            uintptr_t Previous = End;
-            for (uint32_t i = 0; i < Count; ++i)
-            {
-                WritePointer(Previous + kNodeNext, Live[i]);
-                WritePointer(Live[i], Previous);
-                Previous = Live[i];
-            }
-            WritePointer(Previous + kNodeNext, End);
-            WritePointer(End, Previous);
-            ++Rebuilt;
-            const uint64_t Seen = s_excised.fetch_add(1);
-            if (Seen < 60)
-            {
-                Append(StringFormat("%s  t%lu  lista do quadro %u refeita: %u no(s) vivo(s) ficaram%s\n",
-                    Clock().c_str(), GetCurrentThreadId(), Bucket, Count, Broken ? ", e a corrente estava partida" : ""));
-            }
-        }
-        return Rebuilt;
-    }
-
-    void SweepNow(const char* Why)
-    {
-        if (s_registry == 0)
-        {
-            return;
-        }
-        if (SweepBuckets(s_registry) != 0 && WindowOpen())
-        {
-            Note(StringFormat("listas do quadro refeitas: %s", Why != nullptr ? Why : ""));
-        }
-    }
-
     void BroadcastHook(void* Registry, void* Argument, uint32_t First, int32_t Count)
     {
         const uintptr_t Reg = (uintptr_t)Registry;
@@ -839,13 +735,6 @@ namespace
                 *(uint32_t*)(Reg + kRegistryCurrent) = 0xffffffff;
             }
             return;
-        }
-        s_registry = Reg;
-        const ULONGLONG Now = GetTickCount64();
-        if (Now - s_last_sweep >= 8)
-        {
-            s_last_sweep = Now;
-            SweepBuckets(Reg);
         }
         for (uint32_t Bucket = First; Count > 0; --Count, ++Bucket)
         {
@@ -957,6 +846,13 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
         PostPhysics ? "guardada" : "sem guarda (codigo inesperado)", ListLookup ? "guardada" : "sem guarda (codigo inesperado)"));
     Append(StringFormat("%s  === saida da lista do quadro %s ===\n", Clock().c_str(),
         Unregister ? "guardada" : "sem guarda (codigo inesperado)"));
+    // A version of 16/09 also rebuilt all 32 buckets of the frame's registry
+    // every frame, on the theory that something frees a node without taking it
+    // out of the list. In more than forty legs **no bucket ever needed
+    // rebuilding**: the lists were always whole, so that was not the mechanism,
+    // and the sweep is gone. It also wrote through a registry pointer cached
+    // from an earlier frame, which is a way to corrupt memory while claiming to
+    // protect it.
     Log("[DS2TravelWatch] pronto; so escreve enquanto uma viagem estiver aberta");
 #endif
     return true;
