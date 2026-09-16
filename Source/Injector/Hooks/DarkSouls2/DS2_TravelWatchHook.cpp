@@ -124,6 +124,16 @@ namespace
     // each node and following node[1] and node[2]. It died on a freed node on
     // 15/09 (+0x1cbf40). A lookup that faults answers "not found" instead of
     // closing the game.
+    // FUN_14040cea0(registry, node, free): takes a component out of the
+    // frame's lists. It opens by calling slot +0x28 of the node and then walks
+    // the list at registry+0x18, and it is reached from a dozen places, most
+    // of them outside any teardown this file already guards - which is where
+    // the guest died on 16/09 (+0x40cee3, and +0x40d2c7 in the unlink it
+    // calls). A fault here means the component stays registered: it leaks,
+    // and the game lives.
+    constexpr size_t kUnregisterOffset = 0x40cea0;
+    constexpr uint8_t kUnregisterPrologue[] = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xc0, 0x00, 0x00, 0x00, 0x48, 0x89, 0x6c, 0x24, 0x10 };
+
     constexpr size_t kListLookupOffset = 0x1cbf20;
     constexpr uint8_t kListLookupPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8 };
 
@@ -141,6 +151,8 @@ namespace
     PostPhysics_p s_original_post_physics = nullptr;
     using ListLookup_p = void*(*)(void* Owner);
     ListLookup_p s_original_lookup = nullptr;
+    using Unregister_p = void(*)(void* Registry, void* Node, char Free);
+    Unregister_p s_original_unregister = nullptr;
     std::atomic<uint64_t> s_skipped_physics{ 0 };
     std::atomic<uint64_t> s_caught{ 0 };
     std::atomic<uint64_t> s_excised{ 0 };
@@ -207,6 +219,7 @@ namespace
     bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
     bool WritePointer(uintptr_t At, uintptr_t Value);
+    bool GuardedUnregister(Unregister_p Fn, void* Registry, void* Node, char Free);
 
     bool WindowOpen()
     {
@@ -568,6 +581,32 @@ namespace
         }
     }
 
+    bool GuardedUnregister(Unregister_p Fn, void* Registry, void* Node, char Free)
+    {
+        __try
+        {
+            Fn(Registry, Node, Free);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void UnregisterHook(void* Registry, void* Node, char Free)
+    {
+        if (!GuardedUnregister(s_original_unregister, Registry, Node, Free))
+        {
+            const uint64_t Count = s_caught.fetch_add(1);
+            if (Count < 60)
+            {
+                Append(StringFormat("%s  t%lu  FALHA APARADA tirando o no %p da lista do quadro; fica registrado em vez de fechar o jogo%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Node, Stack().c_str()));
+            }
+        }
+    }
+
     // Everything that names the owner of a component, read with care: the
     // entity at +0x08, which for a character is the character itself (the
     // fields after the entity's are only meaningful then).
@@ -878,6 +917,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_post_physics = PostPhysics ? (PostPhysics_p)(Base + kPostPhysicsOffset) : nullptr;
     const bool ListLookup = Matches(Base + kListLookupOffset, kListLookupPrologue, sizeof(kListLookupPrologue));
     s_original_lookup = ListLookup ? (ListLookup_p)(Base + kListLookupOffset) : nullptr;
+    const bool Unregister = Matches(Base + kUnregisterOffset, kUnregisterPrologue, sizeof(kUnregisterPrologue));
+    s_original_unregister = Unregister ? (Unregister_p)(Base + kUnregisterOffset) : nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
@@ -893,6 +934,10 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     if (ListLookup)
     {
         DetourAttach(&(PVOID&)s_original_lookup, ListLookupHook);
+    }
+    if (Unregister)
+    {
+        DetourAttach(&(PVOID&)s_original_unregister, UnregisterHook);
     }
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
@@ -910,6 +955,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
         ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
     Append(StringFormat("%s  === pos-fisica %s, busca em lista %s, listas do quadro refeitas a cada quadro ===\n", Clock().c_str(),
         PostPhysics ? "guardada" : "sem guarda (codigo inesperado)", ListLookup ? "guardada" : "sem guarda (codigo inesperado)"));
+    Append(StringFormat("%s  === saida da lista do quadro %s ===\n", Clock().c_str(),
+        Unregister ? "guardada" : "sem guarda (codigo inesperado)"));
     Log("[DS2TravelWatch] pronto; so escreve enquanto uma viagem estiver aberta");
 #endif
     return true;
@@ -936,6 +983,10 @@ void DS2_TravelWatchHook::Uninstall()
         if (s_original_lookup != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_lookup, ListLookupHook);
+        }
+        if (s_original_unregister != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_unregister, UnregisterHook);
         }
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);
