@@ -318,6 +318,21 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
+    // The host travels first and calls the guests only once it is standing in
+    // the new map: both machines bringing a map in at the same instant closed
+    // both games twice (15/09), once inside the CharacterManager and once on
+    // the frame the old map was let go.
+    struct CallGuests
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        ULONGLONG Ready = 0;
+        ULONGLONG Since = 0;
+    };
+    CallGuests s_call;
+    constexpr ULONGLONG kSettledMs = 1500;
+    constexpr ULONGLONG kCallGiveUpMs = 40000;
     ULONGLONG s_job_unpatched_at = 0;
     constexpr ULONGLONG kJobUnpatchMs = 1500;
     ULONGLONG s_lit_tick = 0;
@@ -1173,6 +1188,34 @@ void DS2_BonfireInSession_Tick()
 
     KeepJobPatch(Now);
 
+    // The host arrived: now the guests may come.
+    if (s_call.Active)
+    {
+        const bool Settled = !s_go.Active && !DS2_DeathIntercept::Moving();
+        if (!Settled)
+        {
+            s_call.Ready = 0;
+            if (Now - s_call.Since > kCallGiveUpMs)
+            {
+                s_call.Active = false;
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire);
+                Append(StringFormat("host: %llu ms e ainda nao cheguei na fogueira %04x; chamo os convidados assim mesmo\n",
+                    (unsigned long long)(Now - s_call.Since), (unsigned)s_call.Bonfire));
+            }
+        }
+        else if (s_call.Ready == 0)
+        {
+            s_call.Ready = Now + kSettledMs;
+        }
+        else if (Now >= s_call.Ready)
+        {
+            s_call.Active = false;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire);
+            Append(StringFormat("host: cheguei na fogueira %04x em %llu ms; os convidados podem vir\n",
+                (unsigned)s_call.Bonfire, (unsigned long long)(Now - s_call.Since)));
+        }
+    }
+
     if (s_go.Active && Now >= s_go.At)
     {
         s_go.Active = false;
@@ -1317,9 +1360,13 @@ void DS2_BonfireInSession_Tick()
             {
                 s_travel.Active = false;
                 SetRecord(s_travel.Bonfire);
-                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_travel.Map, s_travel.Bonfire);
                 StartGo(s_travel.Map, s_travel.Bonfire);
-                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; todos vao juntos para a fogueira %04x\n",
+                s_call = CallGuests();
+                s_call.Active = true;
+                s_call.Map = s_travel.Map;
+                s_call.Bonfire = s_travel.Bonfire;
+                s_call.Since = Now;
+                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; vou primeiro para a fogueira %04x e chamo os convidados ao chegar\n",
                     s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since), (unsigned)s_travel.Bonfire));
             }
             else
