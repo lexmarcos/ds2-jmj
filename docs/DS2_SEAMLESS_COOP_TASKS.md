@@ -857,9 +857,37 @@ conferida antes de ser escrita (contagem, coluna e ids crescentes).
 modal e atrapalhava a luta; por decisão do dono do projeto (15/09) o descanso
 não avisa mais ninguém. O reinício do mundo continua valendo para todos.
 
+**Tela de carregamento na viagem — feita em 15/09.** A viagem sobe a cortina
+que a viagem do próprio jogo usa: `ctx+0x1178 = 1` (que já desliga os prompts
+de ação e o cronômetro da morte) e `FUN_140b06270(*(0x1416751f8)+0x80, 1)`, que
+desliga o desenho do mundo; o jogo ainda escreve o nome da área por cima.
+Desce 1,2 s depois de o personagem estar no lugar, e sempre antes de 25 s.
+Ninguém vê mais o personagem pendurado entre os dois mapas.
+
+**O convidado ainda cai depois de chegar — em aberto.** Com a cortina e com o
+mapa de origem segurado por 15 s, o jogo do convidado ainda fechou duas vezes
+de cinco viagens, sempre **depois** de ele chegar e ficar de pé:
+
+- `+0x3f4fac` / `+0x3f510f`, na tarefa de pré-desenho de personagem do
+  `CharacterManager` (`FUN_1403f4f60`, `mov 0x38(%rcx)` com `rcx` vindo de
+  `chr+0xc8` apontando para memória já liberada, padrão `000b15..`), 1 a 3 s
+  depois da chegada — e, das duas vezes, logo **depois** de a cortina descer;
+- `+0x1cbf40` (`FUN_1401cbf20`), uma lista percorrida com um nó liberado,
+  com o id do mapa novo em `r15`.
+
+Sozinho nunca acontece: oito viagens seguidas de ida e volta, sem sessão, sem
+uma queda. Com sessão, é sempre a máquina do **convidado**, e o que ela tem a
+mais é a cópia do outro jogador, que trocou de mapa junto. A pista que sobra é
+essa: quem guarda `chr+0xc8` para a cópia de outro jogador e o que acontece com
+esse campo quando o mapa dela muda sem warp.
+
+Custo até aqui: 80 pontos de desconexão ilegal no Samuel (de 10) e 10 no Chico.
+O save `antes-viagem-junta` foi tirado antes de tudo isso.
+
 **Falta:**
 
-- **as quedas acima não estão provadas como resolvidas**: cada correção foi
+- **a queda do convidado depois da chegada, acima, é o próximo trabalho**;
+- **as outras quedas não estão provadas como resolvidas**: cada correção foi
   medida uma vez, contra uma falha que não acontecia em toda viagem;
 - **Majula → Heide pela votação** não foi medido no build final (só pelo `ir`,
   que não exercita o "host primeiro"); o registro de renascimento do host na

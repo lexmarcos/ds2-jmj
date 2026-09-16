@@ -271,8 +271,13 @@ host goes first, and once it has stood still in the new map for 1.5 s the
 guests follow, each through the backread hold and focus. Measured: a guest's
 proposal in Heide accepted by the host put both at The Far Fire in 2.2 s plus
 the guest's own move, seeing each other, session verified; and three Heide
-<-> Majula round trips through `DS2_Bonfire.req`'s `ir`. Not measured: that
-the five crashes this cost are actually gone (each fix was measured once,
+<-> Majula round trips through `DS2_Bonfire.req`'s `ir`. The travel now puts the game's own loading curtain up
+(`ctx+0x1178` plus `FUN_140b06270`), so nobody sees the character between maps;
+it comes down 1.2 s after the traveller is standing. Still failing: the
+guest's game closed twice in five travels **after** arriving, in the character
+pre-draw task and in a list with a freed node - never once in eight solo
+travels. Not measured: that
+the earlier crashes this cost are actually gone (each fix was measured once,
 against a failure that did not happen on every travel), any map but Heide and
 Majula, a map the backread hook cannot bring in (the old leave-and-rejoin
 path is still there for it, now untested), three or more players (they would
