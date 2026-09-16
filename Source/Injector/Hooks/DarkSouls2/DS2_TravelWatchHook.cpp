@@ -107,6 +107,25 @@ namespace
     constexpr size_t kUpdateSlot = 0x30;
     constexpr uintptr_t kModuleSpan = 0x2000000;
     constexpr uint32_t kNodeGuard = 200000;   // a bucket is never this long
+    // The bucket sentinels run from Reg+8 to Reg+0x208, 0x10 apart: 32 of them.
+    constexpr uint32_t kBucketCount = (uint32_t)((kRegistryCurrent - 8) / kBucketStride);
+    constexpr uint32_t kMaxPerBucket = 2048;
+
+    // The other two per-frame jobs of a MapModelComponent, besides the
+    // pre-draw: FUN_1403f41d0(component, arg) is the post-physics task the
+    // CharacterManager runs, and it calls slot +0x18 of the object **embedded**
+    // at component+0x50. That embedded object's vftable is what was corrupt on
+    // 16/09 (+0x3f4230, `call *0x18(%rax)` with rax = 00b54001410e86d8).
+    constexpr size_t kPostPhysicsOffset = 0x3f41d0;
+    constexpr uint8_t kPostPhysicsPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x08 };
+    constexpr size_t kEmbedded = 0x50;          // an embedded object: its vftable sits here
+
+    // FUN_1401cbf20(owner): walks the list at owner+0x18, calling slot 0 of
+    // each node and following node[1] and node[2]. It died on a freed node on
+    // 15/09 (+0x1cbf40). A lookup that faults answers "not found" instead of
+    // closing the game.
+    constexpr size_t kListLookupOffset = 0x1cbf20;
+    constexpr uint8_t kListLookupPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8 };
 
     constexpr size_t kFrames = 6;
     constexpr uint64_t kMaxLines = 4000;   // one travel is a few hundred
@@ -118,6 +137,15 @@ namespace
     using Update_p = void(*)(void* Owner, void* Argument);
     using ModelUpdate_p = void(*)(void* Component, float* Delta);
     ModelUpdate_p s_original_model_update = nullptr;
+    using PostPhysics_p = void(*)(void* Component, void* Argument);
+    PostPhysics_p s_original_post_physics = nullptr;
+    using ListLookup_p = void*(*)(void* Owner);
+    ListLookup_p s_original_lookup = nullptr;
+    std::atomic<uint64_t> s_skipped_physics{ 0 };
+    std::atomic<uint64_t> s_caught{ 0 };
+    std::atomic<uint64_t> s_excised{ 0 };
+    uintptr_t s_registry = 0;          // game thread only
+    ULONGLONG s_last_sweep = 0;        // game thread only
 
     struct HeapRange
     {
@@ -173,6 +201,12 @@ namespace
     }
 
     void Note(const std::string& Text);
+    void SweepNow(const char* Why);
+    bool GuardedModelUpdate(ModelUpdate_p Fn, void* Component, float* Delta);
+    bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument);
+    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
+    void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
+    bool WritePointer(uintptr_t At, uintptr_t Value);
 
     bool WindowOpen()
     {
@@ -406,11 +440,23 @@ namespace
             Note(StringFormat("MapModelComponent %p solto (entidade %p, mapa %08x, tipo %u, +0xc8 %p, id %u, flag %d, heap %p)",
                 Component, (void*)Entity, Map, (unsigned)Kind, (void*)Registered, Id, (int)Flag, (void*)Allocator));
         }
-        s_original_component(Component, Flag);
+        if (!GuardedFree(s_original_component, Component, Flag))
+        {
+            const uint64_t Count = s_caught.fetch_add(1);
+            if (Count < 40)
+            {
+                Append(StringFormat("%s  t%lu  FALHA APARADA soltando o MapModelComponent %p; deixo vazar em vez de fechar o jogo%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Component, Stack().c_str()));
+            }
+        }
     }
 
     void MapObjectsHook(void* Object, int32_t MapIndex)
     {
+        // Before a whole map's objects come apart, the frame's lists are made
+        // consistent: a node whose owner is already gone is what the teardown
+        // trips over (16/09, +0x40d2c7 writing through a freed neighbour).
+        SweepNow("desmontagem de objetos de mapa");
         if (WindowOpen())
         {
             Note(StringFormat("objetos do mapa de indice %d desmontados (%p)", MapIndex, Object));
@@ -420,6 +466,7 @@ namespace
 
     void MapCharactersHook(void* Object, int32_t MapIndex)
     {
+        SweepNow("desmontagem de personagens de mapa");
         if (WindowOpen())
         {
             Note(StringFormat("personagens do mapa de indice %d desmontados (%p)", MapIndex, Object));
@@ -459,7 +506,93 @@ namespace
             Why = "o seguidor (+0xd0) foi liberado";
             return false;
         }
+        // The object embedded at +0x50 keeps its vftable there, and that is
+        // the word the post-physics task calls through. On 16/09 it came back
+        // with the right vftable in the low 32 bits and a stamp over bytes 5
+        // to 7 (00b54001410e86d8 for 1410e86d8): the component is still
+        // linked everywhere, and part of it has been written over.
+        uintptr_t Embedded = 0;
+        if (!Peek(Component + kEmbedded, &Embedded, sizeof(Embedded)))
+        {
+            Why = "componente ilegivel no objeto embutido (+0x50)";
+            return false;
+        }
+        if (Embedded != 0 && !(InModule(Embedded) && (Embedded & 7) == 0))
+        {
+            Why = "a vftable do objeto embutido (+0x50) foi escrita por cima";
+            return false;
+        }
         return true;
+    }
+
+    // A fault inside the game is answered by skipping the job, never by
+    // closing the game. No C++ objects live in these: __try cannot sit in a
+    // function that unwinds.
+    bool GuardedModelUpdate(ModelUpdate_p Fn, void* Component, float* Delta)
+    {
+        __try
+        {
+            Fn(Component, Delta);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument)
+    {
+        __try
+        {
+            Fn(Component, Argument);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag)
+    {
+        __try
+        {
+            Fn(Component, Flag);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok)
+    {
+        __try
+        {
+            void* Result = Fn(Owner);
+            *Ok = true;
+            return Result;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            *Ok = false;
+            return nullptr;
+        }
+    }
+
+    bool WritePointer(uintptr_t At, uintptr_t Value)
+    {
+        __try
+        {
+            *(uintptr_t*)At = Value;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
     }
 
     // Everything that names the owner of a component, read with care: the
@@ -505,7 +638,15 @@ namespace
         const char* Why = "";
         if (ModelHealthy((uintptr_t)Component, Fields, Why))
         {
-            s_original_model_update(Component, Delta);
+            if (!GuardedModelUpdate(s_original_model_update, Component, Delta))
+            {
+                const uint64_t Caught = s_caught.fetch_add(1);
+                if (Caught < 40)
+                {
+                    Append(StringFormat("%s  t%lu  FALHA APARADA no pre-desenho do componente %p; pulo o quadro%s\n",
+                        Clock().c_str(), GetCurrentThreadId(), Component, Stack().c_str()));
+                }
+            }
             return;
         }
         // Skipped, and said once a second per component.
@@ -551,6 +692,131 @@ namespace
             Vftable < s_base + kModuleSpan && (Vftable & 7) == 0;
     }
 
+    // The post-physics task of a component, the twin of the pre-draw: the same
+    // component is checked, and a fault is skipped instead of fatal.
+    void PostPhysicsHook(void* Component, void* Argument)
+    {
+        uintptr_t Fields[3] = {};
+        const char* Why = "";
+        if (!ModelHealthy((uintptr_t)Component, Fields, Why))
+        {
+            const uint64_t Count = s_skipped_physics.fetch_add(1);
+            if (Count < 200)
+            {
+                Append(StringFormat("%s  t%lu  POS-FISICA PULADA: %s; componente %p no %s; %s%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Why, Component, WhoseHeap((uintptr_t)Component).c_str(),
+                    DescribeOwner((uintptr_t)Component).c_str(), Stack().c_str()));
+                s_lines.fetch_add(1);
+            }
+            return;
+        }
+        if (!GuardedPostPhysics(s_original_post_physics, Component, Argument))
+        {
+            const uint64_t Caught = s_caught.fetch_add(1);
+            if (Caught < 40)
+            {
+                Append(StringFormat("%s  t%lu  FALHA APARADA na pos-fisica do componente %p; pulo o quadro%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Component, Stack().c_str()));
+            }
+        }
+    }
+
+    // A lookup that walks a list of nodes calling a virtual on each: a fault
+    // there answers "not found".
+    void* ListLookupHook(void* Owner)
+    {
+        bool Ok = false;
+        void* Result = GuardedLookup(s_original_lookup, Owner, &Ok);
+        if (!Ok)
+        {
+            const uint64_t Caught = s_caught.fetch_add(1);
+            if (Caught < 40)
+            {
+                Append(StringFormat("%s  t%lu  FALHA APARADA na busca em lista de %p; respondo nao encontrado%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Owner, Stack().c_str()));
+            }
+        }
+        return Result;
+    }
+
+    // Every bucket of the frame's registry is rebuilt with the nodes whose
+    // owner is still a live object, in the order it found them. Splicing a
+    // dead node out one at a time writes through its neighbours, and the
+    // neighbour may be dead too; rebuilding touches only the sentinel and the
+    // live nodes. Returns how many buckets had to be rebuilt.
+    uint32_t SweepBuckets(uintptr_t Reg)
+    {
+        uint32_t Rebuilt = 0;
+        for (uint32_t Bucket = 0; Bucket < kBucketCount; ++Bucket)
+        {
+            const uintptr_t End = Reg + 8 + (uintptr_t)Bucket * kBucketStride;
+            uintptr_t Node = 0;
+            if (!Peek(End + kNodeNext, &Node, sizeof(Node)) || Node == 0)
+            {
+                continue;   // never seen used: left exactly as it is
+            }
+            uintptr_t Live[kMaxPerBucket];
+            uint32_t Count = 0;
+            bool Dead = false, Broken = false;
+            for (uint32_t Guard = 0; Node != End && Guard < kNodeGuard; ++Guard)
+            {
+                uintptr_t Next = 0;
+                if (!PointerShape(Node) || !Peek(Node + kNodeNext, &Next, sizeof(Next)))
+                {
+                    Broken = true;
+                    break;
+                }
+                if (OwnerAlive(Node - kNodeFromOwner))
+                {
+                    if (Count >= kMaxPerBucket)
+                    {
+                        Broken = true;
+                        break;
+                    }
+                    Live[Count++] = Node;
+                }
+                else
+                {
+                    Dead = true;
+                }
+                Node = Next;
+            }
+            if (!Dead && !Broken)
+            {
+                continue;
+            }
+            uintptr_t Previous = End;
+            for (uint32_t i = 0; i < Count; ++i)
+            {
+                WritePointer(Previous + kNodeNext, Live[i]);
+                WritePointer(Live[i], Previous);
+                Previous = Live[i];
+            }
+            WritePointer(Previous + kNodeNext, End);
+            WritePointer(End, Previous);
+            ++Rebuilt;
+            const uint64_t Seen = s_excised.fetch_add(1);
+            if (Seen < 60)
+            {
+                Append(StringFormat("%s  t%lu  lista do quadro %u refeita: %u no(s) vivo(s) ficaram%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Bucket, Count, Broken ? ", e a corrente estava partida" : ""));
+            }
+        }
+        return Rebuilt;
+    }
+
+    void SweepNow(const char* Why)
+    {
+        if (s_registry == 0)
+        {
+            return;
+        }
+        if (SweepBuckets(s_registry) != 0 && WindowOpen())
+        {
+            Note(StringFormat("listas do quadro refeitas: %s", Why != nullptr ? Why : ""));
+        }
+    }
+
     void BroadcastHook(void* Registry, void* Argument, uint32_t First, int32_t Count)
     {
         const uintptr_t Reg = (uintptr_t)Registry;
@@ -561,6 +827,13 @@ namespace
                 *(uint32_t*)(Reg + kRegistryCurrent) = 0xffffffff;
             }
             return;
+        }
+        s_registry = Reg;
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_last_sweep >= 8)
+        {
+            s_last_sweep = Now;
+            SweepBuckets(Reg);
         }
         for (uint32_t Bucket = First; Count > 0; --Count, ++Bucket)
         {
@@ -628,6 +901,10 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_broadcast = (Broadcast_p)(Base + kBroadcastOffset);
     const bool ChrUpdate = Matches(Base + kModelUpdateOffset, kModelUpdatePrologue, sizeof(kModelUpdatePrologue));
     s_original_model_update = ChrUpdate ? (ModelUpdate_p)(Base + kModelUpdateOffset) : nullptr;
+    const bool PostPhysics = Matches(Base + kPostPhysicsOffset, kPostPhysicsPrologue, sizeof(kPostPhysicsPrologue));
+    s_original_post_physics = PostPhysics ? (PostPhysics_p)(Base + kPostPhysicsOffset) : nullptr;
+    const bool ListLookup = Matches(Base + kListLookupOffset, kListLookupPrologue, sizeof(kListLookupPrologue));
+    s_original_lookup = ListLookup ? (ListLookup_p)(Base + kListLookupOffset) : nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
@@ -635,6 +912,14 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     if (ChrUpdate)
     {
         DetourAttach(&(PVOID&)s_original_model_update, ModelUpdateHook);
+    }
+    if (PostPhysics)
+    {
+        DetourAttach(&(PVOID&)s_original_post_physics, PostPhysicsHook);
+    }
+    if (ListLookup)
+    {
+        DetourAttach(&(PVOID&)s_original_lookup, ListLookupHook);
     }
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
@@ -650,6 +935,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_ready.store(true);
     Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar; pre-desenho do modelo %s ===\n", Clock().c_str(),
         ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
+    Append(StringFormat("%s  === pos-fisica %s, busca em lista %s, listas do quadro refeitas a cada quadro ===\n", Clock().c_str(),
+        PostPhysics ? "guardada" : "sem guarda (codigo inesperado)", ListLookup ? "guardada" : "sem guarda (codigo inesperado)"));
     Log("[DS2TravelWatch] pronto; so escreve enquanto uma viagem estiver aberta");
 #endif
     return true;
@@ -668,6 +955,14 @@ void DS2_TravelWatchHook::Uninstall()
         if (s_original_model_update != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_model_update, ModelUpdateHook);
+        }
+        if (s_original_post_physics != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_post_physics, PostPhysicsHook);
+        }
+        if (s_original_lookup != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_lookup, ListLookupHook);
         }
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);
