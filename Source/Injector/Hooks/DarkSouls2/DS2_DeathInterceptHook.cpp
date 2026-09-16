@@ -188,6 +188,34 @@ namespace
     // what it is rather than be assumed (16/09).
     constexpr size_t kMapOwnerVftable = 0x10e87f0;
 
+    // The character's physics body, and the Havok body hanging off it.
+    //
+    //   chr+0x100            ChrPhysicsCtrl
+    //     +0x40              PXCharacterRigidBody (vftable 0x1411e42a8)
+    //       +0x110           hkpRigidBody         (vftable 0x141126578)
+    //         +0x18          the object the animation chain reads
+    //
+    // Measured on 16/09 with the page watch of DS2_TraceHook, which is what
+    // finally named this: the host's repeating close read exactly that path
+    // (`FUN_140bd15b0`), and the write that landed on `hkpRigidBody+0x18` was
+    // a `rep movsb` of 0x1d28 bytes from FUN_1404e00d0 - a function that
+    // **allocates** a buffer and copies into it. So the Havok body's memory
+    // had been handed out again while the character still pointed at it: a use
+    // after free with the address reused, not a stray write. That also
+    // explains why the garbage kept changing shape, from floats to UTF-16 text
+    // from a file path.
+    //
+    // The cure is the game's own: `FUN_140bd1500` releases both Havok fields
+    // and **writes 0** into them, and every reader tests for 0 first
+    // (`FUN_140bd15b0` returns straight away on a null +0x110). So a body that
+    // is provably gone is simply dropped, and the game takes the null in its
+    // stride. Nothing is freed here: the block is already somebody else's.
+    constexpr size_t kChrPhysics = 0x100;
+    constexpr size_t kPhysicsRigidBody = 0x40;
+    constexpr size_t kRigidBodyHavok = 0x110;
+    constexpr size_t kHavokInner = 0x18;
+    constexpr size_t kPxRigidBodyVftable = 0x11e42a8;
+
     // What a death costs, applied with the game's own functions (step 5, all
     // measured on 13/09 against a death the game carried out itself).
     //
@@ -522,6 +550,7 @@ namespace
     // The map this machine's player last stood in as the owner of its world,
     // and how many frames a guest arriving elsewhere has waited for the host's
     // bonfire (0: not waiting).
+    uint64_t s_bodies_dropped = 0;    // game thread only
     uint32_t s_owner_map = 0;
     uint32_t s_arrival_frames = 0;
     uint8_t s_last_local_role = 0xff;
@@ -1901,10 +1930,89 @@ namespace
             Clock().c_str(), Ctrl, Character, Vftable != 0 ? (size_t)(Vftable - s_base) : 0, Type, Role, Before, After, Hp, Pending));
     }
 
+    // Could this word be an address at all? Anything with a bit set above bit
+    // 47 could not have come from the allocator.
+    bool AddressShaped(uintptr_t Value)
+    {
+        return Value >= 0x10000 && (Value >> 47) == 0;
+    }
+
+    // Drops the character's Havok body if it is provably not there any more.
+    // True when one was dropped.
+    bool DropDeadRigidBody(uint8_t* Chr)
+    {
+        uintptr_t Physics = 0, Body = 0, Havok = 0, Vftable = 0, Inner = 0;
+        if (!ReadPointer((uintptr_t)Chr + kChrPhysics, Physics) ||
+            !ReadPointer(Physics + kPhysicsRigidBody, Body) ||
+            !ReadPointer(Body, Vftable) || Vftable != s_base + kPxRigidBodyVftable)
+        {
+            return false;   // not the shape this knows about: leave it alone
+        }
+        uint8_t Raw[sizeof(uintptr_t)] = {};
+        if (!ReadBytes(Body + kRigidBodyHavok, Raw, sizeof(Raw)))
+        {
+            return false;
+        }
+        memcpy(&Havok, Raw, sizeof(Havok));
+        if (Havok == 0)
+        {
+            return false;   // already the state the game itself leaves behind
+        }
+
+        // Three ways of being gone, in the order they cost: the pointer is not
+        // an address; what it points at has no vftable of this module; or the
+        // field the animation chain reads through holds something that is not
+        // an address either. The third is the one that catches a block already
+        // handed out to somebody else, because such a block can perfectly well
+        // carry a believable vftable again.
+        const char* Why = nullptr;
+        uintptr_t HavokVftable = 0;
+        if (!AddressShaped(Havok))
+        {
+            Why = "o ponteiro nao e um endereco";
+        }
+        else if (!ReadPointer(Havok, HavokVftable) || HavokVftable < s_base ||
+                 HavokVftable >= s_base + 0x2000000 || (HavokVftable & 7) != 0)
+        {
+            Why = "o corpo nao tem vftable do jogo";
+        }
+        else if (ReadPointer(Havok + kHavokInner, Inner) && Inner != 0 && !AddressShaped(Inner))
+        {
+            Why = "o +0x18 do corpo guarda algo que nao e endereco";
+        }
+        if (Why == nullptr)
+        {
+            return false;
+        }
+
+        const uintptr_t Zero = 0;
+        if (!WriteBytes(Body + kRigidBodyHavok, &Zero, sizeof(Zero)))
+        {
+            return false;
+        }
+        if (++s_bodies_dropped <= 40)
+        {
+            Append(StringFormat("%s  corpo rigido morto largado: personagem %p, PXCharacterRigidBody %p, corpo %016llx (%s); o jogo trata o nulo\n",
+                Clock().c_str(), (void*)Chr, (void*)Body, (unsigned long long)Havok, Why));
+        }
+        return true;
+    }
+
     void UpdateHook(void* Ctrl, float Delta)
     {
         uint8_t* Bytes = (uint8_t*)Ctrl;
         void* Character = *(void**)(Bytes + kCtrlCharacter);
+
+        // Every player character, local or another player's copy: the host
+        // died on its own and the guest on the copy, so both are checked.
+        {
+            uintptr_t ChrVftable = 0;
+            if (Character != nullptr && ReadPointer((uintptr_t)Character, ChrVftable) &&
+                ChrVftable == s_base + kPlayerCtrlVftable)
+            {
+                DropDeadRigidBody((uint8_t*)Character);
+            }
+        }
         if (Character == nullptr || Character != LocalCharacter())
         {
             // The map another player stands in must not unload under its
