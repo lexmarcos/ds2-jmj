@@ -124,19 +124,34 @@ namespace
     // Time for the character to stand up before it is taken anywhere.
     constexpr ULONGLONG kStandUpMs = 2000;
 
-    // The curtain the game's own travel puts up while it loads: FUN_140483250
-    // sets `ctx+0x1178` (which stops the action prompts and the death timer)
-    // and calls FUN_140b06270(*(0x1416751f8)+0x80, 1), which turns the world's
-    // drawing off. Our travel has no loading screen of the game's own, so it
-    // borrows those two: nobody sees the character hanging between two maps,
-    // and the per-character pre-draw task - where the guest's game died on
-    // 15/09, FUN_1403f4f60 reading a character's stale +0xc8 - does not run
-    // while the map it came from goes away.
+    // The curtain the game's own travel puts up while it loads, FUN_140483250:
+    // `ctx+0x1178` (which stops the action prompts and the death timer),
+    // FUN_140b06270(*(0x1416751f8)+0x80, 1) (the world's drawing off), the
+    // HUD hidden (FUN_1404ffef0(frontend, 0xffdffbff), slot +0x40 of every
+    // HUD group) and the loading screen itself opened (FUN_1405014b0: event
+    // 0x67 to the front-end object 0x4c5c574, the black screen with the area's
+    // name). FUN_140482d50 takes it down in the reverse order: FUN_1404ffde0
+    // (frontend, mask) shows the HUD, FUN_1404ff310 sends the loading screen
+    // 0x65, FUN_1404fe920 drops the count. With only the first two (15/09)
+    // the guest saw the sky's clear colour, the map's pieces coming in and
+    // the whole HUD (screenshots of 16/09); the loading screen is what makes
+    // it black.
     constexpr size_t kCurtainOffset = 0xb06270;
     constexpr uint8_t kCurtainPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x08, 0x00 };
     constexpr size_t kRenderGlobal = 0x16751f8;
     constexpr size_t kRenderSwitch = 0x80;
     constexpr size_t kLoadingFlag = 0x1178;
+    constexpr size_t kLoadingOpenOffset = 0x5014b0;
+    constexpr uint8_t kLoadingOpenPrologue[] = { 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x0f, 0x85, 0x10, 0x13, 0xb5, 0xff };
+    constexpr size_t kLoadingCloseOffset = 0x4ff310;
+    constexpr uint8_t kLoadingClosePrologue[] = { 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x0f, 0x85, 0xf0, 0x2d, 0xb5, 0xff };
+    constexpr size_t kHudHideOffset = 0x4ffef0;
+    constexpr uint8_t kHudHidePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20 };
+    constexpr size_t kHudShowOffset = 0x4ffde0;
+    constexpr uint8_t kHudShowPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x20, 0x80, 0xb9, 0x0f, 0x03, 0x00, 0x00, 0x00 };
+    constexpr size_t kHudDropOffset = 0x4fe920;
+    constexpr uint8_t kHudDropPrologue[] = { 0x80, 0xb9, 0x0f, 0x03, 0x00, 0x00, 0x00, 0x75, 0x12, 0x8b, 0x81, 0x1c, 0x03, 0x00, 0x00 };
+    constexpr uint32_t kHudMask = 0xffdffbff;
     // Never leave the screen black: the curtain comes down anyway after this.
     constexpr ULONGLONG kCurtainGiveUpMs = 25000;
     // A moment more after arriving, so the map left behind goes away behind it.
@@ -293,6 +308,14 @@ namespace
     using TravelBonfire_p = uint16_t(*)(void* List);
     using MenuCancel_p = void(*)(void* Queue);
     using Curtain_p = void(*)(void* Switch, char On);
+    using FrontEndOnly_p = void(*)(void* FrontEnd);
+    using FrontEndMask_p = void(*)(void* FrontEnd, uint32_t Mask);
+    FrontEndOnly_p s_loading_open = nullptr;
+    FrontEndOnly_p s_loading_close = nullptr;
+    FrontEndMask_p s_hud_hide = nullptr;
+    FrontEndMask_p s_hud_show = nullptr;
+    FrontEndOnly_p s_hud_drop = nullptr;
+    bool s_loading_screen = false;   // the loading screen is up, by us
     using Script_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
     BonfireIndex_p s_bonfire_index = nullptr;
     BonfireMap_p s_bonfire_map = nullptr;
@@ -778,11 +801,35 @@ namespace
             return false;
         }
         const uint8_t Flag = Up ? 1 : 0;
-        memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
-        s_curtain((void*)Switch, Up ? 1 : 0);
+        uintptr_t FrontEnd = 0;
+        const bool Screen = s_loading_open != nullptr && ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0;
+        if (Up)
+        {
+            memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+            s_curtain((void*)Switch, 1);
+            if (Screen && !s_loading_screen)
+            {
+                s_hud_hide((void*)FrontEnd, kHudMask);
+                s_loading_open((void*)FrontEnd);
+                s_loading_screen = true;
+            }
+        }
+        else
+        {
+            if (Screen && s_loading_screen)
+            {
+                s_hud_show((void*)FrontEnd, kHudMask);
+                s_loading_close((void*)FrontEnd);
+                s_hud_drop((void*)FrontEnd);
+            }
+            s_loading_screen = false;
+            s_curtain((void*)Switch, 0);
+            memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+        }
         s_curtain_up = Up;
         s_curtain_since = GetTickCount64();
-        Append(Up ? "tela de carregamento: subiu\n" : "tela de carregamento: desceu\n");
+        Append(Up ? StringFormat("tela de carregamento: subiu%s\n", Screen ? " (com a tela do jogo)" : " (so o desenho do mundo)")
+                  : "tela de carregamento: desceu\n");
         return true;
     }
 
@@ -1194,6 +1241,22 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
         s_curtain = Matches(Base + kCurtainOffset, kCurtainPrologue, sizeof(kCurtainPrologue))
             ? (Curtain_p)(Base + kCurtainOffset) : nullptr;
+        if (Matches(Base + kLoadingOpenOffset, kLoadingOpenPrologue, sizeof(kLoadingOpenPrologue)) &&
+            Matches(Base + kLoadingCloseOffset, kLoadingClosePrologue, sizeof(kLoadingClosePrologue)) &&
+            Matches(Base + kHudHideOffset, kHudHidePrologue, sizeof(kHudHidePrologue)) &&
+            Matches(Base + kHudShowOffset, kHudShowPrologue, sizeof(kHudShowPrologue)) &&
+            Matches(Base + kHudDropOffset, kHudDropPrologue, sizeof(kHudDropPrologue)))
+        {
+            s_loading_open = (FrontEndOnly_p)(Base + kLoadingOpenOffset);
+            s_loading_close = (FrontEndOnly_p)(Base + kLoadingCloseOffset);
+            s_hud_hide = (FrontEndMask_p)(Base + kHudHideOffset);
+            s_hud_show = (FrontEndMask_p)(Base + kHudShowOffset);
+            s_hud_drop = (FrontEndOnly_p)(Base + kHudDropOffset);
+        }
+        else
+        {
+            Error("[DS2BonfireInSession] a tela de carregamento do jogo nao tem o codigo esperado; a cortina so desliga o desenho");
+        }
         s_original_inner_script = (Script_p)(Base + kInnerScriptOffset);
         s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);

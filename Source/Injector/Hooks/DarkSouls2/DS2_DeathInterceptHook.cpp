@@ -1521,10 +1521,16 @@ namespace
         Next.Active = true;
         Next.Why = "viagem";
         Next.KeepHp = true;
+        // Whole, with every part: the solo control keeps it so and never
+        // died; in a session the keep the other player's copy had left for
+        // this map carried only the parts under the copy, and the map went in
+        // two phases (parts on arrival, the rest 30 s later), which is where
+        // the guest died (16/09, +0x40d2c7 in the teardown).
+        const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
         s_travel_from = MapIndexUnder(Chr);
         if (s_travel_from >= 0)
         {
-            DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
+            DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs, Whole);
         }
         DS2_TravelWatch::Open(kWatchStartMs, "viagem comecou");
 
@@ -1741,7 +1747,8 @@ namespace
         const int32_t Landed = MapIndexUnder(Chr);
         if (Arrived && Landed >= 0)
         {
-            DS2_Backread::KeepIndex(Landed, kTravelHoldMs);
+            const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+            DS2_Backread::KeepIndex(Landed, kTravelHoldMs, Whole);
         }
         s_settle.Active = false;
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
@@ -1823,7 +1830,8 @@ namespace
         {
             if (s_travel_from >= 0)
             {
-                DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
+                const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+                DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs, Whole);
             }
             DS2_TravelWatch::Open(kWatchLandedMs, "viagem chegou");
             Append(StringFormat("%s  viagem: o mapa de indice %d de onde sai fica %u ms; o de chegada e segurado quando o personagem pisar nele\n",

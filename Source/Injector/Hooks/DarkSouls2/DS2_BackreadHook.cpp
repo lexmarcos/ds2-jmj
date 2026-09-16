@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -277,6 +278,7 @@ namespace
                 const uint8_t Zero = 0;
                 WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
                 Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
+                DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
             }
 
             if (Map == s_map.load())
@@ -622,10 +624,22 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
             memcpy(Entry->Mask, Mask != nullptr ? Mask : Every, sizeof(Entry->Mask));
             Added = true;
         }
-        else if (Entry != nullptr && Mask != nullptr && memcmp(Entry->Mask, Mask, sizeof(Entry->Mask)) != 0)
+        else if (Entry != nullptr && Mask != nullptr)
         {
-            memcpy(Entry->Mask, Mask, sizeof(Entry->Mask));
-            Changed = true;
+            // Masks add up and never shrink: a travel keeping the map whole
+            // must not be cut down to the parts under the other player's copy
+            // by the keep that copy renews every frame, and the reverse. A
+            // map kept in two shapes at once unloaded in two phases (parts on
+            // arrival, the rest when the keep ended), which the solo control
+            // never does, and that is where the guest's game died (16/09).
+            for (int i = 0; i < 4; ++i)
+            {
+                if ((Entry->Mask[i] | Mask[i]) != Entry->Mask[i])
+                {
+                    Entry->Mask[i] |= Mask[i];
+                    Changed = true;
+                }
+            }
         }
         if (Entry != nullptr)
         {
