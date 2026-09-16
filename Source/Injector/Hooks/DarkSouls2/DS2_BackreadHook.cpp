@@ -198,6 +198,33 @@ namespace
         return StringFormat("%08x%08x%08x%08x", Mask[0], Mask[1], Mask[2], Mask[3]);
     }
 
+    // The whole life of a map runs through one call: FUN_1403cc3f0, the
+    // owner's per-frame update, whose state machine loads the map, streams its
+    // parts and - at the end - takes it all apart. Every crash of 15 and 16/09
+    // that was not caught elsewhere came from inside that teardown, at a
+    // different address each time (+0x3d8782, +0x3c1bf8, +0x40d2c7, +0x3f4230,
+    // +0x3ece30): chasing them one by one only moved the address. One guard
+    // over the whole call covers all of them, and the cost of a fault caught
+    // here is a map that is half taken apart - memory this session will not get
+    // back - instead of a game that closes and costs the guest ten
+    // illegal-disconnect points.
+    //
+    // No C++ objects live in here: __try cannot sit in a function that unwinds.
+    bool GuardedOwnerUpdate(OwnerUpdate_p Fn, void* Owner, void* Arg)
+    {
+        __try
+        {
+            Fn(Owner, Arg);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    std::atomic<uint64_t> s_caught_update{ 0 };
+
     void Force(uintptr_t Owner)
     {
         const uint8_t One = 1;
@@ -305,7 +332,15 @@ namespace
             }
         }
 
-        s_original_update(Owner, Arg);
+        if (!GuardedOwnerUpdate(s_original_update, Owner, Arg))
+        {
+            const uint64_t Count = s_caught_update.fetch_add(1);
+            if (Count < 60)
+            {
+                Append(StringFormat("%s  FALHA APARADA no ciclo do mapa %08x (dono %p); o mapa fica pela metade em vez de o jogo fechar\n",
+                    Clock().c_str(), Map, Owner));
+            }
+        }
 
         if (HaveMap && Map == s_map.load())
         {
