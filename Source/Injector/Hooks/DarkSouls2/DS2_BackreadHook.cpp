@@ -629,7 +629,14 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
         }
         if (Entry != nullptr)
         {
-            Entry->Until = Until;
+            // The longest deadline wins: the keep a travel asks for (tens of
+            // seconds) must not be cut short by the keep the other player's
+            // copy renews every frame (a few seconds). Measured 15/09: a
+            // 30 s hold on the map a travel left became 5 s and the map went.
+            if (Until > Entry->Until)
+            {
+                Entry->Until = Until;
+            }
             memcpy(Now, Entry->Mask, sizeof(Now));
         }
     }

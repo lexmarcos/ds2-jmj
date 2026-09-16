@@ -1735,6 +1735,14 @@ namespace
         }
         DS2_Backread::Unfocus();
         DS2_Backread::Release();
+        // The map arrived at is held by the travel too, now that the contact
+        // under the character says which index it is (right after the jump it
+        // still answers the map left behind).
+        const int32_t Landed = MapIndexUnder(Chr);
+        if (Arrived && Landed >= 0)
+        {
+            DS2_Backread::KeepIndex(Landed, kTravelHoldMs);
+        }
         s_settle.Active = false;
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
             Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str(),
@@ -1813,18 +1821,13 @@ namespace
         s_recovery.Active = false;
         if (s_go_moving.exchange(false))
         {
-            const int32_t Here = MapIndexUnder(Chr);
             if (s_travel_from >= 0)
             {
                 DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
             }
-            if (Here >= 0)
-            {
-                DS2_Backread::KeepIndex(Here, kTravelHoldMs);
-            }
             DS2_TravelWatch::Open(kWatchLandedMs, "viagem chegou");
-            Append(StringFormat("%s  viagem: mapas de indice %d (de onde sai) e %d (onde chega) segurados por %u ms\n",
-                Clock().c_str(), s_travel_from, Here, kTravelHoldMs));
+            Append(StringFormat("%s  viagem: o mapa de indice %d de onde sai fica %u ms; o de chegada e segurado quando o personagem pisar nele\n",
+                Clock().c_str(), s_travel_from, kTravelHoldMs));
             s_travel_from = -1;
         }
         Append(StringFormat("%s  %s concluido em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s, hp %d -> %d\n",
