@@ -238,6 +238,20 @@ namespace
     std::atomic<uint64_t> s_detached{ 0 };
     std::atomic<uint64_t> s_detach_failed{ 0 };
     std::atomic<uint64_t> s_detach_unknown_heap{ 0 };
+    std::atomic<uint64_t> s_cut{ 0 };            // rotten links cut out of an entity's list
+    std::atomic<uint64_t> s_same_heap{ 0 };      // component and entity in one heap: the ordinary case
+    std::atomic<uint64_t> s_cross_heap{ 0 };     // different heaps, but not one the origin had
+    // Which entities were swept and when. Small on purpose: a travel has a
+    // handful of entities passing these hooks, not hundreds.
+    struct SweptEntity
+    {
+        uintptr_t Entity = 0;
+        ULONGLONG At = 0;
+    };
+    constexpr int kSweptRing = 32;
+    constexpr ULONGLONG kSweepEveryMs = 250;
+    SweptEntity s_swept[kSweptRing];   // game thread only, like s_bodies_dropped
+    int s_swept_next = 0;
     // The heaps that existed when the travel began, which is before the
     // destination map has one. Without this, "the component is in another heap
     // than its entity" would also be true of a component the character has
@@ -902,6 +916,137 @@ namespace
     // used, and the proof that settles it is the last one: the node has to be
     // findable by walking the entity's own list. If it is not there, nothing
     // is written and the log says so.
+    // The list of components an entity keeps, swept for a link that is no
+    // longer a link.
+    //
+    // This is where the guest died on 16/09 at +0x17b260, inside a
+    // GetComponent<T>: `mov (%rbx),%rdx` with rbx = 00b540ffe83053f0, bit 47
+    // set, which no processor will follow. Which of the two things that value
+    // is - the `next` field itself written over, or the first qword of a node
+    // that was freed and stamped by the allocator, read one instruction
+    // earlier - is **not** settled by what was captured, and the same stamp
+    // appeared in the host's rigid-body crash where it was the freed block.
+    // The sweep does not need to know: a link that is not an address and a
+    // node with no vftable of this game are both cut. The first walk that
+    // reaches either one dies, and there are 74 copies of that walk.
+    //
+    // BroadcastHook has done exactly this for the frame's registry since
+    // 15/09, and it is the reason those lists stopped killing the game. The
+    // entity's list never got the same treatment, which is why the crash
+    // moved here instead of stopping.
+    //
+    // The repair keeps the tail. A freed block is still mapped - the stamp is
+    // in its first qword, not a hole in the address space - so the `next` it
+    // carries can usually still be read, and the damaged node is spliced out
+    // the way the game's own detach splices one: the previous node's `next`,
+    // or the entity's own head, is pointed at whatever came after. Only when
+    // that tail cannot be read either, or is itself not a node, is the list
+    // ended there - and the log says which of the two happened. Cutting the
+    // tail off by default would throw away every live component behind the
+    // damage, and a character here carries fourteen of them.
+    //
+    // Nothing else is written, and a list that is whole is left exactly as it
+    // was.
+    void SweepEntityList(uintptr_t Entity)
+    {
+        uintptr_t At = 0;
+        if (!Peek(Entity + kEntityComponents, &At, sizeof(At)))
+        {
+            return;
+        }
+        uintptr_t Previous = 0;     // 0 means the head lives in the entity
+        for (uint32_t Guard = 0; Guard < kListGuard; ++Guard)
+        {
+            if (At == 0)
+            {
+                return;             // a whole list, ending the way it should
+            }
+            uintptr_t Vftable = 0;
+            const bool Shaped = PointerShape(At) && (At & 7) == 0;
+            const bool Reads = Shaped && Peek(At, &Vftable, sizeof(Vftable));
+            if (Shaped && Reads && InModule(Vftable) && (Vftable & 7) == 0)
+            {
+                uintptr_t Next = 0;
+                if (!Peek(At + kNodeInEntityNext, &Next, sizeof(Next)))
+                {
+                    return;
+                }
+                Previous = At;
+                At = Next;
+                continue;
+            }
+            // Past here the link is not something anyone can follow. What
+            // comes after it is saved if it can be.
+            const uintptr_t Where = Previous == 0 ? Entity + kEntityComponents : Previous + kNodeInEntityNext;
+            uintptr_t Tail = 0;
+            bool KeptTail = false;
+            if (Shaped && Peek(At + kNodeInEntityNext, &Tail, sizeof(Tail)))
+            {
+                if (Tail == 0)
+                {
+                    KeptTail = true;    // it really was the last one
+                }
+                else
+                {
+                    uintptr_t TailVftable = 0;
+                    KeptTail = PointerShape(Tail) && (Tail & 7) == 0 &&
+                        Peek(Tail, &TailVftable, sizeof(TailVftable)) && InModule(TailVftable) &&
+                        (TailVftable & 7) == 0;
+                }
+            }
+            if (!KeptTail)
+            {
+                Tail = 0;
+            }
+            const uint64_t Count = s_cut.fetch_add(1);
+            if (Count < 80)
+            {
+                Append(StringFormat("%s  t%lu  ELO PODRE na lista da entidade %p: %p %s; costuro %p (%s) com %p%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), (void*)Entity, (void*)At,
+                    !Shaped ? "nao e nem endereco" : (!Reads ? "nao da para ler" : "sem vftable do jogo"),
+                    (void*)Where, Previous == 0 ? "a cabeca, na entidade" : "o no anterior", (void*)Tail,
+                    KeptTail ? "" : " (a cauda tambem estava perdida: a lista acaba aqui)"));
+                s_lines.fetch_add(1);
+            }
+            __try
+            {
+                *(uintptr_t*)Where = Tail;
+            }
+            __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+            {
+            }
+            // The list moved under the walk, so it is walked again from where
+            // it is now; the guard bounds the whole thing either way.
+            At = Tail;
+            continue;
+        }
+    }
+
+    // Each entity at most once every kSweepEveryMs, because the same handful
+    // of components come past these hooks every frame and walking their
+    // entity's whole list each time would be a cost with no new answer.
+    void SweepEntitySoon(uintptr_t Entity)
+    {
+        const ULONGLONG Now = GetTickCount64();
+        for (int i = 0; i < kSweptRing; ++i)
+        {
+            if (s_swept[i].Entity == Entity)
+            {
+                if (Now - s_swept[i].At < kSweepEveryMs)
+                {
+                    return;
+                }
+                s_swept[i].At = Now;
+                SweepEntityList(Entity);
+                return;
+            }
+        }
+        s_swept[s_swept_next].Entity = Entity;
+        s_swept[s_swept_next].At = Now;
+        s_swept_next = (s_swept_next + 1) % kSweptRing;
+        SweepEntityList(Entity);
+    }
+
     // Is this node linked in this entity's list? The proof that settles
     // everything else, because a wrong candidate cannot be found there.
     bool LinkedTo(uintptr_t Entity, uintptr_t Node)
@@ -927,12 +1072,31 @@ namespace
         return false;
     }
 
-    bool DetachIfCrossHeap(uintptr_t Component)
+    // Two jobs, on two different windows. The sweep runs for the whole travel,
+    // because a rotten link kills at the first walk that reaches it and the
+    // guest died one to three seconds after landing. The detach runs only in
+    // the short window before the origin map is let go, because that is the
+    // only time both ends of a cross-heap link are still alive.
+    bool SweepAndDetach(uintptr_t Component)
     {
         const ULONGLONG Until = s_detach_until.load();
-        if (Until == 0 || GetTickCount64() >= Until || s_original_unregister == nullptr || Component == 0)
+        const bool Detaching = Until != 0 && GetTickCount64() < Until && s_original_unregister != nullptr;
+        if (Component == 0 || (!Detaching && !WindowOpen()))
         {
             return false;
+        }
+        // The sweep goes first, and on the entity read straight out of the
+        // component, because the resolution below walks the list from its head
+        // to prove which pointer is the node - and a rotten link **before**
+        // this component makes that walk fail. Ordering it the other way meant
+        // the sweep never ran in the one case it exists for. Measured on
+        // 16/09 that component+0x08 is the entity for every node in the list.
+        {
+            uintptr_t Owner = 0;
+            if (Peek(Component + kComponentEntity, &Owner, sizeof(Owner)) && Owner != 0 && ObjectOrNull(Owner))
+            {
+                SweepEntitySoon(Owner);
+            }
         }
         // Which of the two is the node is **not** decided by reading. The
         // attach, FUN_14040cca0, is unambiguous that the entity sits at
@@ -963,6 +1127,13 @@ namespace
         {
             return false;   // not a component of an entity's list: not our case
         }
+        // The sweep comes first and is the part that earns its keep: whatever
+        // is decided about heaps below, a link that is not an address has to
+        // go before one of the 74 walks reaches it.
+        if (!Detaching)
+        {
+            return false;
+        }
         int Mine = -1, Theirs = -1;
         const bool KnowMine = HeapIndexOf(Component, Mine);
         const bool KnowTheirs = HeapIndexOf(Entity, Theirs);
@@ -981,7 +1152,14 @@ namespace
         }
         if (Mine == Theirs)
         {
-            return false;   // the ordinary case: both belong to the same map
+            // Counted, not silent. Measured on 16/09 that this is **every**
+            // component: the entity and its components share a heap, so the
+            // cross-heap rule below never fires. Without this number, "there
+            // was nothing cross-heap" and "the rule never applied" read the
+            // same in the log, which is how a fix that does nothing passes for
+            // a fix that had nothing to do.
+            s_same_heap.fetch_add(1);
+            return false;
         }
         // And the component's heap has to be one that was already there when
         // the travel began, so the destination's is never touched.
@@ -992,6 +1170,7 @@ namespace
         }
         if (!FromOrigin)
         {
+            s_cross_heap.fetch_add(1);
             return false;
         }
         const uint64_t Count = s_detached.fetch_add(1);
@@ -1018,7 +1197,7 @@ namespace
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (DetachIfCrossHeap((uintptr_t)Component))
+        if (SweepAndDetach((uintptr_t)Component))
         {
             return;
         }
@@ -1085,7 +1264,7 @@ namespace
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (DetachIfCrossHeap((uintptr_t)Component))
+        if (SweepAndDetach((uintptr_t)Component))
         {
             return;
         }
@@ -1153,7 +1332,7 @@ namespace
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (DetachIfCrossHeap((uintptr_t)Component))
+        if (SweepAndDetach((uintptr_t)Component))
         {
             return;
         }
@@ -1427,6 +1606,13 @@ namespace DS2_TravelWatch
             {
                 s_origin_heaps[i] = s_heaps[i].Heap;
             }
+            // And the ring starts empty, so an address reused by a new entity
+            // cannot suppress the sweep for a whole leg.
+            for (int i = 0; i < kSweptRing; ++i)
+            {
+                s_swept[i] = SweptEntity();
+            }
+            s_swept_next = 0;
             Append(StringFormat("%s  --- %d heap(s) ja existiam quando a viagem comecou ---\n", Clock().c_str(),
                 s_origin_heap_count));
         }
@@ -1446,9 +1632,12 @@ namespace DS2_TravelWatch
             (unsigned long long)s_caught_task.load(), (unsigned long long)s_skipped_characters.load(),
             (unsigned long long)s_skipped_tick.load(), (unsigned long long)s_skipped_physics.load(),
             (unsigned long long)s_skipped.load(), (unsigned long long)s_corrupt_seen.load()));
-        Append(StringFormat("%s  --- desligamentos: %llu feitos, %llu falharam, %llu com heap desconhecido ---\n",
+        Append(StringFormat("%s  --- desligamentos: %llu feitos, %llu falharam, %llu com heap desconhecido; visto %llu no mesmo heap, %llu em heap alheio que nao e da origem ---\n",
             Clock().c_str(), (unsigned long long)s_detached.load(), (unsigned long long)s_detach_failed.load(),
-            (unsigned long long)s_detach_unknown_heap.load()));
+            (unsigned long long)s_detach_unknown_heap.load(), (unsigned long long)s_same_heap.load(),
+            (unsigned long long)s_cross_heap.load()));
+        Append(StringFormat("%s  --- elos podres cortados de listas de entidade: %llu ---\n", Clock().c_str(),
+            (unsigned long long)s_cut.load()));
 #else
         (void)Milliseconds;
         (void)Why;
