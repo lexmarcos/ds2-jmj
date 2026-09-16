@@ -619,8 +619,15 @@ namespace
             const uint64_t Count = s_caught_task.fetch_add(1);
             if (Count < 60)
             {
-                Append(StringFormat("%s  t%lu  FALHA APARADA na tarefa %p (trabalho +0x%zx, dono %p); o quadro dela e pulado e a conclusao segue%s\n",
-                    Clock().c_str(), GetCurrentThreadId(), (void*)Task, (size_t)(Work - s_base), (void*)Owner, Stack().c_str()));
+                // `Task[1]` is the manager that owns the task; the thing the
+                // work is **about** is `Task[3]` (FUN_140359e80 writes the
+                // character there). That is the address worth pointing a page
+                // watch at, so it is printed on its own, with its page.
+                uintptr_t Subject = 0;
+                Peek((uintptr_t)(Task + 3), &Subject, sizeof(Subject));
+                Append(StringFormat("%s  t%lu  FALHA APARADA na tarefa %p (trabalho +0x%zx, dono %p) SUJEITO %p pagina %p; o quadro dela e pulado e a conclusao segue%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), (void*)Task, (size_t)(Work - s_base), (void*)Owner,
+                    (void*)Subject, (void*)(Subject & ~(uintptr_t)0xfff), Stack().c_str()));
             }
         }
         const TaskDone_p Done = (TaskDone_p)((void**)Vftable)[0];
