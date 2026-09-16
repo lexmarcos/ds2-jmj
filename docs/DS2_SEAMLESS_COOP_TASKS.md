@@ -1114,6 +1114,37 @@ dizendo que está protegendo. Saiu.
 dez pontos de desconexão ilegal ao convidado e não há Bone of Order sobrando
 nesta jogatina; o padrão tem que ser o caminho que não custa nada.
 
+### O que a rodada de 16/09 de manhã acrescentou
+
+**Duas suposições minhas viraram prova, e a sequência mais que dobrou.** O
+hook do backread escrevia no dono do mapa — o byte de força e **seis blocos de
+dezesseis bytes** de máscara de partes — sem nunca conferir a vftable do
+objeto, enquanto a leitura no mesmo arquivo sempre conferiu. E a máscara vinha
+da cópia do outro jogador por uma corrente (`parte → dono → info → conjunto`)
+que também não provava que o dono era um dono de mapa. As duas passaram a
+exigir prova.
+
+Resultado medido, com viagens de verdade contadas só quando os **dois** pisam
+no destino: de **quatro** trechos antes da queda para **dez**.
+
+E uma hipótese caiu, o que também vale: o aviso "não é um MapAreaCtrlOwner"
+**nunca disparou**. O dono sempre era legítimo, então as máscaras nunca foram
+parar num objeto alheio; o que melhorou foi a corrente da máscara, não o alvo.
+
+**O host tem uma queda própria, e ela se repete.** Duas vezes (05:37 e 08:52),
+sempre no host, com a **mesma pilha**: a tarefa de pós-física do
+`CharacterManager` (`FUN_140359e80` monta os itens) descendo por
+`FUN_140354e80` → `FUN_140314e90` → `FUN_140370bf0` → `FUN_14036dc50` →
+`FUN_14036f800` → `FUN_140bd15b0`, onde um ponteiro esperado contém **dados de
+ponto flutuante** (`a140a140a140a140`, depois `3e2a256f2b7fe62c` — dois floats
+cada). É a cadeia de animação, e o host é quem guarda a cópia do convidado.
+
+`FUN_140354e80` é o **executor de tarefa** genérico: chama o trabalho
+(`tarefa[2](tarefa[1], arg, tarefa+3)`) e depois a conclusão (slot 0 da própria
+tarefa). O vigia agora o reimplementa com o trabalho sob `__try` e a conclusão
+**sempre** — um personagem perde um quadro de animação em vez de todo mundo
+perder a sessão, e a contabilidade da tarefa continua fechando. Falta medir.
+
 **Falta:**
 
 - **a queda do convidado depois da chegada, acima, é o próximo trabalho**;
