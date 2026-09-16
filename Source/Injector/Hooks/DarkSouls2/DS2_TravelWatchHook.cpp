@@ -128,6 +128,18 @@ namespace
     // the guest died on 16/09 (+0x40cee3, and +0x40d2c7 in the unlink it
     // calls). A fault here means the component stays registered: it leaks,
     // and the game lives.
+    // FUN_140354e80(task, arg): the generic task runner. It calls the work,
+    // `task[2](task[1], arg, task+3)`, and then the completion, virtual slot 0
+    // of the task itself. The CharacterManager's post-physics work for one
+    // character goes through here (FUN_140359e80 builds those task items), and
+    // that is where the **host** closed twice on 16/09 with the same stack both
+    // times: `+0x36f846` and `+0xbd15c5`, reading a pointer that held float
+    // data instead. Running the work under __try and the completion **always**
+    // means one character loses a frame of animation rather than everyone
+    // losing the session, and the task's own bookkeeping still balances.
+    constexpr size_t kTaskRunOffset = 0x354e80;
+    constexpr uint8_t kTaskRunPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x4c, 0x8d, 0x41, 0x18, 0x48, 0x8b, 0x49, 0x08, 0xff, 0x53, 0x10 };
+
     constexpr size_t kUnregisterOffset = 0x40cea0;
     constexpr uint8_t kUnregisterPrologue[] = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xc0, 0x00, 0x00, 0x00, 0x48, 0x89, 0x6c, 0x24, 0x10 };
 
@@ -150,6 +162,11 @@ namespace
     ListLookup_p s_original_lookup = nullptr;
     using Unregister_p = void(*)(void* Registry, void* Node, char Free);
     Unregister_p s_original_unregister = nullptr;
+    using TaskRun_p = void(*)(void** Task, void* Argument);
+    TaskRun_p s_original_task_run = nullptr;
+    using TaskWork_p = void(*)(void* Owner, void* Argument, void* Info);
+    using TaskDone_p = void(*)(void* Task, int32_t Flag);
+    std::atomic<uint64_t> s_caught_task{ 0 };
     std::atomic<uint64_t> s_skipped_physics{ 0 };
     std::atomic<uint64_t> s_caught{ 0 };
 
@@ -212,6 +229,7 @@ namespace
     bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
     bool GuardedUnregister(Unregister_p Fn, void* Registry, void* Node, char Free);
+    bool GuardedTaskWork(TaskWork_p Fn, void* Owner, void* Argument, void* Info);
 
     bool WindowOpen()
     {
@@ -568,6 +586,45 @@ namespace
         }
     }
 
+    bool GuardedTaskWork(TaskWork_p Fn, void* Owner, void* Argument, void* Info)
+    {
+        __try
+        {
+            Fn(Owner, Argument, Info);
+            return true;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
+
+    // The task runner, rebuilt so the work can fail without taking the
+    // completion with it. Anything that does not look like a task is handed
+    // straight back to the game.
+    void TaskRunHook(void** Task, void* Argument)
+    {
+        uintptr_t Vftable = 0, Work = 0, Owner = 0;
+        if (Task == nullptr || !Peek((uintptr_t)Task, &Vftable, sizeof(Vftable)) || !InModule(Vftable) ||
+            !Peek((uintptr_t)(Task + 2), &Work, sizeof(Work)) || !InModule(Work) ||
+            !Peek((uintptr_t)(Task + 1), &Owner, sizeof(Owner)))
+        {
+            s_original_task_run(Task, Argument);
+            return;
+        }
+        if (!GuardedTaskWork((TaskWork_p)Work, (void*)Owner, Argument, (void*)(Task + 3)))
+        {
+            const uint64_t Count = s_caught_task.fetch_add(1);
+            if (Count < 60)
+            {
+                Append(StringFormat("%s  t%lu  FALHA APARADA na tarefa %p (trabalho +0x%zx, dono %p); o quadro dela e pulado e a conclusao segue%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), (void*)Task, (size_t)(Work - s_base), (void*)Owner, Stack().c_str()));
+            }
+        }
+        const TaskDone_p Done = (TaskDone_p)((void**)Vftable)[0];
+        Done((void*)Task, 0);
+    }
+
     void UnregisterHook(void* Registry, void* Node, char Free)
     {
         if (!GuardedUnregister(s_original_unregister, Registry, Node, Free))
@@ -808,6 +865,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_lookup = ListLookup ? (ListLookup_p)(Base + kListLookupOffset) : nullptr;
     const bool Unregister = Matches(Base + kUnregisterOffset, kUnregisterPrologue, sizeof(kUnregisterPrologue));
     s_original_unregister = Unregister ? (Unregister_p)(Base + kUnregisterOffset) : nullptr;
+    const bool TaskRun = Matches(Base + kTaskRunOffset, kTaskRunPrologue, sizeof(kTaskRunPrologue));
+    s_original_task_run = TaskRun ? (TaskRun_p)(Base + kTaskRunOffset) : nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
@@ -828,6 +887,10 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     {
         DetourAttach(&(PVOID&)s_original_unregister, UnregisterHook);
     }
+    if (TaskRun)
+    {
+        DetourAttach(&(PVOID&)s_original_task_run, TaskRunHook);
+    }
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
     DetourAttach(&(PVOID&)s_original_objects, MapObjectsHook);
@@ -844,6 +907,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
         ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
     Append(StringFormat("%s  === pos-fisica %s, busca em lista %s, listas do quadro refeitas a cada quadro ===\n", Clock().c_str(),
         PostPhysics ? "guardada" : "sem guarda (codigo inesperado)", ListLookup ? "guardada" : "sem guarda (codigo inesperado)"));
+    Append(StringFormat("%s  === executor de tarefa %s ===\n", Clock().c_str(),
+        TaskRun ? "guardado" : "sem guarda (codigo inesperado)"));
     Append(StringFormat("%s  === saida da lista do quadro %s ===\n", Clock().c_str(),
         Unregister ? "guardada" : "sem guarda (codigo inesperado)"));
     // A version of 16/09 also rebuilt all 32 buckets of the frame's registry
@@ -883,6 +948,10 @@ void DS2_TravelWatchHook::Uninstall()
         if (s_original_unregister != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_unregister, UnregisterHook);
+        }
+        if (s_original_task_run != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_task_run, TaskRunHook);
         }
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);
