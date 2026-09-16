@@ -1843,10 +1843,11 @@ namespace
         {
             // The map another player stands in must not unload under its
             // copy here, whatever this machine's player does.
-            // Not while this machine is bringing a map in for a travel: a
-            // third map forced at that moment is memory this game does not
-            // have, and the other player is on its way out of that map too.
-            if (Character != nullptr && Enabled(FeatureOtherMap) && !s_go_moving.load() &&
+            // Held even while this machine travels: letting the other
+            // player's map go during a travel killed the guest inside the
+            // CharacterManager (15/09, c0000005 at +0x3f4fac, a character
+            // already freed - the same crash the host's warp used to give).
+            if (Character != nullptr && Enabled(FeatureOtherMap) &&
                 *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
                 ((const uint8_t*)Character)[kChrType] == kRemotePlayerCopy)
             {
