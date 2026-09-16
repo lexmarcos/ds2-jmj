@@ -1759,6 +1759,16 @@ namespace
             DS2_Backread::Release();
             s_recovery.Loading = false;
             s_recovery.Frames = 0;
+            // The map never came. The recovery goes on to stand the character
+            // up where it is, and **that** used to look like an arrival: the
+            // completion below sets Arrived whenever no settle is running, so
+            // on 16/09 the host announced "cheguei na fogueira" after thirty
+            // seconds of not loading anything, and the group was called into a
+            // map nobody was in. A travel that never left is a failure.
+            if (s_go_moving.load())
+            {
+                s_travel_outcome.store((uint8_t)DS2_DeathIntercept::Outcome::Failed);
+            }
             Append(StringFormat("%s  %s: %u quadros e o mapa %08x nao trouxe a fogueira %08x (estado %u); fica na ultima posicao no chao\n",
                 Clock().c_str(), s_recovery.Why, s_recovery.LoadFrames, s_recovery.LoadMap, s_recovery.LoadId, State));
         }
@@ -1882,9 +1892,12 @@ namespace
             // A bonfire of the map already under the character has no settle
             // to run, so this is the arrival. Every other travel is judged by
             // ContinueSettle, on the physics contact.
+            // Only when nothing has decided yet: a give-up above has already
+            // written Failed, and a settle still running will decide later.
+            uint8_t Expected = (uint8_t)DS2_DeathIntercept::Outcome::Moving;
             if (!s_settle.Active)
             {
-                s_travel_outcome.store((uint8_t)DS2_DeathIntercept::Outcome::Arrived);
+                s_travel_outcome.compare_exchange_strong(Expected, (uint8_t)DS2_DeathIntercept::Outcome::Arrived);
             }
             if (s_travel_from >= 0)
             {
