@@ -479,6 +479,8 @@ namespace
         Entity = Chr;
         DescribeEntity(Entity, Map, Kind);
         Peek(Chr, &Vftable, sizeof(Vftable));
+        uintptr_t Allocator = 0;
+        Peek(Entity + kEntityAllocator, &Allocator, sizeof(Allocator));
         Peek(Chr + kChrType, &Type, 1);
         if (Peek(Chr + kChrRoles, &Roles, sizeof(Roles)) && PointerShape(Roles))
         {
@@ -490,9 +492,9 @@ namespace
         {
             Peek(Contact + kContactHandle, &Handle, sizeof(Handle));
         }
-        return StringFormat("entidade %p (vftable +0x%zx%s, mapa %08x, tipo %u; como personagem: tipo %u, papel %u, em (%.2f, %.2f, %.2f), contato %08x, indice de mapa %d)",
+        return StringFormat("entidade %p (vftable +0x%zx%s, mapa %08x, tipo %u, heap %p; como personagem: tipo %u, papel %u, em (%.2f, %.2f, %.2f), contato %08x, indice de mapa %d)",
             (void*)Entity, InModule(Vftable) ? (size_t)(Vftable - s_base) : (size_t)0,
-            Vftable == s_base + kPlayerCtrlVftable ? " PlayerCtrl" : "", Map, (unsigned)Kind, (unsigned)Type, (unsigned)Role,
+            Vftable == s_base + kPlayerCtrlVftable ? " PlayerCtrl" : "", Map, (unsigned)Kind, (void*)Allocator, (unsigned)Type, (unsigned)Role,
             At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f));
     }
 
