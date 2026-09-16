@@ -416,9 +416,20 @@ rather than waiting for them.
 ## Reverse engineering
 
 Every offset in this project is hardcoded against **version 1.03,
-Calibrations 2.02** (`DarkSoulsII.exe`, 28,200,992 bytes). Module base
-`0x140000000`, no ASLR, so a file offset and a runtime address differ by a
-constant. A patch moves everything.
+Calibrations 2.02** (`DarkSoulsII.exe`, 28,200,992 bytes). Preferred base
+`0x140000000`, and under Wine the image has always landed there, so a file
+offset and a runtime address differ by a constant. A patch moves everything.
+
+**That constant is a measurement, not a guarantee.** This line used to say "no
+ASLR", and the header does not support it: `DllCharacteristics` is `0x8160`,
+which carries both `DYNAMIC_BASE` and `HIGH_ENTROPY_VA`, and `.reloc` is
+present with 0x40200 bytes of fixups. The binary can be relocated, and on real
+Windows it will be. The hooks are safe because they resolve everything from the
+base they are loaded at (`s_base + offset`); what is **not** safe is an
+absolute address written as a literal — `0x141616cf8`, a vftable like
+`0x1410e4bb8`, or a MemProbe `abs` line. Those are correct here and wrong the
+moment the image moves. Prefer `mod`/`chain` over `abs`, and keep offsets
+relative in new code.
 
 ### Ghidra, first
 

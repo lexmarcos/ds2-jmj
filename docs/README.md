@@ -15,6 +15,9 @@ server.
 | [DS2_SEAMLESS_COOP_DESIGN.md](DS2_SEAMLESS_COOP_DESIGN.md) | **What seamless co-op is meant to be: the host owns the world, each player keeps their own save, and every rule that follows from that** |
 | [DS2_SEAMLESS_COOP_TASKS.md](DS2_SEAMLESS_COOP_TASKS.md) | **The work left, in dependency order, with what is already known about each piece** |
 | [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) | **Every warp in the game goes through one call: the request it carries, who reads which field, and why a co-op death and an invader death end up in different places** |
+| [DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md](DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md) | An outside opinion on rebuilding group travel; **its central premise was refuted — read the two below with it** |
+| [DS2_PRESENCE_REBUILD_PLAN.md](DS2_PRESENCE_REBUILD_PLAN.md) | The refutation: removing a player's presence is native and per-player, rebuilding it natively is not; the hybrid and its phases |
+| [DS2_PRESENCE_ASTRA_REVIEW.md](DS2_PRESENCE_ASTRA_REVIEW.md) | A third pass over both: the offsets all check out, and the crash we blamed on one function belongs to another |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas; carries corrections where it was wrong |
 | [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md) | **Multiplayer in Majula and the other closed areas: the three things required, how to apply and verify them** |
 | [DS2_SERVER_DEPLOY.md](DS2_SERVER_DEPLOY.md) | **Running the server on a small shared host: build here, seed the config, the service, the firewall, the key** |

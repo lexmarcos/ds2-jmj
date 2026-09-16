@@ -1203,14 +1203,27 @@ Primeira metade de `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`, a parte que o próprio
 parecer diz ser necessária **nas duas** arquiteturas que ele propõe.
 
 **O contrato.** `DS2_DeathIntercept::TravelOutcome()` responde
-`Idle`/`Moving`/`Arrived`/`Failed`. `Arrived` só é escrito pelo **contato
-físico** sob o personagem nomeando o mapa de destino, nunca por tempo. Isso
+`Idle`/`Moving`/`Arrived`/`Failed`. `Arrived` só é escrito quando o mapa
+alcançado é o de destino, nunca por tempo. Isso
 substitui a ambiguidade de `Moving()`, que queria dizer "chegou **ou**
 desistiu" e que em 16/09, às 05:23, fez o host anunciar chegada e chamar os
 convidados para um mapa que ele tinha desistido de carregar trinta segundos
 antes. Todos os caminhos de desistência marcam `Failed`, inclusive o do mapa
 que nunca carregou — esse faltou na primeira versão e reproduziu o mesmo
 defeito na hora.
+
+> **Corrigido em 16/09, por uma revisão do gpt-6-astra.** Este parágrafo dizia
+> que `Arrived` só é escrito pelo **contato físico** sob o personagem. A
+> implementação é mais fraca. `ContinueSettle` decide por
+> `CurrentMap() == s_settle.Map`, e `CurrentMap()` lê o mapa da parte em que o
+> *streamer* registrou o jogador (contexto → gerente de mapas → streamer →
+> parte → dono → mapa). O contato de verdade — `ContactHandle` e
+> `MapIndexUnder`, lidos da física do personagem — entra no diagnóstico e na
+> escolha de qual mapa segurar, **não** na decisão de chegada. A garantia real
+> é "o streamer diz que o chão sob ele é do mapa de destino": ainda é evidência
+> de estar no lugar, ainda não é tempo, e não é o contato direto. A frase
+> aparecia também no `DS2_PRESENCE_REBUILD_PLAN.md`, na lista do que preservar,
+> e foi corrigida lá igual.
 
 **A barreira.** Os dois **não** carregam ao mesmo tempo, de propósito: fazer
 isso fechou os dois jogos em 15/09. Eles chegam com cerca de um segundo de
@@ -1365,12 +1378,20 @@ perdido num personagem. Quem quiser ir atrás da causa: a assinatura, as
 teorias já descartadas e o caminho do breakpoint de escrita em hardware estão
 logo acima.
 
-**Uma ideia que ficou pronta e não foi precisa:** segurar as cópias dos outros
-jogadores paradas durante a viagem (`DS2_DeathIntercept::HoldCopies`), já que é
-a cópia que desliza entre mapas sem o carregamento que a reconstruiria. Com
-quarenta trechos limpos ela não se justificava, e o preço seria o outro jogador
-congelado por alguns segundos na tela. Fica anotada como a próxima alavanca se
-a queda voltar.
+**Uma ideia desenhada e nunca escrita:** segurar as cópias dos outros
+jogadores paradas durante a viagem, já que é a cópia que desliza entre mapas
+sem o carregamento que a reconstruiria. Com quarenta trechos limpos ela não se
+justificava, e o preço seria o outro jogador congelado por alguns segundos na
+tela. Fica anotada como uma alavanca possível se a queda voltar.
+
+> **Corrigido em 16/09.** Este parágrafo a chamava de "pronta" e citava
+> `DS2_DeathIntercept::HoldCopies`. **Essa função nunca existiu**: o nome só
+> aparece aqui, em nenhum commit do `Source/` (`git log -S` não acha nenhum).
+> Achado quando o gpt-6-astra foi procurá-la no código a nosso pedido. Ele
+> também desmontou a ideia: ocultar o desenho resolve a aparência, pular o
+> pré-desenho resolve um consumidor, congelar a posição não impede os recursos
+> de morrerem embaixo da cópia. Sem uma operação segura de retomada, congelar
+> só adia o momento da falha.
 
 **Falta:**
 

@@ -115,7 +115,11 @@ construído à mão. Sai o transporte inteiro; a barreira e o contrato ficam.
 
 ## O que preservar em qualquer caminho
 
-O contrato `Idle/Moving/Arrived/Failed` com `Arrived` só por contato físico; a
+O contrato `Idle/Moving/Arrived/Failed`, com `Arrived` escrito só quando o mapa
+alcançado é o de destino e nunca por tempo (a frase "só por contato físico"
+estava forte demais: quem decide é o mapa da parte que o streamer registrou sob
+o jogador, e o contato entra em diagnóstico e retenção — ver a correção de
+16/09 em `DS2_SEAMLESS_COOP_TASKS.md`); a
 barreira e a `TravelRelease`; host primeiro; o `DropDeadRigidBody` (que vira um
 **medidor**: deve parar de disparar para cópias); todas as guardas `__try` como
 rede, com a regra de que disparo é falha arquitetural; as provas de tipo; o
