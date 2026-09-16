@@ -1256,6 +1256,37 @@ terceira é o sinal para parar de consertar uma a uma e reconstruir a presença
 (a segunda metade do parecer), que depende de uma primitiva que ninguém provou
 existir: retirar a presença sem sair da sessão.
 
+> **Corrigido em 16/09: o parágrafo acima nomeia a função errada, e isso
+> mudou o diagnóstico.** `+0x3f4f2b` **não** está em `FUN_1403f4f60`. O
+> diretório de exceções do PE dá `FUN_1403f4f10` em `0x3f4f10..0x3f4f53` e
+> `FUN_1403f4f60` em `0x3f4f60..0x3f527e`: são funções disjuntas, e a queda
+> cai `+0x1b` dentro da primeira. Nada em nenhuma das duas seções `.text`
+> chama `FUN_1403f4f10` diretamente — ela é método virtual, slot
+> `0x1410eb588` da vftable cujo nome, `MapModelComponent`, está logo depois
+> em `0x1410eb5c0`, e cujo slot `0x1410eb598` é o `FUN_1403f6300` que este
+> projeto já engancha.
+>
+> Consequência: o `__try` do pré-desenho **nunca esteve na pilha** enquanto a
+> função que quebra rodava. A "segunda dependência que escapou da guarda"
+> nunca escapou de nada — a guarda é que estava na função errada, exatamente
+> o erro já cometido com `FUN_1403152f0`. **A regra da terceira dependência
+> não foi acionada**, e a contagem que levou ao parecer estava inflada por
+> essa atribuição.
+>
+> A guarda certa está em `ModelTickHook`. O que ela faz é o que a irmã faz, e
+> nada além: na falha, escreve o que nomeia o objeto de `+0x40` enquanto ele
+> ainda existe, para armar a vigia de página. **Não** escreve nulo ali por
+> analogia com o `DropDeadRigidBody`: o teste de nulo em `+0x3f4f26` prova o
+> contrato *daquele* consumidor e não o dos outros — `FUN_1403f4f60` lê o
+> mesmo campo — e para o corpo rígido o caminho nulo foi lido no chamado
+> antes de qualquer escrita. Essa leitura ainda não foi feita aqui.
+>
+> Próximos alvos, dois slots vizinhos da mesma vftable: `0x1410eb578` →
+> `FUN_1403f4c20`, que reage à mudança de backread e chama soltura/carga
+> virtuais, e `0x1410eb580` → `FUN_1403f4ce0`, que desmonta um registro. A
+> pergunta delimitada é **quem é o dono da instância de modelo em `+0x40` e
+> qual operação nativa a troca**.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
