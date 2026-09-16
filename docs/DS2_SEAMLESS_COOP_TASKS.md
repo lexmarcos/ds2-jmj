@@ -1197,6 +1197,65 @@ presença como `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md` propõe.
 desmontagem adiada da origem com viagens mais espaçadas que os 30 s de
 retenção, e achar de onde vem o ponteiro pendurado do convidado.
 
+## Contrato de viagem e barreira de grupo — feitos em 16/09
+
+Primeira metade de `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`, a parte que o próprio
+parecer diz ser necessária **nas duas** arquiteturas que ele propõe.
+
+**O contrato.** `DS2_DeathIntercept::TravelOutcome()` responde
+`Idle`/`Moving`/`Arrived`/`Failed`. `Arrived` só é escrito pelo **contato
+físico** sob o personagem nomeando o mapa de destino, nunca por tempo. Isso
+substitui a ambiguidade de `Moving()`, que queria dizer "chegou **ou**
+desistiu" e que em 16/09, às 05:23, fez o host anunciar chegada e chamar os
+convidados para um mapa que ele tinha desistido de carregar trinta segundos
+antes. Todos os caminhos de desistência marcam `Failed`, inclusive o do mapa
+que nunca carregou — esse faltou na primeira versão e reproduziu o mesmo
+defeito na hora.
+
+**A barreira.** Os dois **não** carregam ao mesmo tempo, de propósito: fazer
+isso fechou os dois jogos em 15/09. Eles chegam com cerca de um segundo de
+diferença, cada um atrás da própria tela de carregamento, e **ninguém sai
+dela** até o último chegar. Cada máquina manda um recibo ao host
+(`GuestEvent::TravelArrived` / `TravelFailed`, com o número da votação), o host
+junta um recibo por participante e manda `HostEvent::TravelRelease`; todas as
+cortinas descem nessa única mensagem.
+
+**Medido, com dois jogadores, pela votação de verdade:**
+
+| trecho | chegada do host | chegada do convidado | telas desceram com |
+| --- | --- | --- | --- |
+| Heide → Majula | 15:36:32.947 | 15:36:33.933 | **18 ms** de diferença |
+| Majula → Heide | 15:39:04.189 | 15:39:05.406 | **16 ms** de diferença |
+
+Um segundo de diferença na chegada física, dezenas de milissegundos na hora em
+que os dois aparecem. É o que "viajar junto" queria dizer.
+
+Falha e tempo limite não deixam ninguém preso: se alguém falha ou a espera
+passa de 25 s, o host solta o grupo assim mesmo, com aviso, e o convidado tem a
+própria saída de emergência cinco segundos depois.
+
+**Dois defeitos reais apareceram no caminho e foram corrigidos:** o resultado
+que faltava marcar no mapa que não carrega, acima, e o **registro de
+renascimento gravado antes da viagem**. Esse segundo era suspeito por chamar o
+construtor de pedido de viagem do jogo antes do movimento; passou a ser gravado
+**depois** da chegada. (A investigação também absolveu essa hipótese: o mapa
+que não carregava era estado envenenado por `reload`, veja abaixo.)
+
+**Um perigo de bancada que custou uma hora.** Depois de um `reload` (voltar ao
+título e reentrar), o backread **não traz mais mapa nenhum** naquela instância:
+o dono fica em `estado 0 forcado 1 quer 1` com todas as máscaras cheias, para
+sempre. A outra instância, no mesmo build, carrega normalmente. Fechar e subir
+limpo resolve. Perseguir isso como se fosse defeito de código leva a
+conclusões erradas sobre a viagem.
+
+**O que falta, e é o mesmo de antes.** O convidado ainda fecha por um ponteiro
+pendurado no pré-desenho (`+0x3f4f2b`, `FUN_1403f4f60`), que o conserto do
+corpo rígido não cobre porque ali o objeto é um `MapModelComponent` e não o
+corpo do personagem. Pela regra combinada, essa é a **segunda** dependência; a
+terceira é o sinal para parar de consertar uma a uma e reconstruir a presença
+(a segunda metade do parecer), que depende de uma primitiva que ninguém provou
+existir: retirar a presença sem sair da sessão.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
