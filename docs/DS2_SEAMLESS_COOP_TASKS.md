@@ -1463,6 +1463,45 @@ sobre o nó que morre, que já achou o corpo rígido uma vez.
 **Custo:** nenhum. A saída foi pelo caminho legal e a penalidade ficou igual nos
 dois, 10 e 70.
 
+### A regra cross-heap está morta, com número (16/09, 20:04)
+
+`a18747c4` acrescentou duas coisas: a varredura das listas de componentes das
+entidades, que corta um elo podre costurando a cauda de volta, e a contagem de
+quantos componentes foram vistos **no mesmo heap** — que era o dado que faltava
+para separar "não havia nada cross-heap" de "a regra não se aplica".
+
+Doze trechos, todos com os dois chegando, nenhum jogo fechado, guardas 0 → 0,
+saída legal, penalidade igual nos dois no fim (10 e 70).
+
+    conta 1: visto 6017963 no mesmo heap, 0 em heap alheio
+    conta 2: visto 7035751 no mesmo heap, 0 em heap alheio
+
+**Treze milhões de observações e nenhuma exceção.** Componente e entidade
+sempre dividem heap. A regra "componente num heap diferente do da entidade"
+não descreve nada que aconteça neste jogo, e o desligamento construído em
+`60fe3b53` está morto como conserto — não por falta de oportunidade, mas por
+estar baseado numa hipótese falsa. **Deve ser removido**, porque código que
+finge consertar é pior que código ausente; o que vale a pena guardar dele é o
+contador, que foi o que produziu esta medição.
+
+**A varredura de elos podres não foi testada.** `elos podres cortados: 0` nos
+doze trechos, e nenhum `COMPONENTE CORROMPIDO`. Como não houve queda, isso é o
+caso sem informação, exatamente o previsto antes de rodar: doze trechos limpos
+já aconteceram antes da varredura existir. Ela continua instalada porque não
+custa nada e porque só depende de "isto ainda é um ponteiro" e "isto ainda tem
+vftable deste jogo" — nenhuma hipótese sobre heap.
+
+**O que isto não prova.** Que a varredura evitou a queda. A queda do dia 16 veio
+no segundo trecho de uma corrida; esta foi a doze sem cair, o que é sugestivo e
+não é prova — a queda nunca foi determinística. Para atribuir, seria preciso ou
+ver a varredura cortar (e aí o corte é o sinal) ou uma corrida bem mais longa
+contra a distribuição anterior.
+
+**O que fazer em seguida**, em ordem de custo: remover o desligamento
+cross-heap; rodar uma corrida longa para ver se a varredura chega a cortar
+alguma vez; e, se a queda voltar sem corte nenhum, a vigia de página sobre o nó
+que morre, que é a ferramenta que já achou o corpo rígido.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
