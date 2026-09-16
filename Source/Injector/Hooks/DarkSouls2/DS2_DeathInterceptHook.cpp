@@ -520,6 +520,8 @@ namespace
     std::atomic<uint32_t> s_go_map{ 0 };
     std::atomic<uint32_t> s_go_id{ 0 };
     std::atomic<bool> s_go_moving{ false };
+    // How the travel ended; see DS2_DeathIntercept::Outcome.
+    std::atomic<uint8_t> s_travel_outcome{ 0 };
     // The map the travel started in, kept a while after the arrival: letting
     // it unload right behind a travel killed the guest twice (15/09, a freed
     // pointer in a list walked by FUN_1401cbf20 and in the pre-draw task),
@@ -1585,6 +1587,7 @@ namespace
             {
                 ++s_recovery_failed;
                 s_go_moving.store(false);
+                s_travel_outcome.store((uint8_t)DS2_DeathIntercept::Outcome::Failed);
                 Append(StringFormat("%s  viagem: a fogueira %08x do mapa %08x nao esta na lista e o mapa nao pode ser trazido; nao viajei\n",
                     Clock().c_str(), Id, Map));
                 return;
@@ -1793,6 +1796,8 @@ namespace
             DS2_Backread::KeepIndex(Landed, kTravelHoldMs);
         }
         s_settle.Active = false;
+        s_travel_outcome.store((uint8_t)(Arrived ? DS2_DeathIntercept::Outcome::Arrived
+                                                 : DS2_DeathIntercept::Outcome::Failed));
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
             Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str(),
             DescribeFooting(Chr).c_str()));
@@ -1820,6 +1825,10 @@ namespace
             {
                 ++s_recovery_failed;
                 s_recovery.Active = false;
+                if (s_go_moving.load())
+                {
+                    s_travel_outcome.store((uint8_t)DS2_DeathIntercept::Outcome::Failed);
+                }
                 s_go_moving.store(false);
                 Append(StringFormat("%s  %s: %u quadros e o personagem nao pousou; desisto\n",
                     Clock().c_str(), s_recovery.Why, s_recovery.Frames));
@@ -1870,6 +1879,13 @@ namespace
         s_recovery.Active = false;
         if (s_go_moving.exchange(false))
         {
+            // A bonfire of the map already under the character has no settle
+            // to run, so this is the arrival. Every other travel is judged by
+            // ContinueSettle, on the physics contact.
+            if (!s_settle.Active)
+            {
+                s_travel_outcome.store((uint8_t)DS2_DeathIntercept::Outcome::Arrived);
+            }
             if (s_travel_from >= 0)
             {
                 DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
@@ -2561,6 +2577,7 @@ namespace DS2_DeathIntercept
     void GoToBonfire(uint32_t Map, uint32_t Id)
     {
 #if defined(_WIN32) && defined(_M_X64)
+        s_travel_outcome.store((uint8_t)Outcome::Moving);
         s_go_map.store(Map);
         s_go_id.store(Id);
         s_go_moving.store(true);
@@ -2574,9 +2591,18 @@ namespace DS2_DeathIntercept
     bool Moving()
     {
 #if defined(_WIN32) && defined(_M_X64)
-        return s_go_moving.load();
+        return s_travel_outcome.load() == (uint8_t)Outcome::Moving;
 #else
         return false;
+#endif
+    }
+
+    Outcome TravelOutcome()
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        return (Outcome)s_travel_outcome.load();
+#else
+        return Outcome::Idle;
 #endif
     }
 }

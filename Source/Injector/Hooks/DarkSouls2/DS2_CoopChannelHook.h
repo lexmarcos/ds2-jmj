@@ -90,9 +90,19 @@ namespace DS2_CoopChannel
         TravelVote = 2,     // a vote to travel; Map/Type the bonfire, Id the vote (top bit: a guest proposed it)
         TravelLeave = 3,    // everyone agreed: leave the session so the host can travel
         TravelCanceled = 4, // Id the reason, Map/Type the bonfire
-        TravelGo = 5,       // everyone agreed: go to this bonfire, Map/Id, without leaving
+        TravelGo = 5,       // everyone agreed: go to this bonfire, Map/Id, Type the vote
+        // Everybody is standing on the destination: drop the loading screen.
+        // Id the vote, Type 0 when someone failed or the wait ran out.
+        //
+        // This is what makes a group travel look like one event instead of
+        // two. The machines do **not** load at the same time - both loading at
+        // once closed both games on 15/09 - so they arrive seconds apart, and
+        // without this the second player watched the first pop in. Now each
+        // one waits behind its own loading screen after arriving, and every
+        // curtain comes down on this one message.
+        TravelRelease = 6,
     };
-    constexpr uint8_t kHostEventCount = 6;
+    constexpr uint8_t kHostEventCount = 7;
 
     // Other members of a session this machine hosts, seen in the last few
     // seconds. 0 when it hosts nothing.
@@ -113,8 +123,10 @@ namespace DS2_CoopChannel
     {
         RestStarted = 0,     // the guest sat at a bonfire in the host's world; Map/Id the bonfire
         TravelPropose = 1,   // the guest picked a bonfire to travel to; Map/Id the bonfire
+        TravelArrived = 2,   // this guest is standing on the destination; Id the vote
+        TravelFailed = 3,    // this guest could not get there; Id the vote
     };
-    constexpr uint8_t kGuestEventCount = 2;
+    constexpr uint8_t kGuestEventCount = 4;
     void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
     bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
 

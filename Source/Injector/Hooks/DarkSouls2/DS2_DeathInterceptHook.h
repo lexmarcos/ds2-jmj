@@ -104,4 +104,23 @@ namespace DS2_DeathIntercept
 
     // False once the move asked for has ended (arrived, or given up).
     bool Moving();
+
+    /// How the last travel ended, which `Moving()` alone cannot say.
+    ///
+    /// `Moving()` going false means "arrived **or** gave up", and the host
+    /// read that as "settled": measured 16/09 at 05:23, the destination map
+    /// never loaded, the travel gave up after 30 s, and the host called the
+    /// guests into a map it was not standing in. A group travel needs the
+    /// difference, because the others wait on this answer.
+    ///
+    /// Arrived is only ever set by the physics contact under the character
+    /// naming the destination map, never by a timer.
+    enum class Outcome : uint8_t
+    {
+        Idle = 0,
+        Moving = 1,
+        Arrived = 2,
+        Failed = 3,
+    };
+    Outcome TravelOutcome();
 }

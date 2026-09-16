@@ -394,8 +394,62 @@ namespace
         ULONGLONG Since = 0;
     };
     CallGuests s_call;
-    constexpr ULONGLONG kSettledMs = 1500;
     constexpr ULONGLONG kCallGiveUpMs = 40000;
+
+    // Everybody arrives behind their own loading screen and nobody comes out
+    // of it until the last one is standing. The machines do not load at the
+    // same time on purpose - both loading at once closed both games on 15/09 -
+    // so they land seconds apart; without this the player who arrived first
+    // watched the other pop into the world. The host collects one receipt per
+    // participant for one vote and then tells everyone to drop the curtain
+    // with the same message.
+    constexpr ULONGLONG kBarrierGiveUpMs = 25000;
+    constexpr size_t kMaxReporters = 4;
+
+    // Host side, game thread only.
+    struct Barrier
+    {
+        bool Active = false;
+        uint32_t Vote = 0;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        size_t Guests = 0;
+        bool HostArrived = false;
+        bool Incomplete = false;      // somebody failed, or the wait ran out
+        ULONGLONG Since = 0;
+        size_t ReporterCount = 0;
+        uint64_t Reporters[kMaxReporters] = {};
+    };
+    Barrier s_barrier;
+
+    // Guest side, game thread only: this machine is done and is waiting for
+    // the host to let the whole group out at once.
+    struct AwaitRelease
+    {
+        bool Active = false;
+        bool Reported = false;
+        bool Failed = false;
+        uint32_t Vote = 0;
+        ULONGLONG Since = 0;
+    };
+    AwaitRelease s_await;
+
+    // A receipt counts once per player.
+    bool NoteReporter(uint64_t Who)
+    {
+        for (size_t i = 0; i < s_barrier.ReporterCount; ++i)
+        {
+            if (s_barrier.Reporters[i] == Who)
+            {
+                return false;
+            }
+        }
+        if (s_barrier.ReporterCount < kMaxReporters)
+        {
+            s_barrier.Reporters[s_barrier.ReporterCount++] = Who;
+        }
+        return true;
+    }
     ULONGLONG s_job_unpatched_at = 0;
     constexpr ULONGLONG kJobUnpatchMs = 1500;
     ULONGLONG s_lit_tick = 0;
@@ -849,7 +903,9 @@ namespace
         {
             return;
         }
-        const bool Arrived = !s_go.Active && !DS2_DeathIntercept::Moving();
+        // Nobody leaves the loading screen while the group is still gathering.
+        const bool Waiting = s_barrier.Active || s_await.Active;
+        const bool Arrived = !s_go.Active && !DS2_DeathIntercept::Moving() && !Waiting;
         if (!Arrived)
         {
             s_curtain_down_at = 0;
@@ -906,10 +962,12 @@ namespace
         s_go.Active = true;
         s_go.Map = Map;
         s_go.Bonfire = Bonfire;
-        // The host goes first and the guests a moment later: two machines
-        // forcing a map in at the same instant is the shape the two crashes
-        // of 15/09 had (docs/DS2_SEAMLESS_COOP_TASKS.md, M8).
-        s_go.At = GetTickCount64() + (Closed || !OwnsTheWorld() ? kStandUpMs : 0);
+        // The host still goes first, but now because the guests are only told
+        // to move once the host's **physics contact** says it is standing on
+        // the destination, not after a timer. So the two seconds a guest used
+        // to wait for nothing are gone; only standing up from a bonfire menu
+        // still costs time.
+        s_go.At = GetTickCount64() + (Closed ? kStandUpMs : 0);
         (void)s_menu_cancel;
         Append(StringFormat("viagem para a fogueira %04x (mapa %08x)%s\n", (unsigned)Bonfire, Map,
             Closed ? "; menu da fogueira fechado, esperando levantar" : ""));
@@ -1347,31 +1405,73 @@ void DS2_BonfireInSession_Tick()
     KeepJobPatch(Now);
     KeepCurtain(Now);
 
-    // The host arrived: now the guests may come.
+    // The host calls the guests the moment its own arrival is **physical**,
+    // and never on a timer: the old code treated "stopped moving" as arrived,
+    // and on 16/09 at 05:23 that sent the guests into a map the host had given
+    // up loading thirty seconds earlier.
     if (s_call.Active)
     {
-        const bool Settled = !s_go.Active && !DS2_DeathIntercept::Moving();
-        if (!Settled)
-        {
-            s_call.Ready = 0;
-            if (Now - s_call.Since > kCallGiveUpMs)
-            {
-                s_call.Active = false;
-                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire);
-                Append(StringFormat("host: %llu ms e ainda nao cheguei na fogueira %04x; chamo os convidados assim mesmo\n",
-                    (unsigned long long)(Now - s_call.Since), (unsigned)s_call.Bonfire));
-            }
-        }
-        else if (s_call.Ready == 0)
-        {
-            s_call.Ready = Now + kSettledMs;
-        }
-        else if (Now >= s_call.Ready)
+        const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
+        const bool Done = !s_go.Active;
+        if (Done && Outcome == DS2_DeathIntercept::Outcome::Arrived)
         {
             s_call.Active = false;
-            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire);
-            Append(StringFormat("host: cheguei na fogueira %04x em %llu ms; os convidados podem vir\n",
-                (unsigned)s_call.Bonfire, (unsigned long long)(Now - s_call.Since)));
+            s_barrier.HostArrived = true;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire,
+                (int32_t)s_barrier.Vote);
+            Append(StringFormat("host: cheguei na fogueira %04x em %llu ms; os convidados podem vir (votacao %u)\n",
+                (unsigned)s_call.Bonfire, (unsigned long long)(Now - s_call.Since), s_barrier.Vote));
+        }
+        else if ((Done && Outcome == DS2_DeathIntercept::Outcome::Failed) || Now - s_call.Since > kCallGiveUpMs)
+        {
+            s_call.Active = false;
+            s_barrier.Active = false;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, s_barrier.Map,
+                (uint32_t)Cancel::Stuck, (int32_t)s_barrier.Bonfire);
+            ShowMessage(kTravelStuck);
+            Append(StringFormat("host: nao cheguei na fogueira %04x (%s); ninguem viaja e a tela desce\n",
+                (unsigned)s_call.Bonfire,
+                Outcome == DS2_DeathIntercept::Outcome::Failed ? "a viagem falhou" : "tempo esgotado"));
+        }
+    }
+
+    // The receipts of the group, and the one message that lets everybody out.
+    //
+    // The channel keeps **one** receipt per kind, overwriting, so with three or
+    // more players a receipt could be lost and the group would leave on the
+    // wait running out instead of on the last arrival. Two Steam accounts is
+    // all this machine can test (docs/DS2_TO_VALIDATE.md), so this is written
+    // down rather than solved.
+    if (s_barrier.Active)
+    {
+        DS2_CoopChannel::Bonfire Got;
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, Got))
+        {
+            if (Got.Id == s_barrier.Vote && NoteReporter(Got.From))
+            {
+                Append(StringFormat("host: o convidado %016llx chegou (votacao %u): %zu de %zu\n",
+                    (unsigned long long)Got.From, s_barrier.Vote, s_barrier.ReporterCount, s_barrier.Guests));
+            }
+        }
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, Got))
+        {
+            if (Got.Id == s_barrier.Vote && NoteReporter(Got.From))
+            {
+                s_barrier.Incomplete = true;
+                Append(StringFormat("host: o convidado %016llx nao conseguiu chegar (votacao %u)\n",
+                    (unsigned long long)Got.From, s_barrier.Vote));
+            }
+        }
+        const bool Everyone = s_barrier.HostArrived && s_barrier.ReporterCount >= s_barrier.Guests;
+        const bool RanOut = Now - s_barrier.Since > kBarrierGiveUpMs;
+        if (Everyone || RanOut)
+        {
+            const bool Whole = Everyone && !s_barrier.Incomplete;
+            s_barrier.Active = false;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelRelease, s_barrier.Map,
+                s_barrier.Vote, Whole ? 1 : 0);
+            Append(StringFormat("host: %s em %llu ms; todo mundo sai da tela de carregamento junto\n",
+                Whole ? "o grupo inteiro chegou" : "a espera acabou sem todos", (unsigned long long)(Now - s_barrier.Since)));
         }
     }
 
@@ -1552,6 +1652,13 @@ void DS2_BonfireInSession_Tick()
                 s_call.Map = s_travel.Map;
                 s_call.Bonfire = s_travel.Bonfire;
                 s_call.Since = Now;
+                s_barrier = Barrier();
+                s_barrier.Active = true;
+                s_barrier.Vote = s_travel.Vote;
+                s_barrier.Map = s_travel.Map;
+                s_barrier.Bonfire = s_travel.Bonfire;
+                s_barrier.Guests = Guests;
+                s_barrier.Since = Now;
                 Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; vou primeiro para a fogueira %04x e chamo os convidados ao chegar\n",
                     s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since), (unsigned)s_travel.Bonfire));
             }
@@ -1704,9 +1811,13 @@ void DS2_BonfireInSession_Tick()
         s_proposal.Active = false;
         if (DS2_DeathIntercept::MapReachable(Said.Map))
         {
-            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); vou junto\n",
-                (unsigned)Bonfire, Said.Map));
+            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); vou junto (votacao %d)\n",
+                (unsigned)Bonfire, Said.Map, Said.Type));
             StartGo(Said.Map, Bonfire);
+            s_await = AwaitRelease();
+            s_await.Active = true;
+            s_await.Vote = (uint32_t)Said.Type;
+            s_await.Since = Now;
         }
         else
         {
@@ -1715,6 +1826,43 @@ void DS2_BonfireInSession_Tick()
             ShowMessage(s_message);
             Append(StringFormat("convidado: viagem para a fogueira %04x (mapa %08x), mas o mapa nao pode ser trazido aqui\n",
                 (unsigned)Bonfire, Said.Map));
+        }
+    }
+    // This machine is done: tell the host how it went, then stand behind the
+    // loading screen until the host says everybody is in.
+    if (s_await.Active && !s_await.Reported && !s_go.Active)
+    {
+        const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
+        if (Outcome == DS2_DeathIntercept::Outcome::Arrived)
+        {
+            s_await.Reported = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, 0, s_await.Vote);
+            Append(StringFormat("convidado: cheguei (votacao %u); espero o resto do grupo atras da tela\n", s_await.Vote));
+        }
+        else if (Outcome == DS2_DeathIntercept::Outcome::Failed)
+        {
+            s_await.Reported = true;
+            s_await.Failed = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, s_await.Vote);
+            Append(StringFormat("convidado: nao consegui chegar (votacao %u); aviso o host\n", s_await.Vote));
+        }
+    }
+    if (s_await.Active && Now - s_await.Since > kBarrierGiveUpMs + 5000)
+    {
+        s_await.Active = false;
+        Append("convidado: o host nao mandou soltar a tela a tempo; solto por conta propria\n");
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelRelease, Said))
+    {
+        if (s_await.Active && (Said.Id == s_await.Vote || s_await.Vote == 0))
+        {
+            s_await.Active = false;
+            Append(StringFormat("convidado: o host soltou o grupo (votacao %u, %s); a tela desce\n",
+                (unsigned)Said.Id, Said.Type != 0 ? "todos chegaram" : "sem todos"));
+            if (s_await.Failed || Said.Type == 0)
+            {
+                ShowMessage(kTravelStuck);
+            }
         }
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelLeave, Said))
