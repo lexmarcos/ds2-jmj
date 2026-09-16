@@ -341,6 +341,15 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
+    // Travelling without leaving the session is off by default (16/09): it
+    // works on the host and solo, and on a guest it still closes the game
+    // seconds after arriving - memory of the map heap freed while live
+    // components point at it (docs/DS2_SEAMLESS_COOP_TASKS.md, M8). Until that
+    // is understood the vote falls back to the shape that was measured stable:
+    // the guests leave the session legally, the host travels with the game's
+    // own travel, and the party puts everyone back together. `DS2_Bonfire.req`
+    // takes `junta liga` / `junta desliga` to try the seamless one.
+    bool s_together = false;
     // The host travels first and calls the guests only once it is standing in
     // the new map: both machines bringing a map in at the same instant closed
     // both games twice (15/09), once inside the CharacterManager and once on
@@ -1317,7 +1326,12 @@ void DS2_BonfireInSession_Tick()
             while (std::getline(Stream, Line))
             {
                 unsigned Map = 0, Bonfire = 0;
-                if (sscanf_s(Line.c_str(), "ir %x %x", &Map, &Bonfire) == 2)
+                if (Line.rfind("junta", 0) == 0)
+                {
+                    s_together = Line.find("liga") != std::string::npos && Line.find("desliga") == std::string::npos;
+                    Append(StringFormat("pedido: viagem junta (sem sair da sessao) %s\n", s_together ? "ligada" : "desligada"));
+                }
+                else if (sscanf_s(Line.c_str(), "ir %x %x", &Map, &Bonfire) == 2)
                 {
                     Append(StringFormat("pedido: ir para a fogueira %04x do mapa %08x (alcancavel: %s)\n", Bonfire, Map,
                         DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
@@ -1434,7 +1448,7 @@ void DS2_BonfireInSession_Tick()
             // of the session, the host's own travel, the party putting them
             // back together a minute later - is what is left when the map
             // cannot be brought in beside this one.
-            const bool Together = DS2_DeathIntercept::MapReachable(s_travel.Map);
+            const bool Together = s_together && DS2_DeathIntercept::MapReachable(s_travel.Map);
             if (Together)
             {
                 s_travel.Active = false;
@@ -1453,8 +1467,9 @@ void DS2_BonfireInSession_Tick()
                 s_travel.Leaving = true;
                 s_travel.LeaveSince = Now;
                 DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelLeave);
-                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; o mapa %08x nao pode ser trazido, convidados saem da sessao\n",
-                    s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since), s_travel.Map));
+                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; %s, convidados saem da sessao\n",
+                    s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since),
+                    s_together ? StringFormat("o mapa %08x nao pode ser trazido", s_travel.Map).c_str() : "viagem junta desligada"));
             }
         }
         else if (Now - s_travel.Since > kVoteTimeoutMs)

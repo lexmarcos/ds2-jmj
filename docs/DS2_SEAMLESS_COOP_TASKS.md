@@ -864,6 +864,13 @@ desliga o desenho do mundo; o jogo ainda escreve o nome da área por cima.
 Desce 1,2 s depois de o personagem estar no lugar, e sempre antes de 25 s.
 Ninguém vê mais o personagem pendurado entre os dois mapas.
 
+**A viagem junta está desligada por padrão desde 16/09.** A votação aprovada
+volta ao caminho medido estável (convidados saem pela saída legal, o host viaja
+pela viagem do jogo, o party junta todos); `DS2_Bonfire.req` aceita
+`junta liga` para tentar a sem-sair. O motivo está abaixo, e o custo de
+descobrir isso foi o Samuel chegar aos **100 pontos** de desconexão ilegal — o
+bloqueio — com o temporizador de punição em 36000 s.
+
 **O convidado ainda cai depois de chegar — em aberto.** Com a cortina e com o
 mapa de origem segurado por 15 s, o jogo do convidado ainda fechou duas vezes
 de cinco viagens, sempre **depois** de ele chegar e ficar de pé:
@@ -876,7 +883,39 @@ de cinco viagens, sempre **depois** de ele chegar e ficar de pé:
   com o id do mapa novo em `r15`.
 
 Sozinho nunca acontece: oito viagens seguidas de ida e volta, sem sessão, sem
-uma queda. Com sessão, é sempre a máquina do **convidado**, e o que ela tem a
+uma queda.
+
+**O que o vigia mostrou (16/09).** `DS2_TravelWatchHook` registra, numa janela
+em volta da viagem, quem destrói o quê: o destrutor de `MapEntity`
+(`FUN_1403b9ea0`), a soltura de `MapModelComponent` (`FUN_1403f6300`) e as duas
+desmontagens por índice de mapa. Numa viagem que **não** caiu, o registro traz
+centenas de solturas de componentes do mapa deixado para trás, todas por dentro
+do quadro. Na que caiu (`+0x40d33b`), a lista percorrida pelo quadro
+(`FUN_14040d2e0`, o update de todo componente registrado: nó em `dono+0x20`,
+anterior em `+0x00` e próximo em `+0x08`) tinha um nó cujo dono **já estava
+liberado** — vftable carimbada pelo alocador — e nenhuma das quatro portas
+vigiadas tinha soltado aquele dono. Ou seja: **alguém libera sem desligar da
+lista**.
+
+O quadro passou a ser percorrido pelo hook, que confere a vftable do dono antes
+de chamar e desliga da lista o nó morto. Isso tirou aquela queda e trouxe a
+seguinte: `+0x3f687a`, **dentro** da soltura do componente, num sub-objeto já
+liberado. Quer dizer: a referência morta não está só na lista do quadro; está
+dentro de componentes vivos. É um problema de tempo de vida de memória do
+streaming do jogo com dois mapas e a sessão de pé, e não se fecha com uma
+trava pontual — por isso a viagem junta ficou desligada.
+
+Duas correções desta rodada valem de qualquer forma:
+
+- o `keep` mais longo vence (o pedido de 30 s da viagem estava sendo encurtado
+  para 5 s pelo keep que a cópia do outro jogador renova a cada quadro);
+- o mapa de chegada só pode ser segurado depois que o personagem pisa nele: o
+  contato físico ainda responde o mapa de onde ele saiu no instante do salto.
+
+E uma que era invisível: **o perfil de morte estava nulo**, então toda entrada
+no mundo deixava o hook em `observe` e nenhuma morte em sessão era paga pelo
+M2 — a morte do convidado virava o warp do jogo, que desmonta o mundo. Agora o
+perfil é `respawn`. Com sessão, é sempre a máquina do **convidado**, e o que ela tem a
 mais é a cópia do outro jogador, que trocou de mapa junto. A pista que sobra é
 essa: quem guarda `chr+0xc8` para a cópia de outro jogador e o que acontece com
 esse campo quando o mapa dela muda sem warp.
