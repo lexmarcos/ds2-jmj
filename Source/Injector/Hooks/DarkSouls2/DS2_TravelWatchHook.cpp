@@ -49,20 +49,21 @@ namespace
     constexpr size_t kComponentId = 0xc0;
     constexpr size_t kEntityAllocator = 0x20;
 
-    // A character's per-frame update, FUN_1403152f0(chr, delta): its model
-    // component at chr+0xf0 (slot +0x30 of it is FUN_1403f4f60, the pre-draw),
-    // its physics at chr+0x100, its roles at chr+0xb0. The guest's game closed
-    // twice inside that pre-draw (15/09 +0x3f4fac and +0x3f510f, 16/09
-    // +0x3f687a): the component's memory had been freed with a heap - its
-    // +0xd0 held allocator metadata, not a pointer - while the character was
-    // still being updated. Before the update runs, the component and the
-    // three objects it points at (+0x40 the model instance, +0xc8 the frame
-    // registration, +0xd0 the follower) are checked; a character whose
-    // component is gone is written down with everything that names it, and
-    // skipped for that frame.
-    constexpr size_t kChrUpdateOffset = 0x3152f0;
-    constexpr uint8_t kChrUpdatePrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00 };
-    constexpr size_t kChrModel = 0xf0;
+    // The per-frame update of a MapModelComponent, FUN_1403f4f60(component,
+    // delta), the pre-draw the CharacterManager runs for a character's model.
+    // The guest's game closed three times inside it (15/09 +0x3f4fac and
+    // +0x3f510f, 16/09 +0x3f687a): the component's memory had been freed with
+    // a heap - its +0xd0 held allocator metadata, not a pointer - while the
+    // character it belongs to was still being updated. Before the update runs,
+    // the component and the three objects it points at (+0x40 the model
+    // instance, +0xc8 the frame registration, +0xd0 the follower) are checked;
+    // a component that is gone is written down with everything that names its
+    // owner, and skipped for that frame. (A first version guarded the
+    // character's update, FUN_1403152f0, through chr+0xf0 - which is not this
+    // component, and every character was skipped. 16/09.)
+    constexpr size_t kModelUpdateOffset = 0x3f4f60;
+    constexpr uint8_t kModelUpdatePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00 };
+    constexpr size_t kPlayerCtrlVftable = 0x10e4bb8;
     constexpr size_t kChrType = 0x54;              // 2: another player's copy
     constexpr size_t kChrRoles = 0xb0;
     constexpr size_t kRole = 0x3c;
@@ -115,8 +116,8 @@ namespace
     using ByMap_p = void(*)(void* Object, int32_t MapIndex);
     using Broadcast_p = void(*)(void* Registry, void* Argument, uint32_t First, int32_t Count);
     using Update_p = void(*)(void* Owner, void* Argument);
-    using ChrUpdate_p = void(*)(void* Chr, float* Delta);
-    ChrUpdate_p s_original_chr_update = nullptr;
+    using ModelUpdate_p = void(*)(void* Component, float* Delta);
+    ModelUpdate_p s_original_model_update = nullptr;
 
     struct HeapRange
     {
@@ -426,24 +427,14 @@ namespace
         s_original_characters(Object, MapIndex);
     }
 
-    // The character's model component and what it points at, checked before
-    // the game touches them. `Why` names the first thing wrong.
-    bool ModelHealthy(uintptr_t Chr, uintptr_t& Component, uintptr_t Fields[3], const char*& Why)
+    // The model component and what it points at, checked before the game
+    // touches them. `Why` names the first thing wrong.
+    bool ModelHealthy(uintptr_t Component, uintptr_t Fields[3], const char*& Why)
     {
-        Component = 0;
         Fields[0] = Fields[1] = Fields[2] = 0;
-        if (!Peek(Chr + kChrModel, &Component, sizeof(Component)))
+        if (Component == 0 || !ObjectOrNull(Component))
         {
-            Why = "personagem ilegivel";
-            return false;
-        }
-        if (Component == 0)
-        {
-            return true;   // a character without a model is the game's business
-        }
-        if (!ObjectOrNull(Component))
-        {
-            Why = "o componente de modelo (+0xf0) nao e um objeto vivo";
+            Why = "o componente de modelo nao e um objeto vivo";
             return false;
         }
         if (!Peek(Component + kModelInstance, &Fields[0], sizeof(Fields[0])) ||
@@ -471,14 +462,22 @@ namespace
         return true;
     }
 
-    // Everything that names a character, read with care.
-    std::string DescribeCharacter(uintptr_t Chr, uintptr_t Component)
+    // Everything that names the owner of a component, read with care: the
+    // entity at +0x08, which for a character is the character itself (the
+    // fields after the entity's are only meaningful then).
+    std::string DescribeOwner(uintptr_t Component)
     {
-        uintptr_t Vftable = 0, Roles = 0, Physics = 0, Contact = 0, Entity = 0;
+        uintptr_t Chr = 0, Vftable = 0, Roles = 0, Physics = 0, Contact = 0, Entity = 0;
         uint8_t Type = 0xff, Role = 0xff;
         float At[3] = {};
         uint32_t Handle = 0, Map = 0xffffffff;
         uint16_t Kind = 0xffff;
+        if (!Peek(Component + kComponentEntity, &Chr, sizeof(Chr)) || !PointerShape(Chr))
+        {
+            return StringFormat("entidade %p ilegivel", (void*)Chr);
+        }
+        Entity = Chr;
+        DescribeEntity(Entity, Map, Kind);
         Peek(Chr, &Vftable, sizeof(Vftable));
         Peek(Chr + kChrType, &Type, 1);
         if (Peek(Chr + kChrRoles, &Roles, sizeof(Roles)) && PointerShape(Roles))
@@ -491,35 +490,32 @@ namespace
         {
             Peek(Contact + kContactHandle, &Handle, sizeof(Handle));
         }
-        if (Component != 0 && Peek(Component + kComponentEntity, &Entity, sizeof(Entity)) && PointerShape(Entity))
-        {
-            DescribeEntity(Entity, Map, Kind);
-        }
-        return StringFormat("personagem %p (vftable +0x%zx, tipo %u, papel %u, em (%.2f, %.2f, %.2f), contato %08x, indice de mapa %d; entidade %p mapa %08x tipo %u)",
-            (void*)Chr, InModule(Vftable) ? (size_t)(Vftable - s_base) : (size_t)0, (unsigned)Type, (unsigned)Role,
-            At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f), (void*)Entity, Map, (unsigned)Kind);
+        return StringFormat("entidade %p (vftable +0x%zx%s, mapa %08x, tipo %u; como personagem: tipo %u, papel %u, em (%.2f, %.2f, %.2f), contato %08x, indice de mapa %d)",
+            (void*)Entity, InModule(Vftable) ? (size_t)(Vftable - s_base) : (size_t)0,
+            Vftable == s_base + kPlayerCtrlVftable ? " PlayerCtrl" : "", Map, (unsigned)Kind, (unsigned)Type, (unsigned)Role,
+            At[0], At[1], At[2], Handle, (int)((Handle >> 4) & 0x3f));
     }
 
-    void ChrUpdateHook(void* Chr, float* Delta)
+    void ModelUpdateHook(void* Component, float* Delta)
     {
         PollHeaps();
-        uintptr_t Component = 0, Fields[3] = {};
+        uintptr_t Fields[3] = {};
         const char* Why = "";
-        if (ModelHealthy((uintptr_t)Chr, Component, Fields, Why))
+        if (ModelHealthy((uintptr_t)Component, Fields, Why))
         {
-            s_original_chr_update(Chr, Delta);
+            s_original_model_update(Component, Delta);
             return;
         }
-        // Skipped, and said once a second per character.
+        // Skipped, and said once a second per component.
         const ULONGLONG Now = GetTickCount64();
         const uint64_t Count = s_skipped_characters.fetch_add(1);
-        if (Count < 200 && ((uintptr_t)Chr != s_last_skipped_chr || Now - s_last_skipped_at >= 1000))
+        if (Count < 400 && ((uintptr_t)Component != s_last_skipped_chr || Now - s_last_skipped_at >= 1000))
         {
-            s_last_skipped_chr = (uintptr_t)Chr;
+            s_last_skipped_chr = (uintptr_t)Component;
             s_last_skipped_at = Now;
-            Append(StringFormat("%s  t%lu  UPDATE PULADO: %s; %s; componente %p (+0x40 %p, +0xc8 %p, +0xd0 %p); o componente esta no %s%s\n",
-                Clock().c_str(), GetCurrentThreadId(), Why, DescribeCharacter((uintptr_t)Chr, Component).c_str(), (void*)Component,
-                (void*)Fields[0], (void*)Fields[1], (void*)Fields[2], WhoseHeap(Component).c_str(), Stack().c_str()));
+            Append(StringFormat("%s  t%lu  PRE-DESENHO PULADO: %s; componente %p (+0x40 %p, +0xc8 %p, +0xd0 %p) no %s; %s%s\n",
+                Clock().c_str(), GetCurrentThreadId(), Why, Component, (void*)Fields[0], (void*)Fields[1], (void*)Fields[2],
+                WhoseHeap((uintptr_t)Component).c_str(), DescribeOwner((uintptr_t)Component).c_str(), Stack().c_str()));
             s_lines.fetch_add(1);
         }
     }
@@ -628,15 +624,15 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_objects = (ByMap_p)(Base + kMapObjectsOffset);
     s_original_characters = (ByMap_p)(Base + kMapCharactersOffset);
     s_original_broadcast = (Broadcast_p)(Base + kBroadcastOffset);
-    const bool ChrUpdate = Matches(Base + kChrUpdateOffset, kChrUpdatePrologue, sizeof(kChrUpdatePrologue));
-    s_original_chr_update = ChrUpdate ? (ChrUpdate_p)(Base + kChrUpdateOffset) : nullptr;
+    const bool ChrUpdate = Matches(Base + kModelUpdateOffset, kModelUpdatePrologue, sizeof(kModelUpdatePrologue));
+    s_original_model_update = ChrUpdate ? (ModelUpdate_p)(Base + kModelUpdateOffset) : nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_broadcast, BroadcastHook);
     if (ChrUpdate)
     {
-        DetourAttach(&(PVOID&)s_original_chr_update, ChrUpdateHook);
+        DetourAttach(&(PVOID&)s_original_model_update, ModelUpdateHook);
     }
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
@@ -650,7 +646,7 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     }
 
     s_ready.store(true);
-    Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar; update de personagem %s ===\n", Clock().c_str(),
+    Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar; pre-desenho do modelo %s ===\n", Clock().c_str(),
         ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
     Log("[DS2TravelWatch] pronto; so escreve enquanto uma viagem estiver aberta");
 #endif
@@ -667,9 +663,9 @@ void DS2_TravelWatchHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_broadcast, BroadcastHook);
-        if (s_original_chr_update != nullptr)
+        if (s_original_model_update != nullptr)
         {
-            DetourDetach(&(PVOID&)s_original_chr_update, ChrUpdateHook);
+            DetourDetach(&(PVOID&)s_original_model_update, ModelUpdateHook);
         }
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);

@@ -1314,7 +1314,10 @@ void DS2_BonfireInSession_Tick()
 
     // `DS2_Bonfire.req`: `ir <mapa hex> <fogueira hex>` takes this machine's
     // player to that bonfire the way a travel does, with no session and no
-    // vote - the control for a travel that closed the game.
+    // vote - the control for a travel that closed the game. `votar <mapa hex>
+    // <fogueira hex>` on the host starts the vote itself, without the travel
+    // list, so the whole road (vote, host first, guests called) can be
+    // measured from the request file.
     if (Now - s_request_tick >= 500)
     {
         s_request_tick = Now;
@@ -1336,6 +1339,25 @@ void DS2_BonfireInSession_Tick()
                     Append(StringFormat("pedido: ir para a fogueira %04x do mapa %08x (alcancavel: %s)\n", Bonfire, Map,
                         DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
                     StartGo(Map, (uint16_t)Bonfire);
+                }
+                else if (sscanf_s(Line.c_str(), "votar %x %x", &Map, &Bonfire) == 2)
+                {
+                    // The host starts the vote as if it had picked that bonfire
+                    // in its travel list, with no list open: what the vote
+                    // does after a yes from everyone is the same.
+                    if (!OwnsTheWorld() || !s_votes_ready)
+                    {
+                        Append("pedido: votar, mas este jogador nao e o dono do mundo (ou a votacao nao esta pronta)\n");
+                    }
+                    else if (s_travel.Active)
+                    {
+                        Append("pedido: votar, mas ja ha uma votacao em andamento\n");
+                    }
+                    else
+                    {
+                        Append(StringFormat("pedido: votacao para a fogueira %04x do mapa %08x\n", Bonfire, Map));
+                        BeginVote(nullptr, 0, (uint16_t)Bonfire, Map);
+                    }
                 }
             }
             Stream.close();
