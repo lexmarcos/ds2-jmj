@@ -977,6 +977,77 @@ pré-desenho guardado (uma trava real contra a queda, não só um registro); a
 tela de carregamento do jogo com o HUD escondido; e `DS2_Bonfire.req` aceita
 `votar <mapa> <fogueira>` no host para exercitar a votação inteira sem a lista.
 
+## A queda do convidado — fechada em 16/09
+
+**Uma guarda só, no lugar certo.** Toda a vida de um mapa passa por uma
+chamada: `FUN_1403cc3f0`, a atualização por quadro do `MapAreaCtrlOwner`, cuja
+máquina de estados carrega o mapa, transmite as partes e, no fim, desmonta
+tudo. **Todas** as quedas que sobraram vinham de dentro dessa desmontagem, num
+endereço diferente a cada vez — `+0x3d8782`, `+0x3c1bf8`, `+0x40d2c7`,
+`+0x40cee3`, `+0x3f4230`, `+0x3f647e`, `+0x3ece30`. Perseguir uma por uma só
+mudava o endereço: foram quatro rodadas de guarda pontual, e a cada rodada a
+queda reapareceu noutro lugar.
+
+O `DS2_BackreadHook` agora envolve essa chamada inteira em `__try`. Uma falha
+ali deixa o mapa **pela metade** — memória que a sessão não recupera — em vez
+de fechar o jogo e custar dez pontos de desconexão ilegal ao convidado.
+
+**Medido em 16/09, com os dois jogadores**: dez trechos seguidos Heide↔Majula
+(cinco idas e voltas), host primeiro e convidado depois, com a sessão
+verificada o tempo todo. **Nenhum jogo fechou.** A guarda aparou **60 falhas**
+no ciclo do mapa e o jogo seguiu em todas; os dois terminaram de pé na mesma
+fogueira de Heide, `p2pSessionVerified: true`, penalidade inalterada (Samuel
+10, Chico 50, armado 1 porque a sessão estava viva).
+
+Guardas menores, pelo mesmo princípio, cobrem o resto do caminho: o pré-desenho
+(`FUN_1403f4f60`), a pós-física (`FUN_1403f41d0`), a soltura do componente
+(`FUN_1403f6300`), a saída da lista do quadro (`FUN_14040cea0`) e a busca em
+lista (`FUN_1401cbf20`). Uma falha em qualquer uma delas pula o quadro ou deixa
+o componente vazar.
+
+**A corrupção em si continua sem explicação, e está anotada aqui para quem
+voltar.** A assinatura é sempre a mesma e é estranha: a metade **alta** de um
+ponteiro vivo aparece escrita por cima, e a metade baixa continua certa.
+
+    00b54001410e86d8   deveria ser 00000001410e86d8   (vftable +0x10e86d8)
+    00b01001410eb518   deveria ser 00000001410eb518   (vftable +0x10eb518)
+    00b010fff06b8588   deveria ser 00007ffff06b8588
+    000b0010e81d77b0   deveria ser 00007fffe81d77b0
+
+Os valores que aparecem são sempre da mesma família (`00b010`, `00b540`,
+`000b0010`). Não é memória reciclada — um bloco reaproveitado traria uma
+vftable completamente outra, não a certa com o topo sujo. É uma escrita perdida
+pequena, e acontece **só na máquina do convidado e só com a sessão de pé**:
+sozinho, catorze viagens seguidas em dois builds diferentes, nenhuma falha.
+
+**Duas teorias foram testadas e descartadas**, o que vale mais que as que
+sobraram:
+
+1. **"alguém libera um nó sem desligar da lista do quadro"** — era a conclusão
+   de 15/09. O vigia passou a refazer os 32 baldes da lista a cada quadro,
+   deixando só nós cujo dono ainda é um objeto vivo. Em dez trechos **nenhum
+   balde precisou ser refeito**. A lista estava sempre íntegra; não é isso;
+2. **pressão de memória pela viagem forçar o mapa inteiro** — a viagem pedia as
+   128 partes do destino. Medido sozinho em 16/09, com a máscara em **zero** o
+   mapa carrega igual e o chão vem do mesmo jeito, porque quem traz o chão é o
+   **foco** (a célula de navegação entregue ao streamer), não a máscara. A
+   pegada de componentes ficou idêntica (188 em Heide, ~570 em Majula), então a
+   máscara nunca foi o gasto. A viagem deixou de pedi-la de qualquer forma.
+
+**E uma lição de método:** a primeira versão das guardas tentava *adivinhar*
+quais campos de um componente estavam saudáveis (`+0x40`, `+0xc8`, `+0xd0`, a
+vftable embutida em `+0x50`) e pulava o componente quando algum não parecia um
+objeto vivo. Isso jogou fora **600 atualizações por boot** de objetos de mapa
+perfeitamente normais: aqueles campos legitimamente guardam coisas que não são
+objetos com vftable. Adivinhar qual campo está são é como se quebra o jogo
+tentando salvá-lo. O que ficou foi o `__try`, que só dispara numa falha de
+verdade e não tem falso positivo.
+
+**Falta ainda:** achar quem faz a escrita perdida. A pista é a família de
+valores e o fato de ser exclusiva do convidado em sessão. Um breakpoint de
+escrita em hardware sobre o endereço de um ponteiro que já foi corrompido uma
+vez é o caminho que não foi tentado.
+
 **Falta:**
 
 - **a queda do convidado depois da chegada, acima, é o próximo trabalho**;
