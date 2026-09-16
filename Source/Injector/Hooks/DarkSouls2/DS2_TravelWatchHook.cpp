@@ -122,8 +122,6 @@ namespace
     // `+0x00` its own vftable, whose slot `+0x28` is the teardown.
     //
     // This is the list the 74 copies of GetComponent<T> walk.
-    constexpr size_t kComponentNode = 0x60;       // the node, inside the component
-    constexpr size_t kNodeEntity = 0x08;          // the entity, inside the node
     constexpr size_t kNodeInEntityNext = 0x10;    // the next node
     constexpr size_t kEntityComponents = 0x18;    // the list head, inside the entity
     constexpr uint32_t kListGuard = 4096;         // a component list is never this long
@@ -234,13 +232,10 @@ namespace
     std::atomic<uint64_t> s_caught_tick{ 0 };   // faults inside FUN_1403f4f10 alone
     // The detach window and what it did. Kept apart from the guard counters:
     // a guard firing is a failure, a detach is the fix doing its job.
-    std::atomic<ULONGLONG> s_detach_until{ 0 };
-    std::atomic<uint64_t> s_detached{ 0 };
-    std::atomic<uint64_t> s_detach_failed{ 0 };
-    std::atomic<uint64_t> s_detach_unknown_heap{ 0 };
+    std::atomic<uint64_t> s_heap_unknown{ 0 };
     std::atomic<uint64_t> s_cut{ 0 };            // rotten links cut out of an entity's list
     std::atomic<uint64_t> s_same_heap{ 0 };      // component and entity in one heap: the ordinary case
-    std::atomic<uint64_t> s_cross_heap{ 0 };     // different heaps, but not one the origin had
+    std::atomic<uint64_t> s_cross_heap{ 0 };     // measured: this has never once been anything but zero
     // Which entities were swept and when. Small on purpose: a travel has a
     // handful of entities passing these hooks, not hundreds.
     struct SweptEntity
@@ -260,8 +255,6 @@ namespace
     // separate is a third map's heap that was already there and is not dying;
     // a component of one of those attached to a travelling character would
     // still be detached. Not solved here, and not seen either.
-    uintptr_t s_origin_heaps[kMaxHeaps];
-    int s_origin_heap_count = 0;
     std::atomic<uint64_t> s_skipped_tick{ 0 };
 
     struct HeapRange
@@ -1008,211 +1001,57 @@ namespace
         SweepEntityList(Entity);
     }
 
-    // Is this node linked in this entity's list? The proof that settles
-    // everything else, because a wrong candidate cannot be found there.
-    bool LinkedTo(uintptr_t Entity, uintptr_t Node)
-    {
-        uintptr_t At = 0;
-        if (!Peek(Entity + kEntityComponents, &At, sizeof(At)))
-        {
-            return false;
-        }
-        for (uint32_t Guard = 0; At != 0 && Guard < kListGuard; ++Guard)
-        {
-            if (At == Node)
-            {
-                return true;
-            }
-            uintptr_t Next = 0;
-            if (!Peek(At + kNodeInEntityNext, &Next, sizeof(Next)))
-            {
-                return false;
-            }
-            At = Next;
-        }
-        return false;
-    }
 
-    // Two jobs, on two different windows. The sweep runs for the whole travel,
-    // because a rotten link kills at the first walk that reaches it and the
-    // guest died one to three seconds after landing. The detach runs only in
-    // the short window before the origin map is let go, because that is the
-    // only time both ends of a cross-heap link are still alive.
-    // The detach, which is the fix rather than a net. Read in Ghidra on 16/09:
+    // What a travel does with each component that comes past the per-frame
+    // hooks: sweep the list of the entity that owns it, and count where the
+    // two live.
     //
-    //   FUN_14040cca0(entity, components, n) is the attach. It links each
-    //   component into the list at entity+0x18, writes the entity back into
-    //   component+0x08, and registers it in the frame's registry.
+    // There used to be a detach here as well. Read in Ghidra on 16/09, the
+    // game always detaches before it frees - FUN_14040cea0 calls the
+    // component's teardown, takes it out of entity+0x18 and out of the frame
+    // registry, and only then hands the block back - so a dead node in a list
+    // could only come from memory disappearing without that running, which is
+    // what a map part's heap does when it dies whole. From that the rule
+    // followed: a component in a different heap from its entity is one about
+    // to be freed under it, and the travel cut those loose before letting the
+    // origin map go.
     //
-    //   FUN_14040cea0(entity, component, free) is the complete detach, and it
-    //   is already hooked here. It calls the component's own teardown at slot
-    //   +0x28, takes it out of the list at entity+0x18, takes it out of the
-    //   frame registry, clears component+0x08, and only then - if `free` says
-    //   so - hands the block back to the heap it came from.
+    // **The rule was false, and the counters below are what proved it.** Over
+    // twelve legs on 16/09 the two instances saw 6017963 and 7035751
+    // components, and **every one of them** was in the same heap as its
+    // entity. Not one cross-heap link exists to cut. The detach was removed
+    // rather than left in: code that cannot act, sitting where a fix belongs,
+    // reads as a fix to whoever comes next.
     //
-    // Every path the game takes detaches before it frees; FUN_1403f6300, the
-    // ordinary component release, goes through FUN_14040cea0 too. So a dead
-    // node in a list can only come from memory disappearing **without** that
-    // function running, and a map part's heap does exactly that: it takes the
-    // whole block range away at once, with no destructor and no detach. The
-    // 74 copies of GetComponent<T> that walk entity+0x18 then read a freed
-    // vftable, which is where the guest closed on 16/09 at +0x17b260.
-    //
-    // A travel is the one moment we create that situation on purpose: the
-    // character crosses without a load, so its entity outlives the origin map
-    // whose heap held some of its components.
-    //
-    // The test for "this one is about to be freed under its entity" is a
-    // single thing: **the component's memory is in a different heap from its
-    // entity's**. Components and entities of the same map share a heap and are
-    // never touched; only the cross-heap link, which is what travelling
-    // creates, is. `free` is 0 because the dying heap is what frees the block
-    // moments from now - passing 1 would free it twice.
-    //
-    // It runs only inside the window the travel opens before it lets the
-    // origin map go, because that is the only time both ends are still alive.
-    // Once the heap is gone the component cannot be called at all, and the
-    // only thing left would be pointer surgery on a list.
-    //
-    // Returns true when it detached, and the caller then skips this frame's
-    // work for that component: it no longer belongs to anybody.
-    // Nothing here is assumed, because handing FUN_14040cea0 the wrong
-    // pointer rewrites a list through the wrong fields - the exact way to
-    // corrupt memory while claiming to fix it. Two readings disagreed about
-    // which pointer is the node, so both are tried and the entity's own list
-    // decides; a candidate that is not in it is simply not used.
-    //
-    // Measured live on 16/09, with a breakpoint on FUN_1403f4f10 and the probe
-    // reading what it caught: the node **is** the component's base. The
-    // registry link sits at base+0x20, which is where FUN_14040d280 writes it,
-    // the entity is at base+0x08, and walking entity+0x18 by +0x10 finds the
-    // component as the second of fourteen nodes. There is a second node-shaped
-    // sub-object at base+0x60, with its own vftable and the same entity at
-    // +0x68, which is what made the other reading plausible.
-    bool SweepAndDetach(uintptr_t Component)
+    // The counting stays, because it is what turned "nothing happened" into
+    // "the rule does not apply" - a silent no-op and an idle correct fix write
+    // the same log line, and that cost a whole cycle to find out.
+    void TendComponent(uintptr_t Component)
     {
-        const ULONGLONG Until = s_detach_until.load();
-        const bool Detaching = Until != 0 && GetTickCount64() < Until && s_original_unregister != nullptr;
-        if (Component == 0 || (!Detaching && !WindowOpen()))
+        if (Component == 0 || !WindowOpen())
         {
-            return false;
+            return;
         }
-        // The sweep goes first, and on the entity read straight out of the
-        // component, because the resolution below walks the list from its head
-        // to prove which pointer is the node - and a rotten link **before**
-        // this component makes that walk fail. Ordering it the other way meant
-        // the sweep never ran in the one case it exists for. Measured on
-        // 16/09 that component+0x08 is the entity for every node in the list.
+        uintptr_t Entity = 0;
+        if (!Peek(Component + kComponentEntity, &Entity, sizeof(Entity)) || Entity == 0 || !ObjectOrNull(Entity))
         {
-            uintptr_t Owner = 0;
-            if (Peek(Component + kComponentEntity, &Owner, sizeof(Owner)) && Owner != 0 && ObjectOrNull(Owner))
-            {
-                SweepEntitySoon(Owner);
-            }
+            return;
         }
-        // Which of the two is the node is **not** decided by reading. The
-        // attach, FUN_14040cca0, is unambiguous that the entity sits at
-        // node+0x08, but the two readings of where the node sits disagree:
-        // FUN_1403f4ce0 hands FUN_14040cea0 a `this+0x60`, while the frame
-        // registry's own walk takes `link-0x20` as the object it calls slot
-        // +0x30 on - and slot +0x30 is FUN_1403f4f10, whose `this` is what
-        // arrives here. A thunk somewhere makes both true of different
-        // pointers. So both candidates are tried and the list decides; a wrong
-        // one is simply not in it, and nothing is written.
-        const uintptr_t Candidates[] = { Component, Component + kComponentNode };
-        uintptr_t Node = 0, Entity = 0;
-        for (size_t i = 0; i < sizeof(Candidates) / sizeof(Candidates[0]); ++i)
-        {
-            const uintptr_t Try = Candidates[i];
-            uintptr_t Vftable = 0, Owner = 0;
-            if (!Peek(Try, &Vftable, sizeof(Vftable)) || !InModule(Vftable) || (Vftable & 7) != 0 ||
-                !Peek(Try + kNodeEntity, &Owner, sizeof(Owner)) || Owner == 0 || !ObjectOrNull(Owner) ||
-                !LinkedTo(Owner, Try))
-            {
-                continue;
-            }
-            Node = Try;
-            Entity = Owner;
-            break;
-        }
-        if (Node == 0)
-        {
-            return false;   // not a component of an entity's list: not our case
-        }
-        // The sweep comes first and is the part that earns its keep: whatever
-        // is decided about heaps below, a link that is not an address has to
-        // go before one of the 74 walks reaches it.
-        if (!Detaching)
-        {
-            return false;
-        }
+        SweepEntitySoon(Entity);
         int Mine = -1, Theirs = -1;
-        const bool KnowMine = HeapIndexOf(Component, Mine);
-        const bool KnowTheirs = HeapIndexOf(Entity, Theirs);
-        if (!KnowMine || !KnowTheirs)
+        if (!HeapIndexOf(Component, Mine) || !HeapIndexOf(Entity, Theirs))
         {
-            // Said once per window, because a fix that quietly does nothing
-            // reads exactly like a fix that had nothing to do.
-            if (s_detach_unknown_heap.fetch_add(1) < 4)
-            {
-                Append(StringFormat("%s  t%lu  heap desconhecido no desligamento: componente %p no %s, entidade %p no %s\n",
-                    Clock().c_str(), GetCurrentThreadId(), (void*)Component, WhoseHeap(Component).c_str(),
-                    (void*)Entity, WhoseHeap(Entity).c_str()));
-                s_lines.fetch_add(1);
-            }
-            return false;
+            s_heap_unknown.fetch_add(1);
+            return;
         }
-        if (Mine == Theirs)
-        {
-            // Counted, not silent. Measured on 16/09 that this is **every**
-            // component: the entity and its components share a heap, so the
-            // cross-heap rule below never fires. Without this number, "there
-            // was nothing cross-heap" and "the rule never applied" read the
-            // same in the log, which is how a fix that does nothing passes for
-            // a fix that had nothing to do.
-            s_same_heap.fetch_add(1);
-            return false;
-        }
-        // And the component's heap has to be one that was already there when
-        // the travel began, so the destination's is never touched.
-        bool FromOrigin = false;
-        for (int i = 0; i < s_origin_heap_count && !FromOrigin; ++i)
-        {
-            FromOrigin = s_origin_heaps[i] == s_heaps[Mine].Heap;
-        }
-        if (!FromOrigin)
-        {
-            s_cross_heap.fetch_add(1);
-            return false;
-        }
-        const uint64_t Count = s_detached.fetch_add(1);
-        if (Count < 200)
-        {
-            Append(StringFormat("%s  t%lu  DESLIGANDO o componente %p (no %p) da entidade %p: o componente esta no %s e a entidade no %s; %s\n",
-                Clock().c_str(), GetCurrentThreadId(), (void*)Component, (void*)Node, (void*)Entity,
-                WhoseHeap(Component).c_str(), WhoseHeap(Entity).c_str(), DescribeOwner(Component).c_str()));
-            s_lines.fetch_add(1);
-        }
-        if (!GuardedUnregister(s_original_unregister, (void*)Entity, (void*)Node, 0))
-        {
-            if (s_detach_failed.fetch_add(1) < 40)
-            {
-                Append(StringFormat("%s  t%lu  O DESLIGAMENTO FALHOU no componente %p da entidade %p\n",
-                    Clock().c_str(), GetCurrentThreadId(), (void*)Component, (void*)Entity));
-                s_lines.fetch_add(1);
-            }
-        }
-        return true;
+        (Mine == Theirs ? s_same_heap : s_cross_heap).fetch_add(1);
     }
 
     void ModelUpdateHook(void* Component, float* Delta)
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (SweepAndDetach((uintptr_t)Component))
-        {
-            return;
-        }
+        TendComponent((uintptr_t)Component);
         uintptr_t Fields[3] = {};
         const char* Why = "";
         if (ModelHealthy((uintptr_t)Component, Fields, Why))
@@ -1276,10 +1115,7 @@ namespace
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (SweepAndDetach((uintptr_t)Component))
-        {
-            return;
-        }
+        TendComponent((uintptr_t)Component);
         uintptr_t Fields[3] = {};
         const char* Why = "";
         if (!ModelHealthy((uintptr_t)Component, Fields, Why))
@@ -1344,10 +1180,7 @@ namespace
     {
         NoteIfCorrupt((uintptr_t)Component);
         PollHeaps();
-        if (SweepAndDetach((uintptr_t)Component))
-        {
-            return;
-        }
+        TendComponent((uintptr_t)Component);
         uintptr_t Fields[3] = {};
         const char* Why = "";
         if (!ModelHealthy((uintptr_t)Component, Fields, Why))
@@ -1605,28 +1438,20 @@ namespace DS2_TravelWatch
         {
             return;
         }
-        // The first Open of a travel is the one that happens before the
-        // destination map exists, so that is when the origin's heaps are
-        // written down; the second one, on landing, only extends the window.
+        // The first Open of a travel - the second one, on landing, only
+        // extends the window - starts the sweep's ring empty, so an entity
+        // address reused by a new entity cannot suppress a sweep for a whole
+        // leg.
         const ULONGLONG Now = GetTickCount64();
         const ULONGLONG Had = s_open_until.load();
         if (Had == 0 || Now >= Had)
         {
             PollHeaps();
-            s_origin_heap_count = s_heap_count;
-            for (int i = 0; i < s_heap_count; ++i)
-            {
-                s_origin_heaps[i] = s_heaps[i].Heap;
-            }
-            // And the ring starts empty, so an address reused by a new entity
-            // cannot suppress the sweep for a whole leg.
             for (int i = 0; i < kSweptRing; ++i)
             {
                 s_swept[i] = SweptEntity();
             }
             s_swept_next = 0;
-            Append(StringFormat("%s  --- %d heap(s) ja existiam quando a viagem comecou ---\n", Clock().c_str(),
-                s_origin_heap_count));
         }
         s_lines.store(0);
         s_open_until.store(Now + Milliseconds);
@@ -1644,10 +1469,9 @@ namespace DS2_TravelWatch
             (unsigned long long)s_caught_task.load(), (unsigned long long)s_skipped_characters.load(),
             (unsigned long long)s_skipped_tick.load(), (unsigned long long)s_skipped_physics.load(),
             (unsigned long long)s_skipped.load(), (unsigned long long)s_corrupt_seen.load()));
-        Append(StringFormat("%s  --- desligamentos: %llu feitos, %llu falharam, %llu com heap desconhecido; visto %llu no mesmo heap, %llu em heap alheio que nao e da origem ---\n",
-            Clock().c_str(), (unsigned long long)s_detached.load(), (unsigned long long)s_detach_failed.load(),
-            (unsigned long long)s_detach_unknown_heap.load(), (unsigned long long)s_same_heap.load(),
-            (unsigned long long)s_cross_heap.load()));
+        Append(StringFormat("%s  --- componentes vistos: %llu no mesmo heap da entidade, %llu em heap alheio, %llu com heap desconhecido ---\n",
+            Clock().c_str(), (unsigned long long)s_same_heap.load(), (unsigned long long)s_cross_heap.load(),
+            (unsigned long long)s_heap_unknown.load()));
         Append(StringFormat("%s  --- elos podres cortados de listas de entidade: %llu ---\n", Clock().c_str(),
             (unsigned long long)s_cut.load()));
 #else
@@ -1656,20 +1480,4 @@ namespace DS2_TravelWatch
 #endif
     }
 
-    void DetachCrossHeap(uint32_t Milliseconds, const char* Why)
-    {
-#if defined(_WIN32) && defined(_M_X64)
-        if (!s_ready.load())
-        {
-            return;
-        }
-        s_detach_until.store(GetTickCount64() + Milliseconds);
-        Append(StringFormat("%s  --- desligando componentes de heap alheio por %u ms: %s ---\n", Clock().c_str(),
-            Milliseconds, Why != nullptr ? Why : ""));
-        s_lines.fetch_add(1);
-#else
-        (void)Milliseconds;
-        (void)Why;
-#endif
-    }
 }
