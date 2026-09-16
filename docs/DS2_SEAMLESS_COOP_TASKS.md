@@ -1355,6 +1355,56 @@ ilegal. O host ficou em 10 pontos, sem armar. O convidado estava em 60 antes
 da corrida — 50 na verificação anterior desta sessão, então dez pontos foram
 cobrados em algum momento antes deste teste.
 
+### O mecanismo, lido no Ghidra (16/09)
+
+Leitura estática, sem executar nada. Ela explica a queda acima e diz onde o
+conserto cabe.
+
+**A lista.** `FUN_14040cca0(entidade, componentes, quantos)` é o **anexar**:
+liga cada componente na lista de `entidade+0x18`, grava `componente+0x08 = a
+entidade`, registra no registro do quadro por `FUN_14040d280`, e chama o slot
+`+0x20` do componente. É essa lista que os 74 `GetComponent<T>()` andam.
+
+**O desligar é completo.** `FUN_14040cea0(entidade, componente, liberar)` —
+que este projeto já engancha — faz, nesta ordem:
+
+1. chama o slot `+0x28` do componente (para `MapModelComponent`,
+   `FUN_1403f4ce0`, que tira do registro do quadro se o bit 2 de `+0xe8`
+   estiver ligado);
+2. **tira o componente da lista de `entidade+0x18`**, andando por `+0x10`;
+3. zera o `+0x10` do componente e o tira do registro por `FUN_14040d2b0`;
+4. zera `componente+0x08`, o ponteiro de volta para a entidade;
+5. só então, se `liberar` for verdade, acha o heap dono por `FUN_1408389e0` e
+   libera por lá.
+
+E `FUN_1403f6300`, a liberação normal do componente, chama `FUN_14040cea0`.
+
+**Conclusão.** O caminho do jogo **sempre desliga antes de liberar**. A única
+maneira de um componente morto continuar na lista de uma entidade é a memória
+dele sumir **sem** essa função rodar — que é exatamente o que acontece quando
+o heap do mapa é destruído inteiro: os blocos somem de uma vez, nenhum
+destrutor roda, nenhum desligamento acontece. Se a entidade que lista aquele
+componente sobreviveu ao mapa, ela fica com um nó morto, e o primeiro
+`GetComponent<T>()` que passar por ali derruba o jogo.
+
+Na nossa viagem é isso que sobrevive: o personagem atravessa sem carregamento,
+então a entidade dele continua viva enquanto o mapa de origem morre embaixo.
+
+**O conserto que isso sugere**, e que não é reconstruir presença: antes de
+soltar o mapa de origem, fazer cada componente alocado no heap que vai morrer
+se desligar da entidade dele, chamando `FUN_14040cea0(entidade, componente,
+0)` — desligar sem liberar, porque o heap já vai liberar. As três peças já
+existem neste projeto: `FUN_1408389e0` diz de qual heap é um ponteiro (o
+`WhoseHeap` da vigia usa), `FUN_14040cea0` já está enganchada, e a entidade
+está em `componente+0x08`.
+
+**Não medido:** se a lista que quebrou é a de um personagem que viajou, de uma
+cópia de jogador ou de outra entidade; e se existe um ponto nativo melhor,
+chamado quando um mapa é descarregado normalmente, por onde a viagem devesse
+passar. A pilha da queda passa por `FUN_14036f800`, que chama o
+`FUN_140bd15b0` do conserto do corpo rígido, o que sugere personagem — mas
+sugerir não é medir.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
