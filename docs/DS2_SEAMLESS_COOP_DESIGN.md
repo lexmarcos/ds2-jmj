@@ -101,8 +101,8 @@ convidado pode terminar a luta.
 
 Descansar numa fogueira **reseta o mundo para todo mundo**: inimigos voltam,
 objetos quebráveis voltam, invasões de NPC podem reiniciar, o estado de
-combate é limpo. O grupo deve ser avisado antes ("A player is resting at a
-bonfire").
+combate é limpo. **Sem aviso na tela**: uma caixa modal no meio da luta era
+pior que nenhum aviso (decidido 15/09).
 
 Qualquer jogador descansa, não só o host, e o descanso de qualquer um
 reseta o mundo para todos. A cura é de quem sentou: o descanso do host **não**

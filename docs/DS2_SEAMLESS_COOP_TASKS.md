@@ -805,8 +805,9 @@ célula da fogueira e teleporta, sem warp nenhum. O host grava o próprio
 registro de renascimento na fogueira nova (`FUN_1401843b0` + `FUN_14044fe30`).
 A viagem leva ~2,5 s por jogador e a sessão fica verificada o tempo todo.
 
-Três coisas foram aprendidas fechando os jogos (cinco quedas, 50 pontos de
-desconexão no Samuel e 10 no Chico):
+Três coisas foram aprendidas fechando os jogos (quatro quedas, duas delas
+fechando os dois jogos: 40 pontos de desconexão no Samuel, de 10 para 50, e 10
+no Chico, de 50 para 60):
 
 1. **Fechar o menu da fogueira por chamada direta mata o convidado.** Chamar
    `FUN_1401994e0` da tick do hook fechou o menu no host e derrubou o convidado
@@ -859,7 +860,10 @@ não avisa mais ninguém. O reinício do mundo continua valendo para todos.
 **Falta:**
 
 - **as quedas acima não estão provadas como resolvidas**: cada correção foi
-  medida uma vez, e a última rodada de teste fechou os jogos cinco vezes;
+  medida uma vez, contra uma falha que não acontecia em toda viagem;
+- **Majula → Heide pela votação** não foi medido no build final (só pelo `ir`,
+  que não exercita o "host primeiro"); o registro de renascimento do host na
+  fogueira nova foi conferido uma vez (`0a040000/0000122a` depois da viagem);
 - `NotLit` e `Busy` não medidos: a lista do convidado só mostra fogueiras que
   o host acendeu, então o `NotLit` só aparece numa corrida;
 - a caixa do aviso e a da votação são modais: é preciso apertar;
