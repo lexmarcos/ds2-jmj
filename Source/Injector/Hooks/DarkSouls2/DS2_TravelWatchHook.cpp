@@ -867,55 +867,22 @@ namespace
         }
     }
 
-    // The detach, which is the fix rather than a net. Read in Ghidra on 16/09:
-    //
-    //   FUN_14040cca0(entity, components, n) is the attach. It links each
-    //   component into the list at entity+0x18, writes the entity back into
-    //   component+0x08, and registers it in the frame's registry.
-    //
-    //   FUN_14040cea0(entity, component, free) is the complete detach, and it
-    //   is already hooked here. It calls the component's own teardown at slot
-    //   +0x28, takes it out of the list at entity+0x18, takes it out of the
-    //   frame registry, clears component+0x08, and only then - if `free` says
-    //   so - hands the block back to the heap it came from.
-    //
-    // Every path the game takes detaches before it frees; FUN_1403f6300, the
-    // ordinary component release, goes through FUN_14040cea0 too. So a dead
-    // node in a list can only come from memory disappearing **without** that
-    // function running, and a map part's heap does exactly that: it takes the
-    // whole block range away at once, with no destructor and no detach. The
-    // 74 copies of GetComponent<T> that walk entity+0x18 then read a freed
-    // vftable, which is where the guest closed on 16/09 at +0x17b260.
-    //
-    // A travel is the one moment we create that situation on purpose: the
-    // character crosses without a load, so its entity outlives the origin map
-    // whose heap held some of its components.
-    //
-    // The test for "this one is about to be freed under its entity" is a
-    // single thing: **the component's memory is in a different heap from its
-    // entity's**. Components and entities of the same map share a heap and are
-    // never touched; only the cross-heap link, which is what travelling
-    // creates, is. `free` is 0 because the dying heap is what frees the block
-    // moments from now - passing 1 would free it twice.
-    //
-    // It runs only inside the window the travel opens before it lets the
-    // origin map go, because that is the only time both ends are still alive.
-    // Once the heap is gone the component cannot be called at all, and the
-    // only thing left would be pointer surgery on a list.
-    //
-    // Returns true when it detached, and the caller then skips this frame's
-    // work for that component: it no longer belongs to anybody.
-    // Nothing here is assumed. The node the entity's list links is **not** the
-    // component's base: FUN_1403f4ce0 calls
-    // FUN_14040cea0(*(base+0x08), base+0x60, 0), so the entity is at base+0x08
-    // and the node is the sub-object at base+0x60, with its own vftable, the
-    // entity again at node+0x08, the next at node+0x10 and the registry index
-    // at node+0x18. Handing FUN_14040cea0 the base instead of the node would
-    // rewrite a list through the wrong pointers - the exact way to corrupt
-    // memory while claiming to fix it - so the node is proved before it is
-    // used, and the proof that settles it is the last one: the node has to be
-    // findable by walking the entity's own list. If it is not there, nothing
-    // is written and the log says so.
+    // The one write the sweep makes, on its own so that __try has no C++
+    // object to unwind past - the rule this file states and that the sweep
+    // broke on its first build (C2712).
+    bool WritePointer(uintptr_t At, uintptr_t Value)
+    {
+        __try
+        {
+            *(uintptr_t*)At = Value;
+            return true;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
+
     // The list of components an entity keeps, swept for a link that is no
     // longer a link.
     //
@@ -1008,13 +975,7 @@ namespace
                     KeptTail ? "" : " (a cauda tambem estava perdida: a lista acaba aqui)"));
                 s_lines.fetch_add(1);
             }
-            __try
-            {
-                *(uintptr_t*)Where = Tail;
-            }
-            __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
-            {
-            }
+            WritePointer(Where, Tail);
             // The list moved under the walk, so it is walked again from where
             // it is now; the guard bounds the whole thing either way.
             At = Tail;
@@ -1077,6 +1038,57 @@ namespace
     // guest died one to three seconds after landing. The detach runs only in
     // the short window before the origin map is let go, because that is the
     // only time both ends of a cross-heap link are still alive.
+    // The detach, which is the fix rather than a net. Read in Ghidra on 16/09:
+    //
+    //   FUN_14040cca0(entity, components, n) is the attach. It links each
+    //   component into the list at entity+0x18, writes the entity back into
+    //   component+0x08, and registers it in the frame's registry.
+    //
+    //   FUN_14040cea0(entity, component, free) is the complete detach, and it
+    //   is already hooked here. It calls the component's own teardown at slot
+    //   +0x28, takes it out of the list at entity+0x18, takes it out of the
+    //   frame registry, clears component+0x08, and only then - if `free` says
+    //   so - hands the block back to the heap it came from.
+    //
+    // Every path the game takes detaches before it frees; FUN_1403f6300, the
+    // ordinary component release, goes through FUN_14040cea0 too. So a dead
+    // node in a list can only come from memory disappearing **without** that
+    // function running, and a map part's heap does exactly that: it takes the
+    // whole block range away at once, with no destructor and no detach. The
+    // 74 copies of GetComponent<T> that walk entity+0x18 then read a freed
+    // vftable, which is where the guest closed on 16/09 at +0x17b260.
+    //
+    // A travel is the one moment we create that situation on purpose: the
+    // character crosses without a load, so its entity outlives the origin map
+    // whose heap held some of its components.
+    //
+    // The test for "this one is about to be freed under its entity" is a
+    // single thing: **the component's memory is in a different heap from its
+    // entity's**. Components and entities of the same map share a heap and are
+    // never touched; only the cross-heap link, which is what travelling
+    // creates, is. `free` is 0 because the dying heap is what frees the block
+    // moments from now - passing 1 would free it twice.
+    //
+    // It runs only inside the window the travel opens before it lets the
+    // origin map go, because that is the only time both ends are still alive.
+    // Once the heap is gone the component cannot be called at all, and the
+    // only thing left would be pointer surgery on a list.
+    //
+    // Returns true when it detached, and the caller then skips this frame's
+    // work for that component: it no longer belongs to anybody.
+    // Nothing here is assumed, because handing FUN_14040cea0 the wrong
+    // pointer rewrites a list through the wrong fields - the exact way to
+    // corrupt memory while claiming to fix it. Two readings disagreed about
+    // which pointer is the node, so both are tried and the entity's own list
+    // decides; a candidate that is not in it is simply not used.
+    //
+    // Measured live on 16/09, with a breakpoint on FUN_1403f4f10 and the probe
+    // reading what it caught: the node **is** the component's base. The
+    // registry link sits at base+0x20, which is where FUN_14040d280 writes it,
+    // the entity is at base+0x08, and walking entity+0x18 by +0x10 finds the
+    // component as the second of fourteen nodes. There is a second node-shaped
+    // sub-object at base+0x60, with its own vftable and the same entity at
+    // +0x68, which is what made the other reading plausible.
     bool SweepAndDetach(uintptr_t Component)
     {
         const ULONGLONG Until = s_detach_until.load();
