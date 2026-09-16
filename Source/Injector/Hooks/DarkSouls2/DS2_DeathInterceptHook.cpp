@@ -485,6 +485,12 @@ namespace
     std::atomic<uint32_t> s_go_map{ 0 };
     std::atomic<uint32_t> s_go_id{ 0 };
     std::atomic<bool> s_go_moving{ false };
+    // The map the travel started in, kept a while after the arrival: letting
+    // it unload right behind a travel killed the guest twice (15/09, a freed
+    // pointer in a list walked by FUN_1401cbf20 and in the pre-draw task),
+    // and it only ever happened with the other player's copy in that map.
+    int32_t s_travel_from = -1;
+    constexpr uint32_t kKeepOldMapMs = 15000;
 
     // After the jump to another map: holding that map until the character
     // stands on it, then letting go.
@@ -1506,6 +1512,7 @@ namespace
         Next.Active = true;
         Next.Why = "viagem";
         Next.KeepHp = true;
+        s_travel_from = MapIndexUnder(Chr);
 
         // Only a bonfire of the map under the player is jumped to straight
         // away. A bonfire of another map may be in the list already - that
@@ -1790,7 +1797,13 @@ namespace
 
         ++s_recovered;
         s_recovery.Active = false;
-        s_go_moving.store(false);
+        if (s_go_moving.exchange(false) && s_travel_from >= 0)
+        {
+            DS2_Backread::KeepIndex(s_travel_from, kKeepOldMapMs);
+            Append(StringFormat("%s  viagem: o mapa de indice %d de onde sai fica mais %u ms\n",
+                Clock().c_str(), s_travel_from, kKeepOldMapMs));
+            s_travel_from = -1;
+        }
         Append(StringFormat("%s  %s concluido em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s, hp %d -> %d\n",
             Clock().c_str(), s_recovery.Why, s_recovery.Frames, (unsigned long long)Before, (unsigned long long)Bits,
             Camera ? "desligada" : "nao estava ligada", Hp, Max));
