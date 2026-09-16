@@ -1507,7 +1507,14 @@ namespace
         Next.Why = "viagem";
         Next.KeepHp = true;
 
-        if (FindBonfireSpawn(Map, Id, Next.Target))
+        // Only a bonfire of the map under the player is jumped to straight
+        // away. A bonfire of another map may be in the list already - that
+        // map is kept loaded for the other player - but with only the parts
+        // around that player: measured 15/09, the guest landed at Heide's
+        // bonfire with no ground under it and fell to its death. So any other
+        // map goes through the hold and the focus, which bring its parts in.
+        const uint32_t Here = CurrentMap();
+        if (Map == Here && FindBonfireSpawn(Map, Id, Next.Target))
         {
             Next.Where = "fogueira da viagem";
         }
@@ -1516,7 +1523,7 @@ namespace
             uint8_t State = 0;
             uint32_t Mask[4] = {};
             const uintptr_t Fall = FallController(Chr);
-            if (Map == CurrentMap() || !DS2_Backread::Query(Map, State, Mask) ||
+            if (Map == Here || !DS2_Backread::Query(Map, State, Mask) ||
                 Fall == 0 || !ReadBytes(Fall + kFallGrounded, Next.Target, sizeof(Next.Target)))
             {
                 ++s_recovery_failed;
