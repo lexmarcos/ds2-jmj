@@ -1405,6 +1405,64 @@ passar. A pilha da queda passa por `FUN_14036f800`, que chama o
 `FUN_140bd15b0` do conserto do corpo rígido, o que sugere personagem — mas
 sugerir não é medir.
 
+### O desligamento foi construído, rodou, e não desligou nada (16/09, 19:33)
+
+O commit `60fe3b53` arma, antes de a viagem soltar o mapa de origem, uma janela
+de 10 s em que todo componente que passa pelos ganchos de quadro é desligado da
+entidade quando os dois estão em heaps diferentes. Instalado nas duas
+instalações, build conferido pelo recibo, sessão verificada, um trecho com os
+dois chegando e 34 ms entre as cortinas.
+
+**Resultado: `desligamentos: 0 feitos, 0 falharam, 0 com heap desconhecido`,
+nas duas máquinas.** A janela foi armada na hora certa (`desligando componentes
+de heap alheio por 10000 ms`, 19:33:52.083 no host e 19:33:53.083 no
+convidado), então a função rodou dez segundos e não achou nada para fazer.
+
+**O que foi medido ao vivo para entender o zero**, com um breakpoint em
+`FUN_1403f4f10` para pegar um componente vivo e o MemProbe para ler dele:
+
+    componente 7fffe8443640
+      +0x00  1410eb558   vftable do MapModelComponent
+      +0x08  7fffe843fe20   a entidade
+      +0x20  7ffff03a51c8   o elo do registro do quadro
+      +0x30  1410eb5a8   uma segunda vftable: sub-objeto em +0x30
+      +0x60  1410eb518   uma terceira: outro nó, com a mesma entidade em +0x68
+    entidade 7fffe843fe20
+      +0x00  1410e7b68      +0x18  7fffe83a8540   a cabeça da lista
+
+E a lista da entidade, andada nó a nó pelo `+0x10`, **contém o componente** como
+segundo elemento, com `entidade` em `+0x08` em todos os catorze nós lidos. Ou
+seja: o modelo de layout está certo, o nó **é** a base do componente (o elo do
+registro em `+0x20` bate com o que `FUN_14040d280` escreve em `nó+0x20`), e as
+provas do código teriam passado.
+
+**Então o que barrou foi a comparação de heaps.** Componente em
+`0x7fffe8443640` e entidade em `0x7fffe843fe20` são vizinhos: mesmo heap. A
+regra "componente num heap diferente do da entidade" não descreve o que
+acontece — pelo menos não entre os componentes que passam pelos três ganchos de
+quadro.
+
+**O que isso refuta.** A parte do mecanismo lida no Ghidra continua de pé: o
+jogo sempre desliga antes de liberar, então um nó morto numa lista só vem de
+memória que sumiu sem aquele caminho rodar. O que cai é a minha inferência
+sobre **qual** memória some: não é "componente do mapa de origem pendurado numa
+entidade que sobreviveu", porque componente e entidade moram juntos. O endereço
+morto da queda (`00b540ffe83053f0`, ou seja ~`0x7fffe83053f0` sob o carimbo)
+também é da mesma vizinhança.
+
+**O conserto commitado é, hoje, uma operação nula.** Fica instalado porque não
+custa nada e porque a instrumentação dele é o que falta medir, mas não conserta
+o que foi construído para consertar.
+
+**O que falta medir, e é barato:** registrar, uma vez por janela, os índices de
+heap dos dois lados mesmo quando são iguais — hoje o código só fala quando são
+desconhecidos, e por isso "não havia nada cross-heap" e "a regra não se aplica"
+saem idênticos no log. Depois disso, a ferramenta certa é a vigia de página
+sobre o nó que morre, que já achou o corpo rígido uma vez.
+
+**Custo:** nenhum. A saída foi pelo caminho legal e a penalidade ficou igual nos
+dois, 10 e 70.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
