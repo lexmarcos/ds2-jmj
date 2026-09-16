@@ -1300,6 +1300,61 @@ existir: retirar a presença sem sair da sessão.
 > pergunta delimitada é **quem é o dono da instância de modelo em `+0x40` e
 > qual operação nativa a troca**.
 
+### A guarda certa foi instalada, e a queda mudou de lugar (16/09, 18:56)
+
+A guarda em `FUN_1403f4f10` subiu nas duas instalações, com recibo positivo
+(`tique do modelo ... guardado`), sessão verificada (`p2pSessionVerified:
+true`) e um trecho limpo antes: host chegou 18:53:46.482, convidado
+18:53:47.649, cortinas com 18 ms de diferença.
+
+No segundo trecho o convidado fechou. **Os contadores estavam todos em zero,
+inclusive `tique 0`** — a guarda nova não disparou nenhuma vez. A queda foi em
+outro lugar:
+
+    excecao c0000005 em +0x17b260, lendo 0xffffffffffffffff
+    rbx=00b540ffe83053f0     <- o no morto, com o carimbo do alocador
+    rdx=00000001410eb558     <- a vftable do no anterior: MapModelComponent
+
+`+0x17b260` está em `FUN_14017b240` (`0x14017b240..0x14017b2a2`), que **anda
+uma lista em `objeto+0x18`, lê a vftable de cada nó e chama o slot 0**,
+seguindo `+0x10`. É exatamente o que `FUN_1401cbf20`
+(`0x1401cbf20..0x1401cbf82`) faz — e este arquivo já guarda essa.
+
+As duas são **o mesmo código, emitido duas vezes**. Os 0x62 bytes são
+idênticos exceto três, no deslocamento `0xe..0x10`, que é o relativo de um
+`call` e tem que diferir porque as funções estão em endereços diferentes:
+
+    FUN_14017b240  48895c2408574883ec20488bd9 e87ef22c00 488b5b18...
+    FUN_1401cbf20  48895c2408574883ec20488bd9 e80ece2100 488b5b18...
+
+**E o passo `mov (%rbx),%rdx; mov %rbx,%rcx; call *(%rdx)` aparece 74 vezes no
+`.text`.** Guardamos 1 de 74.
+
+**A conclusão que isso força.** Guardar consumidor não termina: a doença não
+está em quem anda a lista, está em **`MapModelComponent` sendo liberado junto
+com o heap do mapa enquanto ainda está ligado em listas**. Cada guarda nova só
+empurra a queda para a próxima cópia do mesmo laço. O conserto tem que ser do
+lado de quem libera — desligar o nó de toda lista que o segura — e não do lado
+de quem lê. É a lição do `CLAUDE.md` sobre inventariar por varredura e não por
+padrão, cobrada de novo.
+
+Isso **não** aponta para a reconstrução de presença. O que morre aqui é
+componente de mapa, e as listas são internas do jogo; tirar as cópias dos
+jogadores não limpa nenhuma delas. Aponta para a opção B do
+`DS2_PRESENCE_ASTRA_REVIEW.md`, e o alvo já nomeado acima — `FUN_1403f4c20`,
+a reação nativa à mudança de backread — ganha prioridade sobre qualquer
+trabalho de presença.
+
+**Não medido ainda:** de quem é o componente que morre (cópia de jogador,
+objeto de mapa ou personagem do mundo). A guarda de `FUN_1403f4f10` continua
+instalada e escreve isso quando disparar; nesta corrida ela não disparou
+porque a outra cópia do laço chegou primeiro.
+
+**Custo da corrida:** o convidado fechou em sessão viva, que é desconexão
+ilegal. O host ficou em 10 pontos, sem armar. O convidado estava em 60 antes
+da corrida — 50 na verificação anterior desta sessão, então dez pontos foram
+cobrados em algum momento antes deste teste.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
