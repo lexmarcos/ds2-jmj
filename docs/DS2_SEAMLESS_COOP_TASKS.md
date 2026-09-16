@@ -1148,6 +1148,55 @@ fazer.
 liberado. A cadeia e o reaproveitamento estão medidos; o sítio da liberação
 não.
 
+### O conserto, e o que ele mediu (16/09)
+
+O caminho do personagem até o corpo é
+`chr+0x100` → `+0x40` (`PXCharacterRigidBody`) → `+0x110` (`hkpRigidBody`),
+confirmado ao vivo. `DS2_DeathInterceptHook` passa a conferir esse ponteiro a
+cada quadro, para o jogador local **e** para a cópia de outro jogador, e a
+**largar** o corpo (escrever 0) quando ele provadamente já foi embora. São três
+testes, do mais barato ao mais caro:
+
+1. o ponteiro não é um endereço (algum bit acima do 47);
+2. o que ele aponta não tem vftable deste módulo;
+3. o `+0x18` do corpo, que é o campo que a cadeia de animação lê, guarda algo
+   que não é endereço. Este é o que pega um bloco **já entregue a outro dono**,
+   porque um bloco reaproveitado pode perfeitamente ter uma vftable crível de
+   novo.
+
+Nada é liberado: o bloco já é de outro. E zero é estado legítimo, não remendo:
+`FUN_140bd1500`, a soltura do próprio jogo, escreve 0 nesses campos, e
+`FUN_140bd15b0` testa o nulo e retorna antes de ler qualquer coisa.
+
+**Medido com dois jogadores, 24 trechos:**
+
+| | antes | com o conserto |
+| --- | --- | --- |
+| exceções no host | 39 | **0** |
+| falhas aparadas na tarefa (host) | 42 a 59 por corrida | **0** |
+| jogos fechados | intermitente | nenhum |
+
+E o fechamento é exato: as linhas do conserto nomeiam o personagem
+`00007FFFEB7B9E60` e o `PXCharacterRigidBody 00007FFFEB7C1440`, que são o
+**mesmo** sujeito e o **mesmo** objeto da cadeia rastreada pela vigia de
+escrita. Motivo registrado nas três vezes: "o corpo nao tem vftable do jogo".
+
+**A queda do host deixou de existir na causa**, não por guarda. A guarda do
+executor de tarefa, que existia justamente para aparar aquilo, não teve nada
+para aparar.
+
+**O que sobra, e é a segunda dependência que já se esperava.** O convidado
+ainda registra uma falha no pré-desenho (`+0x3f510f`) na corrida, além de 32
+ocorrências de `+0x17eda9`, que é antigo e inofensivo (o job do descanso, o
+jogo segue). Ou seja: o mesmo tipo de ponteiro pendurado existe noutro lugar do
+lado do convidado. A regra de decisão combinada continua valendo: se a terceira
+dependência aparecer, é sinal de parar de consertar uma a uma e reconstruir a
+presença como `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md` propõe.
+
+**Falta:** repetir em mais corridas (24 trechos é uma medição só), exercitar a
+desmontagem adiada da origem com viagens mais espaçadas que os 30 s de
+retenção, e achar de onde vem o ponteiro pendurado do convidado.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
