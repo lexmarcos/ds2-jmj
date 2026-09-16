@@ -536,6 +536,13 @@ namespace
     // What the watcher writes down around a travel.
     constexpr uint32_t kWatchStartMs = 12000;
     constexpr uint32_t kWatchLandedMs = 8000;
+    // How long the cross-heap detach stays armed after the origin map is let
+    // go. It has to outlast the streamer's unload, which is what actually
+    // takes the heap away, and the guest's crash came 1 to 3 seconds after
+    // arriving; ten seconds covers both with room to spare. Outside a travel
+    // it is off, so an entity that legitimately borrows a component from
+    // another heap is never touched.
+    constexpr uint32_t kDetachMs = 10000;
 
     // After the jump to another map: holding that map until the character
     // stands on it, then letting go.
@@ -1795,6 +1802,12 @@ namespace
             }
             return;
         }
+        // Letting the origin map go is what kills its heap, and its heap takes
+        // every block with it without running a destructor or a detach. So the
+        // components of that map still attached to a character that crossed
+        // without a load are cut loose first, while both ends are still alive:
+        // after this the only thing left of them is a dead node in a list.
+        DS2_TravelWatch::DetachCrossHeap(kDetachMs, "o mapa de origem vai ser solto");
         DS2_Backread::Unfocus();
         DS2_Backread::Release();
         // The map arrived at is held by the travel too, now that the contact

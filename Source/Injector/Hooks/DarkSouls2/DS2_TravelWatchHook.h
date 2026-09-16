@@ -52,4 +52,18 @@ namespace DS2_TravelWatch
     /// the game's thread when a travel starts and again when it lands; a new
     /// call extends the window. `Why` goes into the log as the reason.
     void Open(uint32_t Milliseconds, const char* Why);
+
+    /// For this many milliseconds, every model component that comes past the
+    /// per-frame hooks is detached from its entity when the two are in
+    /// different heaps, through the game's own FUN_14040cea0 and without
+    /// freeing anything.
+    ///
+    /// This is the fix for the corruption, not a net for it. A map part takes
+    /// its whole heap away at once, with no destructor and no detach, so a
+    /// component of the origin map still attached to a character that crossed
+    /// without a load becomes a dead node in the list at entity+0x18 - and any
+    /// of the 74 copies of GetComponent<T> that walks that list then reads a
+    /// freed vftable. Called from the game's thread just before the travel
+    /// lets the origin map go, which is the last moment both ends are alive.
+    void DetachCrossHeap(uint32_t Milliseconds, const char* Why);
 }
