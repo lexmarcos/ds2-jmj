@@ -181,6 +181,12 @@ namespace
     constexpr size_t kPartInfo = 0x30;
     constexpr size_t kPartSet = 0x70;                  // -> 4 x uint32
     constexpr size_t kOwnerIndex = 0x0c;
+    // MapAreaCtrlOwner. The parts mask below is read through this owner and
+    // then OR'd, by DS2_BackreadHook, into the real map owner's own mask
+    // fields. Sixteen bytes of part bits taken from a stale chain would ask
+    // the streamer for parts a map does not have, so the chain has to prove
+    // what it is rather than be assumed (16/09).
+    constexpr size_t kMapOwnerVftable = 0x10e87f0;
 
     // What a death costs, applied with the game's own functions (step 5, all
     // measured on 13/09 against a death the game carried out itself).
@@ -717,12 +723,13 @@ namespace
     {
         const uintptr_t Part = CallPartUnder(Chr);
         uint8_t Kind = 0;
-        uintptr_t Owner = 0, Info = 0, Set = 0;
+        uintptr_t Owner = 0, Info = 0, Set = 0, OwnerVftable = 0;
         Index = -1;
         return Part != 0 &&
             ReadBytes(Part + kEntityKind, &Kind, 1) && Kind == kEntityPart &&
             ReadPointer(Part + kPartOwner, Owner) &&
-            ReadBytes(Owner + kOwnerIndex, &Index, sizeof(Index)) && Index >= 0 &&
+            ReadPointer(Owner, OwnerVftable) && OwnerVftable == s_base + kMapOwnerVftable &&
+            ReadBytes(Owner + kOwnerIndex, &Index, sizeof(Index)) && Index >= 0 && Index <= 0x3f &&
             ReadPointer(Part + kPartInfo, Info) &&
             ReadPointer(Info + kPartSet, Set) &&
             ReadBytes(Set, Mask, 4 * sizeof(uint32_t)) &&
