@@ -1560,7 +1560,13 @@ void DS2_BonfireInSession_Tick()
                     s_together ? StringFormat("o mapa %08x nao pode ser trazido", s_travel.Map).c_str() : "viagem junta desligada"));
             }
         }
-        else if (Now - s_travel.Since > kVoteTimeoutMs)
+        // `Now` was read at the top of this tick, and a vote that a guest's
+        // proposal (or `DS2_Bonfire.req votar`) opened **later in the same
+        // tick** is stamped with a clock that has already moved on. Subtracting
+        // unsigned then wraps to an enormous number and the vote is thrown out
+        // as unanswered the instant it opens - measured 16/09, the box was
+        // still on the guest's screen when the host had already cancelled.
+        else if (Now > s_travel.Since && Now - s_travel.Since > kVoteTimeoutMs)
         {
             s_travel.Active = false;
             if (s_open_vote.Active && s_open_vote.Host)
