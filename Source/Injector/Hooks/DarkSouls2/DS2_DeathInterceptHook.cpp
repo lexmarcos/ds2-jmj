@@ -1521,16 +1521,10 @@ namespace
         Next.Active = true;
         Next.Why = "viagem";
         Next.KeepHp = true;
-        // Whole, with every part: the solo control keeps it so and never
-        // died; in a session the keep the other player's copy had left for
-        // this map carried only the parts under the copy, and the map went in
-        // two phases (parts on arrival, the rest 30 s later), which is where
-        // the guest died (16/09, +0x40d2c7 in the teardown).
-        const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
         s_travel_from = MapIndexUnder(Chr);
         if (s_travel_from >= 0)
         {
-            DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs, Whole);
+            DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
         }
         DS2_TravelWatch::Open(kWatchStartMs, "viagem comecou");
 
@@ -1559,8 +1553,18 @@ namespace
                     Clock().c_str(), Id, Map));
                 return;
             }
-            const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
-            DS2_Backread::Request(Map, Every);
+            // No extra parts: the map is forced in (the owner's force byte is
+            // what loads it at all) and the **focus** brings the ground, by
+            // telling the streamer the player stands at the bonfire's nav
+            // cell. Asking for all 128 parts loaded Majula whole - 571 model
+            // components where ordinary play has a few dozen - and with a
+            // second map and a session on top of it the allocator started
+            // handing out blocks that overlap: every crash of 15 and 16/09
+            // carried the same two bytes written over the middle of a live
+            // pointer (`b0 10` or `b5 40` at offset +5). Nothing the game does
+            // by itself ever holds two whole maps.
+            const uint32_t Nearby[4] = { 0, 0, 0, 0 };
+            DS2_Backread::Request(Map, Nearby);
             Next.Loading = true;
             Next.LoadMap = Map;
             Next.LoadId = Id;
@@ -1747,8 +1751,7 @@ namespace
         const int32_t Landed = MapIndexUnder(Chr);
         if (Arrived && Landed >= 0)
         {
-            const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
-            DS2_Backread::KeepIndex(Landed, kTravelHoldMs, Whole);
+            DS2_Backread::KeepIndex(Landed, kTravelHoldMs);
         }
         s_settle.Active = false;
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
@@ -1830,8 +1833,7 @@ namespace
         {
             if (s_travel_from >= 0)
             {
-                const uint32_t Whole[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
-                DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs, Whole);
+                DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
             }
             DS2_TravelWatch::Open(kWatchLandedMs, "viagem chegou");
             Append(StringFormat("%s  viagem: o mapa de indice %d de onde sai fica %u ms; o de chegada e segurado quando o personagem pisar nele\n",

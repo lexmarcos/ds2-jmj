@@ -484,44 +484,17 @@ namespace
             Why = "o componente de modelo nao e um objeto vivo";
             return false;
         }
-        if (!Peek(Component + kModelInstance, &Fields[0], sizeof(Fields[0])) ||
-            !Peek(Component + kComponentRegistered, &Fields[1], sizeof(Fields[1])) ||
-            !Peek(Component + kModelFollower, &Fields[2], sizeof(Fields[2])))
-        {
-            Why = "componente ilegivel";
-            return false;
-        }
-        if (!ObjectOrNull(Fields[0]))
-        {
-            Why = "a instancia do modelo (+0x40) foi liberada";
-            return false;
-        }
-        if (!ObjectOrNull(Fields[1]))
-        {
-            Why = "o registro no quadro (+0xc8) foi liberado";
-            return false;
-        }
-        if (!ObjectOrNull(Fields[2]))
-        {
-            Why = "o seguidor (+0xd0) foi liberado";
-            return false;
-        }
-        // The object embedded at +0x50 keeps its vftable there, and that is
-        // the word the post-physics task calls through. On 16/09 it came back
-        // with the right vftable in the low 32 bits and a stamp over bytes 5
-        // to 7 (00b54001410e86d8 for 1410e86d8): the component is still
-        // linked everywhere, and part of it has been written over.
-        uintptr_t Embedded = 0;
-        if (!Peek(Component + kEmbedded, &Embedded, sizeof(Embedded)))
-        {
-            Why = "componente ilegivel no objeto embutido (+0x50)";
-            return false;
-        }
-        if (Embedded != 0 && !(InModule(Embedded) && (Embedded & 7) == 0))
-        {
-            Why = "a vftable do objeto embutido (+0x50) foi escrita por cima";
-            return false;
-        }
+        // Nothing else is predicted here. A first version also demanded that
+        // +0x40, +0xc8, +0xd0 and the vftable embedded at +0x50 all look like
+        // live objects, and on 16/09 that threw away **600 updates a boot** of
+        // perfectly ordinary map objects: those fields legitimately hold
+        // things that are not vftable'd objects. Guessing which field is
+        // healthy is how you break the game while trying to save it. What is
+        // left is the one thing that cannot be argued with - the component
+        // itself - and a fault inside the game is caught below instead.
+        Peek(Component + kModelInstance, &Fields[0], sizeof(Fields[0]));
+        Peek(Component + kComponentRegistered, &Fields[1], sizeof(Fields[1]));
+        Peek(Component + kModelFollower, &Fields[2], sizeof(Fields[2]));
         return true;
     }
 
