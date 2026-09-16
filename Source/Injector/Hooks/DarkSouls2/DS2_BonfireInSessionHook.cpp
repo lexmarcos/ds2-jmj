@@ -364,18 +364,17 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
-    // Travelling without leaving the session is back on by default (16/09).
-    // It was turned off on the morning of the 16th because the guest's game
-    // closed seconds after arriving; that is fixed. Every one of those closes
-    // came from inside the map's own per-frame lifecycle
-    // (FUN_1403cc3f0), at a different address each time, and DS2_BackreadHook
-    // now runs that call under __try: a fault leaves the map half taken apart
-    // instead of closing the game. Measured with two players on 16/09, thirty
-    // legs Heide<->Majula in a row with the session verified throughout, sixty
-    // faults caught, nobody's game closed and no penalty point spent.
-    // `DS2_Bonfire.req` still takes `junta desliga` to fall back to the old
-    // shape (the guests leave the session and the party puts them back).
-    bool s_together = true;
+    // Travelling without leaving the session is off by default again (16/09).
+    // The guards below it turn many of the faults into survivable ones, but
+    // not all: measured with two players, four legs with both players really
+    // arriving and then a game closed anyway, at an address no guard covers.
+    // A close costs the guest ten illegal-disconnect points and there is no
+    // Bone of Order left in this playthrough, so the default has to be the
+    // shape that never costs anything: the guests leave the session the legal
+    // way, the host travels with the game's own travel, and the party puts
+    // everyone back together about 75 s later.
+    // `DS2_Bonfire.req` takes `junta liga` to try the seamless one.
+    bool s_together = false;
     // The host travels first and calls the guests only once it is standing in
     // the new map: both machines bringing a map in at the same instant closed
     // both games twice (15/09), once inside the CharacterManager and once on

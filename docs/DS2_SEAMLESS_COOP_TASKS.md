@@ -1043,10 +1043,51 @@ objetos com vftable. Adivinhar qual campo está são é como se quebra o jogo
 tentando salvá-lo. O que ficou foi o `__try`, que só dispara numa falha de
 verdade e não tem falso positivo.
 
-**Falta ainda:** achar quem faz a escrita perdida. A pista é a família de
-valores e o fato de ser exclusiva do convidado em sessão. Um breakpoint de
-escrita em hardware sobre o endereço de um ponteiro que já foi corrompido uma
-vez é o caminho que não foi tentado.
+**Corrigido no mesmo dia, antes que virasse conclusão errada.** A primeira
+leitura desta seção dizia "dez trechos sem queda". Não era verdade, e o erro
+era do método: quando a viagem desiste (30 s sem o mapa), ela escreve
+**"viagem concluido" assim mesmo** e deixa o personagem onde estava. O teste
+esperava essa linha, então uma viagem que não aconteceu contava como sucesso.
+Relendo os registros daquela corrida: o host viajou 28 de 30 vezes, mas o
+**convidado só viajou 5** — as outras 13 desistiram. A ausência de queda estava
+inflada por viagens que nunca saíram do lugar. O teste agora só conta um trecho
+quando os **dois** registram "o personagem esta nele" no mapa de destino.
+
+E a causa daquelas desistências era minha: a viagem tinha passado a pedir o
+mapa com a máscara de partes **zerada**. Medido com os dois jogadores, um dono
+forçado com máscara vazia fica em estado 0 para sempre
+(`estado 0 forcado 1 quer 1`, todas as máscaras zero): **o byte de força diz
+"mantenha este mapa", não "carregue"; quem carrega é ter uma parte pedida.**
+Sozinho parecia funcionar só porque o jogador acabava de vir daquele mapa e o
+streamer ainda queria partes dele. Pior no convidado, porque o host vai
+primeiro: a cópia do host no mundo do convidado forçava o destino sem partes, e
+o pedido do próprio convidado encontrava um dono que nunca carregaria. As
+máscaras voltaram.
+
+**Com viagens de verdade, a queda continua.** Medido de novo depois de tudo
+isso: quatro trechos com os **dois** chegando, e no quinto um jogo fechou —
+desta vez o do **host**, em `+0x36f846`, sem nenhum guarda ter disparado. As
+guardas aparam bastante (sessenta falhas num boot, todas sobrevividas) e não
+são inúteis, mas não fecham a questão.
+
+**A pista nova, e é a melhor até agora.** Nessa última queda o registrador
+trazia `a140a140a140a140` — um valor de **16 bits repetido**. Isso encaixa com
+a assinatura antiga: os dois bytes trocados no meio dos ponteiros (`b0 10`,
+`b5 40`) são o mesmo fenômeno visto na borda, onde o preenchimento começa ou
+termina. Ou seja, **algo escreve memória em passos de 2 bytes e invade objetos
+vivos**; o valor muda a cada vez, então é dado sendo copiado, não um veneno
+constante. Não é ASCII em UTF-16 (o byte alto seria 0x00), então não são as
+caixas de texto deste hook.
+
+**Falta ainda:** achar quem faz essa escrita. O caminho que não foi tentado é o
+certo para isto: um breakpoint de **escrita em hardware** (registradores de
+depuração Dr0-Dr7 via `SetThreadContext`) sobre o endereço de um ponteiro que
+já foi corrompido uma vez. Tudo mais é adivinhação, e a adivinhação já custou
+quatro rodadas.
+
+**Por isso a viagem junta está desligada por padrão de novo.** Uma queda custa
+dez pontos de desconexão ilegal ao convidado e não há Bone of Order sobrando
+nesta jogatina; o padrão tem que ser o caminho que não custa nada.
 
 **Falta:**
 
