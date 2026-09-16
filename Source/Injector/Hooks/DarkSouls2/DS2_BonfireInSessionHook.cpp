@@ -124,6 +124,24 @@ namespace
     // Time for the character to stand up before it is taken anywhere.
     constexpr ULONGLONG kStandUpMs = 2000;
 
+    // The curtain the game's own travel puts up while it loads: FUN_140483250
+    // sets `ctx+0x1178` (which stops the action prompts and the death timer)
+    // and calls FUN_140b06270(*(0x1416751f8)+0x80, 1), which turns the world's
+    // drawing off. Our travel has no loading screen of the game's own, so it
+    // borrows those two: nobody sees the character hanging between two maps,
+    // and the per-character pre-draw task - where the guest's game died on
+    // 15/09, FUN_1403f4f60 reading a character's stale +0xc8 - does not run
+    // while the map it came from goes away.
+    constexpr size_t kCurtainOffset = 0xb06270;
+    constexpr uint8_t kCurtainPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x08, 0x00 };
+    constexpr size_t kRenderGlobal = 0x16751f8;
+    constexpr size_t kRenderSwitch = 0x80;
+    constexpr size_t kLoadingFlag = 0x1178;
+    // Never leave the screen black: the curtain comes down anyway after this.
+    constexpr ULONGLONG kCurtainGiveUpMs = 25000;
+    // A moment more after arriving, so the map left behind goes away behind it.
+    constexpr ULONGLONG kCurtainHoldMs = 1200;
+
     constexpr size_t kBonfireManager = 0x58;
     constexpr size_t kBonfireList = 0x08;
     constexpr size_t kBonfireNext = 0x60;
@@ -274,6 +292,7 @@ namespace
     using RecordSet_p = void(*)(void* Record, int32_t* Fields);
     using TravelBonfire_p = uint16_t(*)(void* List);
     using MenuCancel_p = void(*)(void* Queue);
+    using Curtain_p = void(*)(void* Switch, char On);
     using Script_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
     BonfireIndex_p s_bonfire_index = nullptr;
     BonfireMap_p s_bonfire_map = nullptr;
@@ -283,6 +302,10 @@ namespace
     RecordSet_p s_record_set = nullptr;
     TravelBonfire_p s_travel_bonfire = nullptr;
     MenuCancel_p s_menu_cancel = nullptr;
+    Curtain_p s_curtain = nullptr;
+    bool s_curtain_up = false;
+    ULONGLONG s_curtain_since = 0;
+    ULONGLONG s_curtain_down_at = 0;
     Script_p s_original_inner_script = nullptr;
     bool s_guest_rest_ready = false;
     std::atomic<uint64_t> s_prompts_opened{ 0 };
@@ -735,6 +758,55 @@ namespace
         return Result;
     }
 
+    // The loading curtain, up and down. True when it moved.
+    bool Curtain(bool Up)
+    {
+        uintptr_t Context = 0, Render = 0, Switch = 0;
+        if (s_curtain == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(s_base + kRenderGlobal, Render) || Render == 0 ||
+            !ReadPointer(Render + kRenderSwitch, Switch) || Switch == 0)
+        {
+            return false;
+        }
+        const uint8_t Flag = Up ? 1 : 0;
+        memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+        s_curtain((void*)Switch, Up ? 1 : 0);
+        s_curtain_up = Up;
+        s_curtain_since = GetTickCount64();
+        Append(Up ? "tela de carregamento: subiu\n" : "tela de carregamento: desceu\n");
+        return true;
+    }
+
+    // Called every frame: the curtain comes down once this machine's player
+    // has arrived and stood still for a moment, and always before 25 s.
+    void KeepCurtain(ULONGLONG Now)
+    {
+        if (!s_curtain_up)
+        {
+            return;
+        }
+        const bool Arrived = !s_go.Active && !DS2_DeathIntercept::Moving();
+        if (!Arrived)
+        {
+            s_curtain_down_at = 0;
+            if (Now - s_curtain_since > kCurtainGiveUpMs)
+            {
+                Append("tela de carregamento: a viagem nao terminou a tempo; desco assim mesmo\n");
+                Curtain(false);
+            }
+            return;
+        }
+        if (s_curtain_down_at == 0)
+        {
+            s_curtain_down_at = Now + kCurtainHoldMs;
+        }
+        else if (Now >= s_curtain_down_at)
+        {
+            s_curtain_down_at = 0;
+            Curtain(false);
+        }
+    }
+
     // The host's respawn record, moved to the bonfire everyone travels to,
     // the way the game's own travel does it: the request the travel builds
     // carries the map at +0x08 and the spawn point at +0x18.
@@ -762,6 +834,10 @@ namespace
     void StartGo(uint32_t Map, uint16_t Bonfire)
     {
         const bool Closed = CloseBonfireMenu();
+        if (!s_curtain_up)
+        {
+            Curtain(true);
+        }
         s_go = Go();
         s_go.Active = true;
         s_go.Map = Map;
@@ -1107,6 +1183,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
         s_travel_bonfire = (TravelBonfire_p)(Base + kTravelBonfireOffset);
         s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
+        s_curtain = Matches(Base + kCurtainOffset, kCurtainPrologue, sizeof(kCurtainPrologue))
+            ? (Curtain_p)(Base + kCurtainOffset) : nullptr;
         s_original_inner_script = (Script_p)(Base + kInnerScriptOffset);
         s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
@@ -1187,6 +1265,7 @@ void DS2_BonfireInSession_Tick()
     }
 
     KeepJobPatch(Now);
+    KeepCurtain(Now);
 
     // The host arrived: now the guests may come.
     if (s_call.Active)
@@ -1588,6 +1667,10 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourTransactionCommit();
         s_original_rest = nullptr;
         s_original_reset = nullptr;
+    }
+    if (s_curtain_up)
+    {
+        Curtain(false);
     }
     if (s_prompt_patched && Matches(s_base + kPromptGate, kPromptGatePatch, sizeof(kPromptGatePatch)))
     {
