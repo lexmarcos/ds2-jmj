@@ -285,25 +285,27 @@ namespace
         {
             if (Verdict == KeepVerdict::Keep)
             {
-                // Only the force byte. The parts mask a keep carries is the
-                // one place this injector puts a **computed** value into the
-                // streamer's own fields, and for the map another player stands
-                // in it is computed from that player's copy - a copy that is
-                // mid-flight exactly when a travel happens, so the part it
-                // reads can be stale. A part bit the map does not have sends
-                // the streamer into its part array past the end, and every
-                // crash of 15 and 16/09 carried the signature of a small stray
-                // write: two bytes (`b0 10` or `b5 40`) landing at offset +5 of
-                // a live pointer, low half still correct.
-                //
-                // Measured solo on 16/09, six travels in a row: with the parts
-                // mask at **zero** the map still loaded and the ground still
-                // came, because what brings the ground is the focus (the nav
-                // cell handed to the streamer), not the mask. So the mask buys
-                // nothing and can cost the session.
+                // The force byte and the parts this keep asks for. Both are
+                // needed: a forced owner with an empty mask never leaves state
+                // 0, which is how a version of 16/09 left the guest unable to
+                // travel at all - the host went first, the host's copy forced
+                // the destination on the guest's machine with no parts, and
+                // the guest's own request then found an owner that would never
+                // load.
                 const uint8_t One = 1;
                 WriteBytes((uintptr_t)Owner + kOwnerForced, &One, 1);
-                (void)KeptMask;
+                for (const size_t At : kOwnerMasks)
+                {
+                    uint32_t Mask[4] = {};
+                    if (ReadBytes((uintptr_t)Owner + At, Mask, sizeof(Mask)))
+                    {
+                        for (int i = 0; i < 4; ++i)
+                        {
+                            Mask[i] |= KeptMask[i];
+                        }
+                        WriteBytes((uintptr_t)Owner + At, Mask, sizeof(Mask));
+                    }
+                }
             }
             else if (Verdict == KeepVerdict::Drop && Map != s_map.load())
             {

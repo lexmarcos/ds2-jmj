@@ -1553,18 +1553,21 @@ namespace
                     Clock().c_str(), Id, Map));
                 return;
             }
-            // No extra parts: the map is forced in (the owner's force byte is
-            // what loads it at all) and the **focus** brings the ground, by
-            // telling the streamer the player stands at the bonfire's nav
-            // cell. Asking for all 128 parts loaded Majula whole - 571 model
-            // components where ordinary play has a few dozen - and with a
-            // second map and a session on top of it the allocator started
-            // handing out blocks that overlap: every crash of 15 and 16/09
-            // carried the same two bytes written over the middle of a live
-            // pointer (`b0 10` or `b5 40` at offset +5). Nothing the game does
-            // by itself ever holds two whole maps.
-            const uint32_t Nearby[4] = { 0, 0, 0, 0 };
-            DS2_Backread::Request(Map, Nearby);
+            // Every part. A version of 16/09 asked for none, on the theory
+            // that the force byte loads the map and the focus brings the
+            // ground - six travels alone went through, so it looked right.
+            // It was not: measured with two players, the owner sits at state 0
+            // for ever with an empty mask (`estado 0 forcado 1 quer 1`, every
+            // mask zero). **The force byte says "keep this map", not "load
+            // it"; what loads a map is having a part asked for.** Alone it
+            // only seemed to work because the player had just come from that
+            // map and the streamer still wanted parts of it. The cost of the
+            // mistake was quiet: the travel gave up after 30 s, wrote
+            // "viagem concluido" anyway and left the character where it stood,
+            // so a run of thirty legs looked clean while the guest had really
+            // travelled five times.
+            const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+            DS2_Backread::Request(Map, Every);
             Next.Loading = true;
             Next.LoadMap = Map;
             Next.LoadId = Id;
