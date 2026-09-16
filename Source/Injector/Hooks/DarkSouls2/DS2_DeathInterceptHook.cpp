@@ -10,6 +10,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -490,7 +491,15 @@ namespace
     // pointer in a list walked by FUN_1401cbf20 and in the pre-draw task),
     // and it only ever happened with the other player's copy in that map.
     int32_t s_travel_from = -1;
-    constexpr uint32_t kKeepOldMapMs = 15000;
+    // Both maps of a travel are held by the travel itself, from the moment it
+    // starts until well after everyone has landed - not by whichever map the
+    // other player's copy happens to be standing on, which goes stale the
+    // moment that copy moves (measured 15/09: the keep for the copy's map
+    // arrived after the guest had already left it).
+    constexpr uint32_t kTravelHoldMs = 30000;
+    // What the watcher writes down around a travel.
+    constexpr uint32_t kWatchStartMs = 12000;
+    constexpr uint32_t kWatchLandedMs = 8000;
 
     // After the jump to another map: holding that map until the character
     // stands on it, then letting go.
@@ -1513,6 +1522,11 @@ namespace
         Next.Why = "viagem";
         Next.KeepHp = true;
         s_travel_from = MapIndexUnder(Chr);
+        if (s_travel_from >= 0)
+        {
+            DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
+        }
+        DS2_TravelWatch::Open(kWatchStartMs, "viagem comecou");
 
         // Only a bonfire of the map under the player is jumped to straight
         // away. A bonfire of another map may be in the list already - that
@@ -1797,11 +1811,20 @@ namespace
 
         ++s_recovered;
         s_recovery.Active = false;
-        if (s_go_moving.exchange(false) && s_travel_from >= 0)
+        if (s_go_moving.exchange(false))
         {
-            DS2_Backread::KeepIndex(s_travel_from, kKeepOldMapMs);
-            Append(StringFormat("%s  viagem: o mapa de indice %d de onde sai fica mais %u ms\n",
-                Clock().c_str(), s_travel_from, kKeepOldMapMs));
+            const int32_t Here = MapIndexUnder(Chr);
+            if (s_travel_from >= 0)
+            {
+                DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
+            }
+            if (Here >= 0)
+            {
+                DS2_Backread::KeepIndex(Here, kTravelHoldMs);
+            }
+            DS2_TravelWatch::Open(kWatchLandedMs, "viagem chegou");
+            Append(StringFormat("%s  viagem: mapas de indice %d (de onde sai) e %d (onde chega) segurados por %u ms\n",
+                Clock().c_str(), s_travel_from, Here, kTravelHoldMs));
             s_travel_from = -1;
         }
         Append(StringFormat("%s  %s concluido em %u quadros: +0x4c0 %016llx -> %016llx, camera de queda %s, hp %d -> %d\n",
