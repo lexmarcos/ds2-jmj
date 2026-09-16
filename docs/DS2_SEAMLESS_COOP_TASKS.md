@@ -1097,11 +1097,67 @@ vivos**; o valor muda a cada vez, então é dado sendo copiado, não um veneno
 constante. Não é ASCII em UTF-16 (o byte alto seria 0x00), então não são as
 caixas de texto deste hook.
 
-**Falta ainda:** achar quem escreve. O caminho que não foi tentado é o certo
-para isto: um breakpoint de **escrita em hardware** (registradores de depuração
-Dr0-Dr7 via `SetThreadContext`) sobre o endereço de um ponteiro que já foi
-corrompido uma vez. Tudo mais é adivinhação, e a adivinhação já custou quatro
-rodadas.
+### Achado em 16/09: é o corpo rígido do Havok, e é uso depois de liberar
+
+**A vigia de escrita respondeu.** E a primeira coisa que ela corrigiu foi o
+plano: eu vinha dizendo que faltava um breakpoint de **escrita em hardware**.
+Ele **não funciona nesta máquina**, e o repositório já dizia isso em
+`DS2_AREA_RESTRICTION.md` ("Hardware watchpoints do not work under Wine...
+accepted by all sixty threads and never fires"), com o aviso de que vale saber
+antes de pegar a ferramenta óbvia de novo. A ferramenta que funciona já estava
+construída: a vigia por **proteção de página** do `DS2_TraceHook`
+(`wp` em `DS2_Trace.req`).
+
+**A cadeia, medida ao vivo no host:**
+
+    PXCharacterRigidBody  (o corpo físico do personagem)
+      +0x110  ->  hkpRigidBody  (o corpo rígido do Havok)
+                    +0x18  ->  ponteiro para o heap dos mapas
+
+A queda repetida do host lia exatamente esse caminho
+(`FUN_140bd15b0`: `*(rcx+0x110)`, depois `+0x18`, depois `+0x8`).
+
+**E a vigia mostrou quem escreve o `+0x18` do `hkpRigidBody`:** um `rep movsb`
+(`+0x1c31725`) copiando **0x1d28 bytes**, vindo de `FUN_1404e00d0`, que
+**aloca** um buffer e copia dentro dele. O destino da cópia caiu em cima do
+campo. Ou seja, a memória do `hkpRigidBody` foi **reciclada** para virar outro
+buffer enquanto o `PXCharacterRigidBody` do personagem ainda apontava para ela.
+
+**Isso decide a pergunta que estava aberta.** Não é uma escrita perdida de
+passo 2 bytes; é **uso depois de liberar com reaproveitamento de endereço**. Os
+valores que pareciam dados soltos eram o novo ocupante do bloco visto através
+do ponteiro velho, e por isso variavam tanto: `a140a140a140a140` e
+`3e2a256f2b7fe62c` são floats do buffer novo, `005c003200470053` é texto UTF-16
+de um caminho de arquivo, e `00b54001410e86d8` é um bloco reaproveitado só em
+parte, com a metade baixa do ponteiro antigo ainda de pé.
+
+**E fecha com a causa estrutural.** A viagem junta move o personagem entre
+mapas **sem o carregamento** que reconstruiria as coisas. O corpo rígido do
+Havok pertence ao mundo físico do mapa que está sendo desmontado; o
+`PXCharacterRigidBody` do personagem continua com ele. Sozinho não morde; com
+sessão, e com uma cópia remota atravessando junto, morde.
+
+**O conserto passa a ter alvo.** Não é "reconstruir a presença" em geral: é
+garantir que o corpo rígido do personagem seja recriado no mundo físico do
+destino, ou que o ponteiro seja reassentado, em vez de ser carregado por cima
+da desmontagem. Isso é bem menor que a reentrada coordenada inteira que
+`DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md` propõe, e é o primeiro experimento a
+fazer.
+
+**O que ainda não está provado:** o ponto exato onde o `hkpRigidBody` é
+liberado. A cadeia e o reaproveitamento estão medidos; o sítio da liberação
+não.
+
+**Três correções de método nesta rodada**, todas por engano meu e todas úteis:
+
+1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
+   módulo**: 40 falsos positivos, porque o campo legitimamente aponta para
+   fora dele;
+2. depois foi ampliado para `+0x40`, `+0xc8` e `+0xd0`, que **não são
+   ponteiros** em muitos componentes: ele passou a relatar texto UTF-16, o
+   float 1.0 e pares de coordenadas como se fossem dano;
+3. o que funciona é olhar **um** campo provadamente ponteiro e perguntar só se
+   o valor **pode ser um endereço** (qualquer bit acima do 47 ligado não pode).
 
 **Uma varredura que se provou desnecessária, e por que foi tirada.** Durante
 uma dessas rodadas o vigia passou a refazer os 32 baldes da lista do quadro a
