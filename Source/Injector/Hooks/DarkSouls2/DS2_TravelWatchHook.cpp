@@ -48,17 +48,44 @@ namespace
     constexpr size_t kComponentRegistered = 0xc8;
     constexpr size_t kComponentId = 0xc0;
 
+    // The per-frame broadcast of every registered component:
+    // FUN_14040d2e0(registry, delta, first bucket, count) walks the buckets at
+    // `registry+0x10 + bucket*0x10` and calls slot +0x30 of each node's owner
+    // (the node sits at `owner+0x20`, prev at +0x00 and next at +0x08, the way
+    // FUN_14040d2b0 unlinks one). Measured 15/09 on the guest, seconds after a
+    // travel: a node whose owner had already been freed - its vftable stamped
+    // by the allocator (`00b010..`) - was still in the list, and the call
+    // through it closed the game (+0x40d33b). Nothing in the four doors below
+    // had let that owner go, so whoever frees it does not unlink it.
+    //
+    // So the walk is done here instead, with one question asked of each node
+    // before it is called: is the owner's vftable still inside the module? A
+    // node that fails is unlinked and written down, and the game goes on.
+    constexpr size_t kBroadcastOffset = 0x40d2e0;
+    constexpr uint8_t kBroadcastPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x20 };
+    constexpr size_t kRegistryCurrent = 0x208;
+    constexpr size_t kBucketStride = 0x10;
+    constexpr size_t kNodeFromOwner = 0x20;
+    constexpr size_t kNodeNext = 0x08;
+    constexpr size_t kUpdateSlot = 0x30;
+    constexpr uintptr_t kModuleSpan = 0x2000000;
+    constexpr uint32_t kNodeGuard = 200000;   // a bucket is never this long
+
     constexpr size_t kFrames = 6;
     constexpr uint64_t kMaxLines = 4000;   // one travel is a few hundred
 
     using EntityDtor_p = void*(*)(void* Entity, uint32_t Flags);
     using ComponentFree_p = void(*)(void* Component, char Flag);
     using ByMap_p = void(*)(void* Object, int32_t MapIndex);
+    using Broadcast_p = void(*)(void* Registry, void* Argument, uint32_t First, int32_t Count);
+    using Update_p = void(*)(void* Owner, void* Argument);
 
     EntityDtor_p s_original_entity = nullptr;
     ComponentFree_p s_original_component = nullptr;
     ByMap_p s_original_objects = nullptr;
     ByMap_p s_original_characters = nullptr;
+    Broadcast_p s_original_broadcast = nullptr;
+    std::atomic<uint64_t> s_skipped{ 0 };
 
     uintptr_t s_base = 0;
     std::filesystem::path s_log_path;
@@ -199,6 +226,81 @@ namespace
         s_original_characters(Object, MapIndex);
     }
 
+    // A node whose owner is gone: unlinked the way FUN_14040d2b0 does, so the
+    // next walk of this bucket never sees it again.
+    void Unlink(uintptr_t Node)
+    {
+        uintptr_t Prev = 0, Next = 0;
+        if (!Peek(Node, &Prev, sizeof(Prev)) || !Peek(Node + kNodeNext, &Next, sizeof(Next)) ||
+            Prev == 0 || Next == 0)
+        {
+            return;
+        }
+        __try
+        {
+            *(uintptr_t*)(Prev + kNodeNext) = Next;
+            *(uintptr_t*)Next = Prev;
+            *(uintptr_t*)Node = Node;
+            *(uintptr_t*)(Node + kNodeNext) = Node;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+    }
+
+    bool OwnerAlive(uintptr_t Owner)
+    {
+        uintptr_t Vftable = 0;
+        return Peek(Owner, &Vftable, sizeof(Vftable)) && Vftable >= s_base &&
+            Vftable < s_base + kModuleSpan && (Vftable & 7) == 0;
+    }
+
+    void BroadcastHook(void* Registry, void* Argument, uint32_t First, int32_t Count)
+    {
+        const uintptr_t Reg = (uintptr_t)Registry;
+        if (Reg == 0 || Count <= 0)
+        {
+            if (Reg != 0)
+            {
+                *(uint32_t*)(Reg + kRegistryCurrent) = 0xffffffff;
+            }
+            return;
+        }
+        for (uint32_t Bucket = First; Count > 0; --Count, ++Bucket)
+        {
+            *(uint32_t*)(Reg + kRegistryCurrent) = Bucket;
+            const uintptr_t End = Reg + 8 + (uintptr_t)Bucket * kBucketStride;
+            uintptr_t Node = *(uintptr_t*)(Reg + 0x10 + (uintptr_t)Bucket * kBucketStride);
+            for (uint32_t Guard = 0; Node != End && Node != 0 && Guard < kNodeGuard; ++Guard)
+            {
+                const uintptr_t Owner = Node - kNodeFromOwner;
+                uintptr_t Next = 0;
+                if (!Peek(Node + kNodeNext, &Next, sizeof(Next)))
+                {
+                    break;
+                }
+                if (!OwnerAlive(Owner))
+                {
+                    Unlink(Node);
+                    if (s_skipped.fetch_add(1) < 40)
+                    {
+                        Note(StringFormat("no morto na lista do quadro: dono %p sem vftable do jogo; desliguei da lista", (void*)Owner));
+                    }
+                    Node = Next;
+                    continue;
+                }
+                const Update_p Update = (Update_p)(*(void***)Owner)[kUpdateSlot / sizeof(void*)];
+                Update((void*)Owner, Argument);
+                // The game re-reads the node's own next here, which is how a
+                // handler that removes the node after it gets away with it;
+                // the one captured before the call is the fallback.
+                uintptr_t After = 0;
+                Node = OwnerAlive(Owner) && Peek(Node + kNodeNext, &After, sizeof(After)) && After != 0 ? After : Next;
+            }
+        }
+        *(uint32_t*)(Reg + kRegistryCurrent) = 0xffffffff;
+    }
+
     bool Matches(uintptr_t Address, const uint8_t* Expected, size_t Length)
     {
         return memcmp((const void*)Address, Expected, Length) == 0;
@@ -211,7 +313,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
 {
 #if defined(_WIN32) && defined(_M_X64)
     const uintptr_t Base = (uintptr_t)injector.GetBaseAddress();
-    if (!Matches(Base + kEntityDtorOffset, kEntityDtorPrologue, sizeof(kEntityDtorPrologue)) ||
+    if (!Matches(Base + kBroadcastOffset, kBroadcastPrologue, sizeof(kBroadcastPrologue)) ||
+        !Matches(Base + kEntityDtorOffset, kEntityDtorPrologue, sizeof(kEntityDtorPrologue)) ||
         !Matches(Base + kComponentFreeOffset, kComponentFreePrologue, sizeof(kComponentFreePrologue)) ||
         !Matches(Base + kMapObjectsOffset, kMapObjectsPrologue, sizeof(kMapObjectsPrologue)) ||
         !Matches(Base + kMapCharactersOffset, kMapCharactersPrologue, sizeof(kMapCharactersPrologue)))
@@ -226,9 +329,11 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_component = (ComponentFree_p)(Base + kComponentFreeOffset);
     s_original_objects = (ByMap_p)(Base + kMapObjectsOffset);
     s_original_characters = (ByMap_p)(Base + kMapCharactersOffset);
+    s_original_broadcast = (Broadcast_p)(Base + kBroadcastOffset);
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)s_original_broadcast, BroadcastHook);
     DetourAttach(&(PVOID&)s_original_entity, EntityDtorHook);
     DetourAttach(&(PVOID&)s_original_component, ComponentFreeHook);
     DetourAttach(&(PVOID&)s_original_objects, MapObjectsHook);
@@ -256,6 +361,7 @@ void DS2_TravelWatchHook::Uninstall()
     {
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)s_original_broadcast, BroadcastHook);
         DetourDetach(&(PVOID&)s_original_entity, EntityDtorHook);
         DetourDetach(&(PVOID&)s_original_component, ComponentFreeHook);
         DetourDetach(&(PVOID&)s_original_objects, MapObjectsHook);
