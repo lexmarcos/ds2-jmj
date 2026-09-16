@@ -1143,7 +1143,39 @@ cada). É a cadeia de animação, e o host é quem guarda a cópia do convidado.
 (`tarefa[2](tarefa[1], arg, tarefa+3)`) e depois a conclusão (slot 0 da própria
 tarefa). O vigia agora o reimplementa com o trabalho sob `__try` e a conclusão
 **sempre** — um personagem perde um quadro de animação em vez de todo mundo
-perder a sessão, e a contabilidade da tarefa continua fechando. Falta medir.
+perder a sessão, e a contabilidade da tarefa continua fechando.
+
+### Era isso. A viagem junta está ligada por padrão desde 16/09
+
+Medido com dois jogadores, contando um trecho só quando os **dois** registram
+"o personagem esta nele" no mapa de destino:
+
+| build | trechos até um jogo fechar |
+| --- | --- |
+| antes das guardas | 1 a 3 |
+| guarda do ciclo do mapa | 4 |
+| + prova de tipo no dono e na máscara de partes | 10 |
+| + guarda do executor de tarefa | **40, sem nenhuma queda** |
+
+Quarenta trechos Heide↔Majula seguidos, **nenhuma viagem falha, nenhum jogo
+fechado, nenhum ponto de desconexão gasto** (Samuel 10, Chico 50 do começo ao
+fim), `p2pSessionVerified: true` o tempo todo. Ao longo deles o host aparou
+**59** falhas no executor de tarefa e o convidado 63 no ciclo do mapa, e os dois
+seguiram jogando. Quarenta foi onde o teste parou, não onde ele quebrou.
+
+A corrupção de memória **continua existindo** — as guardas param de morrer, não
+param de corromper. O que mudou é que agora os dois lugares onde ela chegava a
+ser fatal estão cobertos, e o custo de uma falha é um quadro de animação
+perdido num personagem. Quem quiser ir atrás da causa: a assinatura, as
+teorias já descartadas e o caminho do breakpoint de escrita em hardware estão
+logo acima.
+
+**Uma ideia que ficou pronta e não foi precisa:** segurar as cópias dos outros
+jogadores paradas durante a viagem (`DS2_DeathIntercept::HoldCopies`), já que é
+a cópia que desliza entre mapas sem o carregamento que a reconstruiria. Com
+quarenta trechos limpos ela não se justificava, e o preço seria o outro jogador
+congelado por alguns segundos na tela. Fica anotada como a próxima alavanca se
+a queda voltar.
 
 **Falta:**
 

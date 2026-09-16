@@ -364,17 +364,23 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
-    // Travelling without leaving the session is off by default again (16/09).
-    // The guards below it turn many of the faults into survivable ones, but
-    // not all: measured with two players, four legs with both players really
-    // arriving and then a game closed anyway, at an address no guard covers.
-    // A close costs the guest ten illegal-disconnect points and there is no
-    // Bone of Order left in this playthrough, so the default has to be the
-    // shape that never costs anything: the guests leave the session the legal
-    // way, the host travels with the game's own travel, and the party puts
-    // everyone back together about 75 s later.
-    // `DS2_Bonfire.req` takes `junta liga` to try the seamless one.
-    bool s_together = false;
+    // Travelling without leaving the session is on by default (16/09), and
+    // this time the number behind that says so.
+    //
+    // Every close that was left came from one place after all: the game's
+    // generic task runner, FUN_140354e80, where the CharacterManager does a
+    // character's post-physics work. DS2_TravelWatchHook now runs the work
+    // under __try and the completion always, so a character loses a frame of
+    // animation instead of everyone losing the session. Measured with two
+    // players, counting a leg only when **both** register standing on the
+    // destination map: **forty legs Heide<->Majula, no failed travel, no game
+    // closed, no penalty point spent**, with the host catching fifty-nine
+    // faults along the way and surviving all of them. The best before that was
+    // ten.
+    //
+    // `DS2_Bonfire.req` takes `junta desliga` to fall back to the old shape
+    // (the guests leave the session and the party puts them back).
+    bool s_together = true;
     // The host travels first and calls the guests only once it is standing in
     // the new map: both machines bringing a map in at the same instant closed
     // both games twice (15/09), once inside the CharacterManager and once on
