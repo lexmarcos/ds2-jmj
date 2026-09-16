@@ -1502,6 +1502,44 @@ cross-heap; rodar uma corrida longa para ver se a varredura chega a cortar
 alguma vez; e, se a queda voltar sem corte nenhum, a vigia de página sobre o nó
 que morre, que é a ferramenta que já achou o corpo rígido.
 
+### Quarenta trechos com o build limpo, e a varredura nunca cortou (16/09, 20:36)
+
+`955ab5fa` tirou o desligamento inteiro — 262 linhas — e deixou a varredura e os
+contadores. Quarenta trechos, os dois chegando em todos, nenhum falho, nenhum
+jogo fechado, guardas 0 → 0, saída legal, penalidade igual no fim (10 e 70).
+
+    conta 1: 16838748 no mesmo heap da entidade, 0 em heap alheio, 0 desconhecido
+    conta 2: 16734704 no mesmo heap da entidade, 0 em heap alheio, 0 desconhecido
+    elos podres cortados: 0 nos dois
+
+Somando com a corrida anterior: **52 trechos seguidos sem uma queda**, e
+**quarenta e seis milhões** de componentes observados sem um único heap alheio.
+
+**O que está provado.** Que a regra cross-heap é falsa, agora com uma ordem de
+grandeza a mais de amostras. Isso não volta atrás.
+
+**O que não está.** Que a varredura conserta alguma coisa. Ela **nunca cortou**,
+então em 52 trechos nenhuma lista de entidade teve elo podre. Duas leituras
+cabem, e nada aqui separa as duas:
+
+- o dano nunca apareceu nestes 52 trechos, e a varredura ficou ociosa — o que
+  também explicaria os 40 trechos limpos de antes dela existir;
+- ou o dano aparece numa entidade que **não passa** pelos três ganchos de
+  quadro, e a varredura nunca olhou para a lista certa.
+
+A segunda é a que importa, e ela é testável: a queda de 16/09 veio de uma
+entidade alcançada por `FUN_14036f800`, pela física. Nada garante que essa
+entidade tenha um componente de modelo passando pelo pré-desenho.
+
+**Portanto a varredura não pode ser creditada, e a queda não pode ser dada por
+resolvida.** Ela é intermitente: veio no segundo trecho de uma corrida e depois
+sumiu por 52. Uma corrida limpa não a refuta.
+
+**O próximo passo é a vigia de página** (`wp` em `DS2_Trace.req`), armada sobre
+o nó enquanto ele ainda existe. É a ferramenta que achou o corpo rígido, é a
+única que responde **quem escreve**, e nesta sessão ela foi adiada três vezes em
+favor de hipóteses que a medição derrubou uma a uma.
+
 **Três correções de método nesta rodada**, todas por engano meu e todas úteis:
 
 1. o detector de corrupção primeiro exigiu que `+0x50` fosse vftable **deste
