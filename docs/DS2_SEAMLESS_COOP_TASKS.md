@@ -791,8 +791,75 @@ no Samuel às 18:28:26. Com o build `74247cca`, o convidado que deixa a pergunta
 sem resposta também recebe o motivo quando ela fecha: "Travel canceled: not
 every player answered." nos dois às 18:39:34.
 
+**Viagem em grupo, sem sair da sessão — feita em 15/09.** A primeira forma —
+os convidados saíam da sessão, o host viajava com a viagem do jogo e o party
+juntava todos de novo — **não é viajar junto**: medido no uso real, o convidado
+voltava ao próprio mundo com "Summoning canceled." e só reaparecia no mundo do
+host cerca de 75 s depois (19:39:47 saiu, 19:41:06 voltou; três viagens
+seguidas iguais). É o mesmo contorno que o M2 já tinha rejeitado.
+
+Agora ninguém sai: cada máquina leva o próprio jogador até a fogueira pelo
+caminho do passo 8 do M2 — `DS2_DeathIntercept::GoToBonfire`, que segura o mapa
+do destino ao lado do atual (`DS2_BackreadHook`), espera o estado 5, foca na
+célula da fogueira e teleporta, sem warp nenhum. O host grava o próprio
+registro de renascimento na fogueira nova (`FUN_1401843b0` + `FUN_14044fe30`).
+A viagem leva ~2,5 s por jogador e a sessão fica verificada o tempo todo.
+
+Três coisas foram aprendidas fechando os jogos (cinco quedas, 50 pontos de
+desconexão no Samuel e 10 no Chico):
+
+1. **Fechar o menu da fogueira por chamada direta mata o convidado.** Chamar
+   `FUN_1401994e0` da tick do hook fechou o menu no host e derrubou o convidado
+   duas vezes, no mesmo milissegundo da chamada (`c0000005` escrevendo em 0
+   dentro do desmonte do menu). O que o jogo faz é outra coisa: o job do
+   descanso cancela o menu quando há sessão. Então o patch `+0x17ee9d` sai por
+   um instante e o **jogo** fecha o menu — medido ao vivo antes de virar
+   código: menu fechado em menos de 1 s, personagem de pé, sessão verificada;
+2. **Soltar o mapa do outro jogador durante a viagem mata quem viaja.** Uma
+   tentativa de economizar memória parou de segurar o mapa sob a cópia do outro
+   jogador enquanto a viagem carregava; o convidado fechou dentro do
+   `CharacterManager` (`+0x3f4fac`, personagem já liberado) — o mesmo crash que
+   a viagem com warp dava. O mapa do outro jogador continua mantido;
+3. **As duas máquinas não podem trazer o mapa ao mesmo tempo.** Quando host e
+   convidado carregavam juntos, os dois jogos fecharam (uma vez no alocador,
+   outra no quadro em que o mapa velho foi solto). Agora o **host viaja
+   primeiro** e só chama os convidados depois de chegar e ficar 1,5 s parado no
+   mapa novo ("cheguei na fogueira %04x em %llu ms; os convidados podem vir").
+
+E uma quarta, sem crash: a fogueira do destino pode **já estar na lista** por o
+mapa estar carregado para a cópia do outro jogador — mas só com as partes em
+volta dele. O convidado chegou a Heide sem chão e caiu para a morte. Qualquer
+mapa que não seja o de baixo dos pés passa pelo mapa segurado e pelo foco.
+
+Medido com o build `2cda8f19`, Chico host e Samuel convidado: proposta do
+convidado em Heide → host aceita → host chega em Majula em 2,2 s → convidado
+vai junto; os dois de pé na The Far Fire, cada um vendo o outro,
+`p2pSessionVerified: true`. Com o build `9fccbc75`, três idas e voltas
+seguidas Heide↔Majula pelo arquivo de pedido, com os dois chegando juntos e
+sem queda.
+
+A forma antiga fica como reserva: se o mapa do destino não puder ser trazido
+(`DS2_DeathIntercept::MapReachable` falso), a votação aprovada volta a mandar
+os convidados saírem e o host viaja pelo jogo.
+
+**Lista de fogueiras do convidado — corrigida em 15/09.** A tabela de fogueiras
+(`*(*(ctx+0x70)+0x58)+0x20`, 0x18 por entrada, id ushort) tem uma coluna de
+"acesa" por mundo, e a que o convidado lê (`+0x44` = 1) só ganhava as fogueiras
+dos mapas que ele carregou na sessão: com os dois em Heide, a lista de viagem
+dele tinha 2 áreas, e o host tinha 13. Agora o host publica as próprias acesas
+como um bitmap sobre a ordem da tabela (pacote `0x30` do canal, 96 bits, 77
+entradas em 1.03) e o convidado escreve na coluna dele — 74 fogueiras alinhadas
+no primeiro segundo, e a lista dele passou a ser a mesma do host. A tabela é
+conferida antes de ser escrita (contagem, coluna e ids crescentes).
+
+**O aviso de descanso saiu.** A caixa "A player is resting at a bonfire." era
+modal e atrapalhava a luta; por decisão do dono do projeto (15/09) o descanso
+não avisa mais ninguém. O reinício do mundo continua valendo para todos.
+
 **Falta:**
 
+- **as quedas acima não estão provadas como resolvidas**: cada correção foi
+  medida uma vez, e a última rodada de teste fechou os jogos cinco vezes;
 - `NotLit` e `Busy` não medidos: a lista do convidado só mostra fogueiras que
   o host acendeu, então o `NotLit` só aparece numa corrida;
 - a caixa do aviso e a da votação são modais: é preciso apertar;

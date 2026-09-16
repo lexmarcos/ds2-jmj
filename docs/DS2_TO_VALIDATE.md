@@ -264,7 +264,25 @@ The guest's rest resetting the world was measured by the log lines on both
 machines, not by an enemy coming back (that was measured for the host's rest).
 Only type 14 of the event action entries is let through for a white phantom
 (build `dec12dd2`, where the guest again sat and healed 400 -> 914); type 13, most likely lighting an unlit bonfire, stays
-refused and was never offered to a guest. Not measured: three or more players (a guest's rest notice relayed
+refused and was never offered to a guest.
+
+Travel now moves everyone without leaving the session (build `2cda8f19`): the
+host goes first, and once it has stood still in the new map for 1.5 s the
+guests follow, each through the backread hold and focus. Measured: a guest's
+proposal in Heide accepted by the host put both at The Far Fire in 2.2 s plus
+the guest's own move, seeing each other, session verified; and three Heide
+<-> Majula round trips through `DS2_Bonfire.req`'s `ir`. Not measured: that
+the five crashes this cost are actually gone (each fix was measured once,
+against a failure that did not happen on every travel), any map but Heide and
+Majula, a map the backread hook cannot bring in (the old leave-and-rejoin
+path is still there for it, now untested), three or more players (they would
+all follow the host at the same instant, which is the shape that crashed both
+games), travelling with enemies awake or mid-fight, and what the host's own
+`Bonfire intensity` does to a guest that arrives this way. The guest's travel
+list is now the host's lit bonfires, written into the guest's copy of the
+bonfire table every second; not measured: a bonfire the host lights during the
+session, a guest that has lit fewer bonfires than the host, and any table but
+1.03's 77 entries. Not measured: three or more players (a guest's rest notice relayed
 to the other guests), leveling or attuning in it, burning a Bonfire Ascetic
 with a phantom present, resting with an invader in the world, a proposal the
 host refuses as not lit or busy, whether query 130602's answer is still needed

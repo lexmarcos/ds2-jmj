@@ -167,6 +167,22 @@ para de sair do lugar, o que resolve encavalar, mas não contorna geometria. Na
 prática chega a 2 m do alvo em terreno com degraus, que é folga de sobra para
 pisar numa placa, e é por isso que o raio padrão é 2 m.
 
+## `DS2_Bonfire.req`: a viagem sem sessão
+
+`ir <mapa hex> <fogueira hex>` leva o jogador local àquela fogueira do jeito
+que a viagem em grupo leva — mapa segurado ao lado do atual, foco na célula da
+fogueira, teleporte, sem warp e sem tocar na sessão. Existe para medir a
+viagem **sozinho**, que é o controle: com um cliente só, nenhuma queda custa
+ponto de desconexão ilegal.
+
+```
+ir 0a1f0000 7ba7      # Heide's Ruin
+ir 0a040000 122a      # The Far Fire
+```
+
+O log é o `DS2_Bonfire.log`, e o `DS2_Death.log` mostra o carregamento e o
+pouso ("viagem: o mapa ... carregou em N quadros").
+
 ## O breakpoint que segue um ponteiro
 
 `DS2_Trace.req` aceita, desde 12/09:
