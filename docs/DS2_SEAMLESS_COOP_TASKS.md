@@ -923,6 +923,60 @@ esse campo quando o mapa dela muda sem warp.
 Custo até aqui: 80 pontos de desconexão ilegal no Samuel (de 10) e 10 no Chico.
 O save `antes-viagem-junta` foi tirado antes de tudo isso.
 
+**Segunda rodada de correções (16/09), a queda ainda em aberto.** Três
+tentativas principais, cada uma medida com dois jogadores, e cada uma **moveu**
+a queda em vez de fechá-la:
+
+1. **O vigia passou a guardar o pré-desenho do próprio componente de modelo**
+   (`FUN_1403f4f60`), não o update do personagem: antes de o jogo tocar no
+   componente, confere o componente e os três objetos que ele aponta
+   (`+0x40` a instância do modelo, `+0xc8` o registro no quadro, `+0xd0` o
+   seguidor); um componente já liberado é pulado. Isso mostrou que, **em pé e
+   parado**, todo mundo passa (0 pulados). A queda vem só quando um mapa é
+   **desmontado**.
+2. **A viagem passou a segurar os dois mapas inteiros** (`keep` com todas as
+   partes), e os `keep` **somam** e nunca encolhem — antes o `keep` que a cópia
+   do outro jogador renova por quadro rebaixava o mapa às partes debaixo dela,
+   e o mapa saía em duas fases (as partes na chegada, o resto 30 s depois).
+   Não fechou: `+0x40d2c7`, dentro do `unlink` do registro do quadro
+   (`FUN_14040d2b0`), escrevendo `proximo->[0] = anterior` com `proximo` já
+   liberado.
+3. **A cortina passou a abrir a tela de carregamento do próprio jogo**
+   (`FUN_1405014b0`, evento `0x67` ao objeto de front-end `0x4c5c574`) e a
+   esconder o HUD (`FUN_1404ffef0(frontend, 0xffdffbff)`), além de desligar o
+   desenho do mundo como antes. Medido na tela do convidado: o HUD some, as
+   barras de letterbox e o rodinho de carregando aparecem — mas o mundo
+   **ainda é desenhado** por trás (a chamada que desliga o desenho,
+   `FUN_140b06270`, é no-op fora de um warp de verdade). É melhor que o
+   personagem flutuando com o HUD cheio, mas não é a tela preta.
+
+**O que está claro agora.** A queda é sempre durante a **desmontagem** dos
+`MapModelComponent` de um mapa (`FUN_1403f6300`, chamada por `FUN_1403f4500`),
+e o endereço muda a cada tentativa (`+0x3f4230`, `+0x40d2c7`, `+0x3f687a`,
+`+0x3f4fac`). O padrão nos registradores é sempre o carimbo do alocador
+(`00b540…`, `00b010…`): um nó do registro do quadro (`prev`/`next` em
+`+0x20`/`+0x28`) foi **liberado sem ser desligado da lista** — a cópia do outro
+jogador, que trocou de mapa junto. O vigia do quadro (`FUN_14040d2e0`) desliga
+o nó morto **quando percorre aquele balde**, mas a desmontagem
+(`FUN_14040cea0` → `FUN_14040d2b0`) tromba no vizinho morto **antes** disso,
+quando um componente vivo tenta se desligar. E o `keep` pela força do dono não
+impede a desmontagem por **índice de mapa** (`FUN_1401c5dd0`), que é por outro
+caminho.
+
+**A próxima pista, concreta:** ou guardar o próprio `FUN_14040d2b0` (conferir
+que `prev`/`next` estão vivos antes de escrever neles — é minúsculo mas muito
+chamado), ou impedir a desmontagem por índice de um mapa segurado durante a
+janela da viagem (o vigia já intercepta `FUN_1401c5dd0`; hoje só registra).
+Ambas mexem em caminho quente e precisam de medição com dois jogadores, que
+custa ponto. Enquanto isso a viagem junta **continua desligada por padrão** e a
+votação cai no caminho estável (convidados saem pela saída legal, o host viaja
+pela viagem do jogo, o party junta todos).
+
+**O que já vale, independente da queda:** o `keep` que soma e nunca encolhe; o
+pré-desenho guardado (uma trava real contra a queda, não só um registro); a
+tela de carregamento do jogo com o HUD escondido; e `DS2_Bonfire.req` aceita
+`votar <mapa> <fogueira>` no host para exercitar a votação inteira sem a lista.
+
 **Falta:**
 
 - **a queda do convidado depois da chegada, acima, é o próximo trabalho**;
