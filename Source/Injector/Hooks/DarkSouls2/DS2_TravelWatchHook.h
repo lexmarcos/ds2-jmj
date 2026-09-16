@@ -16,11 +16,17 @@
 ///
 /// The guest's game closes 1 to 3 seconds after arriving from a travel without
 /// a warp, always on memory of the map heap that was freed while something
-/// still pointed at it: the pre-draw task of a MapModelComponent
-/// (FUN_1403f4f60 reading `comp+0xc8`), the component list an entity keeps
+/// still pointed at it: the two per-frame jobs of a MapModelComponent
+/// (FUN_1403f4f60, the pre-draw, and FUN_1403f4f10, which reads the model
+/// instance at `comp+0x40`), the component list an entity keeps
 /// (FUN_1401cbf20), and the registry by id (FUN_14040d2e0). Solo it never
 /// happens; it needs a session, which is what makes it expensive to measure -
 /// a crash there costs the guest ten illegal-disconnect points.
+///
+/// Until 16/09 this file said the guest's remaining crash, at +0x3f4f2b, was
+/// inside FUN_1403f4f60. It is not: the PE exception directory puts that
+/// address in FUN_1403f4f10 (0x3f4f10..0x3f4f53), a different function, which
+/// is why the guard on the pre-draw never caught it.
 ///
 /// So the window is written down instead of waited for: while it is open, the
 /// four doors a map entity leaves by say who went and from where, into

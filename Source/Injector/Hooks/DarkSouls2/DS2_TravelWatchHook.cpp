@@ -74,6 +74,49 @@ namespace
     constexpr size_t kModelInstance = 0x40;
     constexpr size_t kModelFollower = 0xd0;
 
+    // FUN_1403f4f10(component, delta): the **other** per-frame job of a
+    // MapModelComponent, and the one the guest has actually been closing in.
+    // It is 0x43 bytes long and disjoint from the pre-draw above - the PE
+    // exception directory gives 0x3f4f10..0x3f4f53 and 0x3f4f60..0x3f527e -
+    // and it does two things:
+    //
+    //     mov  0x40(%rcx),%rcx     the model instance
+    //     test %rcx,%rcx
+    //     je   +0x3f4f34           the game itself tolerates null here
+    //     mov  (%rcx),%rax         <- +0x3f4f2b, where the guest closes
+    //     call *0x8(%rax)
+    //     mov  0xd8(%rbx),%rcx     and then the second follower, if any
+    //     call FUN_1401caaf0
+    //
+    // Until 16/09 this file recorded that crash as happening in FUN_1403f4f60
+    // and counted it as a dependency that **escaped** the pre-draw guard. It
+    // never escaped anything: the two are separate functions, nothing in
+    // either .text section calls this one directly, and it is reached as a
+    // virtual method - its only pointer in the image sits at 0x1410eb588, a
+    // slot of the vftable that carries the name "MapModelComponent" right
+    // after it at 0x1410eb5c0, and whose slot at 0x1410eb598 is the
+    // FUN_1403f6300 release this file already hooks. So the pre-draw's __try
+    // was never on the stack while this ran. The guard was in the wrong
+    // place, the same mistake this file already made once with FUN_1403152f0.
+    //
+    // Two neighbouring slots of that table are where this goes next, because
+    // whoever owns the model instance has to be found before anything is
+    // written: 0x1410eb578 -> FUN_1403f4c20, which reacts to a backread
+    // change and calls virtual release/load, and 0x1410eb580 ->
+    // FUN_1403f4ce0, which tears a registration down.
+    //
+    // What this hook does is only what the pre-draw's does: run the job under
+    // __try, and on a fault write down everything that names the object at
+    // +0x40 while it is still there. It deliberately does **not** write null
+    // into +0x40 by analogy with DropDeadRigidBody. That the game null-checks
+    // the field here proves this consumer's contract and nothing about the
+    // others - FUN_1403f4f60 reads the same field - and for the Havok body
+    // the null path was read in the callee first. That reading has not been
+    // done here.
+    constexpr size_t kModelTickOffset = 0x3f4f10;
+    constexpr uint8_t kModelTickPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x40 };
+    constexpr size_t kModelSecond = 0xd8;   // the second follower, read at +0x3f4f34
+
     // The heaps, the way FUN_1408389e0 finds the one a pointer belongs to:
     // the manager at 0x141627ac0, +0x488 a pointer to {begin, end} of entries
     // of 0x18 bytes, {heap, low, high}. A map part brings its own; when the
@@ -156,6 +199,8 @@ namespace
     using Update_p = void(*)(void* Owner, void* Argument);
     using ModelUpdate_p = void(*)(void* Component, float* Delta);
     ModelUpdate_p s_original_model_update = nullptr;
+    using ModelTick_p = void(*)(void* Component, float* Delta);
+    ModelTick_p s_original_model_tick = nullptr;
     using PostPhysics_p = void(*)(void* Component, void* Argument);
     PostPhysics_p s_original_post_physics = nullptr;
     using ListLookup_p = void*(*)(void* Owner);
@@ -171,6 +216,8 @@ namespace
     uintptr_t s_corrupt_last = 0;     // game thread only
     std::atomic<uint64_t> s_skipped_physics{ 0 };
     std::atomic<uint64_t> s_caught{ 0 };
+    std::atomic<uint64_t> s_caught_tick{ 0 };   // faults inside FUN_1403f4f10 alone
+    std::atomic<uint64_t> s_skipped_tick{ 0 };
 
     struct HeapRange
     {
@@ -227,6 +274,7 @@ namespace
 
     void Note(const std::string& Text);
     bool GuardedModelUpdate(ModelUpdate_p Fn, void* Component, float* Delta);
+    bool GuardedModelTick(ModelTick_p Fn, void* Component, float* Delta);
     bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument);
     bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
@@ -534,6 +582,19 @@ namespace
         }
     }
 
+    bool GuardedModelTick(ModelTick_p Fn, void* Component, float* Delta)
+    {
+        __try
+        {
+            Fn(Component, Delta);
+            return true;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
+
     bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument)
     {
         __try
@@ -777,6 +838,68 @@ namespace
         }
     }
 
+    // The two objects FUN_1403f4f10 reaches through, described after a fault
+    // while they are still there: the value of each field, whether its page
+    // can be read at all, and whether what +0x40 points at still carries a
+    // vftable of this module. This is the question the page watch needs
+    // answered - which object died, and whose heap it came from - and it is
+    // the whole reason the guard writes anything.
+    std::string DescribeModelInstance(uintptr_t Component)
+    {
+        uintptr_t Model = 0, Second = 0, Vftable = 0;
+        const bool Have = Peek(Component + kModelInstance, &Model, sizeof(Model));
+        Peek(Component + kModelSecond, &Second, sizeof(Second));
+        const bool Readable = Have && Model != 0 && PointerShape(Model) &&
+            Peek(Model, &Vftable, sizeof(Vftable));
+        const char* State = !Have ? "o componente nao le" :
+            Model == 0 ? "nulo, e o jogo pularia" :
+            !PointerShape(Model) ? "nao tem forma de endereco" :
+            !Readable ? "pagina ilegivel" : "legivel";
+        std::string About = StringFormat("+0x40 %p (%s)", (void*)Model, State);
+        if (Readable)
+        {
+            About += StringFormat(", vftable %016llx%s, %s", (unsigned long long)Vftable,
+                InModule(Vftable) ? " do modulo" : " FORA DO MODULO", WhoseHeap(Model).c_str());
+        }
+        return About + StringFormat("; +0xd8 %p", (void*)Second);
+    }
+
+    // The twin of the pre-draw, on the function that actually faults: same
+    // health check, same skip, same guard. A fault here is not a fix and not
+    // a cure - it is one character losing a frame instead of everyone losing
+    // the session, and a line naming the object to arm the page watch on.
+    void ModelTickHook(void* Component, float* Delta)
+    {
+        NoteIfCorrupt((uintptr_t)Component);
+        uintptr_t Fields[3] = {};
+        const char* Why = "";
+        if (!ModelHealthy((uintptr_t)Component, Fields, Why))
+        {
+            const uint64_t Count = s_skipped_tick.fetch_add(1);
+            if (Count < 200)
+            {
+                Append(StringFormat("%s  t%lu  TIQUE DO MODELO PULADO: %s; componente %p no %s; %s%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Why, Component, WhoseHeap((uintptr_t)Component).c_str(),
+                    DescribeOwner((uintptr_t)Component).c_str(), Stack().c_str()));
+                s_lines.fetch_add(1);
+            }
+            return;
+        }
+        if (GuardedModelTick(s_original_model_tick, Component, Delta))
+        {
+            return;
+        }
+        s_caught.fetch_add(1);
+        const uint64_t Caught = s_caught_tick.fetch_add(1);
+        if (Caught < 40)
+        {
+            Append(StringFormat("%s  t%lu  FALHA APARADA no tique do modelo (FUN_1403f4f10) do componente %p; %s; o componente no %s; %s%s\n",
+                Clock().c_str(), GetCurrentThreadId(), Component, DescribeModelInstance((uintptr_t)Component).c_str(),
+                WhoseHeap((uintptr_t)Component).c_str(), DescribeOwner((uintptr_t)Component).c_str(), Stack().c_str()));
+            s_lines.fetch_add(1);
+        }
+    }
+
     // A node whose owner is gone: unlinked the way FUN_14040d2b0 does, so the
     // next walk of this bucket never sees it again.
     void Unlink(uintptr_t Node)
@@ -931,6 +1054,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_original_broadcast = (Broadcast_p)(Base + kBroadcastOffset);
     const bool ChrUpdate = Matches(Base + kModelUpdateOffset, kModelUpdatePrologue, sizeof(kModelUpdatePrologue));
     s_original_model_update = ChrUpdate ? (ModelUpdate_p)(Base + kModelUpdateOffset) : nullptr;
+    const bool ChrTick = Matches(Base + kModelTickOffset, kModelTickPrologue, sizeof(kModelTickPrologue));
+    s_original_model_tick = ChrTick ? (ModelTick_p)(Base + kModelTickOffset) : nullptr;
     const bool PostPhysics = Matches(Base + kPostPhysicsOffset, kPostPhysicsPrologue, sizeof(kPostPhysicsPrologue));
     s_original_post_physics = PostPhysics ? (PostPhysics_p)(Base + kPostPhysicsOffset) : nullptr;
     const bool ListLookup = Matches(Base + kListLookupOffset, kListLookupPrologue, sizeof(kListLookupPrologue));
@@ -946,6 +1071,10 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     if (ChrUpdate)
     {
         DetourAttach(&(PVOID&)s_original_model_update, ModelUpdateHook);
+    }
+    if (ChrTick)
+    {
+        DetourAttach(&(PVOID&)s_original_model_tick, ModelTickHook);
     }
     if (PostPhysics)
     {
@@ -977,6 +1106,8 @@ bool DS2_TravelWatchHook::Install(Injector& injector)
     s_ready.store(true);
     Append(StringFormat("%s  === ds2os vigia da viagem: quem destroi o que depois de chegar; pre-desenho do modelo %s ===\n", Clock().c_str(),
         ChrUpdate ? "guardado" : "sem guarda (codigo inesperado)"));
+    Append(StringFormat("%s  === tique do modelo (FUN_1403f4f10, onde o convidado fechava) %s ===\n", Clock().c_str(),
+        ChrTick ? "guardado" : "SEM GUARDA (codigo inesperado)"));
     Append(StringFormat("%s  === pos-fisica %s, busca em lista %s, listas do quadro refeitas a cada quadro ===\n", Clock().c_str(),
         PostPhysics ? "guardada" : "sem guarda (codigo inesperado)", ListLookup ? "guardada" : "sem guarda (codigo inesperado)"));
     Append(StringFormat("%s  === executor de tarefa %s ===\n", Clock().c_str(),
@@ -1008,6 +1139,10 @@ void DS2_TravelWatchHook::Uninstall()
         if (s_original_model_update != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_model_update, ModelUpdateHook);
+        }
+        if (s_original_model_tick != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_model_tick, ModelTickHook);
         }
         if (s_original_post_physics != nullptr)
         {
@@ -1053,6 +1188,18 @@ namespace DS2_TravelWatch
         s_open_until.store(GetTickCount64() + Milliseconds);
         Append(StringFormat("%s  --- janela aberta por %u ms: %s ---\n", Clock().c_str(), Milliseconds,
             Why != nullptr ? Why : ""));
+        // The running totals, written at both ends of every leg because this
+        // is called when a travel starts and again when it lands. Until now
+        // these counters only gated log lines - each capped at 40 or 200 - so
+        // there was no way to read "did a guard fire on this leg" without
+        // trusting a cap that had already been reached. A leg is clean when
+        // this line reads the same at both ends of it.
+        Append(StringFormat("%s  --- contadores: aparadas %llu (tique %llu), tarefas %llu, pre-desenho pulado %llu, tique pulado %llu, pos-fisica pulada %llu, nos pulados %llu, corrompidos %llu ---\n",
+            Clock().c_str(),
+            (unsigned long long)s_caught.load(), (unsigned long long)s_caught_tick.load(),
+            (unsigned long long)s_caught_task.load(), (unsigned long long)s_skipped_characters.load(),
+            (unsigned long long)s_skipped_tick.load(), (unsigned long long)s_skipped_physics.load(),
+            (unsigned long long)s_skipped.load(), (unsigned long long)s_corrupt_seen.load()));
 #else
         (void)Milliseconds;
         (void)Why;
