@@ -2054,6 +2054,9 @@ namespace
                 *(const uintptr_t*)Character == s_base + kPlayerCtrlVftable &&
                 ((const uint8_t*)Character)[kChrType] == kRemotePlayerCopy)
             {
+                // While another player's copy is here, no map is let go: see
+                // DS2_Backread::OtherPlayerSeen.
+                DS2_Backread::OtherPlayerSeen();
                 int32_t Index = -1;
                 uint32_t Parts[4] = {};
                 if (PartsUnder((uint8_t*)Character, Index, Parts))

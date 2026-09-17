@@ -74,8 +74,19 @@ namespace DS2_Backread
     // Keep the map with this index forced, with these parts beside the ones
     // the game wants, for the next few milliseconds; called again to keep it
     // longer. For the maps other players stand in, which must not unload under
-    // them. Without a mask, the parts it already had, or every part.
+    // them. Without a mask, only the force byte: the map stays exactly as the
+    // game loaded it.
     void KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask = nullptr);
+
+    // Another player's copy was on screen this frame. While one was seen
+    // recently, no map is let go: unloading a map out from under a session
+    // leaves freed objects linked into the game's own lists, and the next
+    // load of that map walks them. Measured 17/09, twice out of two, on the
+    // guest arriving in Majula about a minute after Majula was released:
+    // +0x3f3b20 calls through a list node whose vftable is rubbish, and
+    // +0x3ce81c reads a part record that is not there any more. A held map
+    // costs memory; a released one costs the session.
+    void OtherPlayerSeen();
 
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.

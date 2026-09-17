@@ -127,6 +127,15 @@ namespace
     std::mutex s_keep_mutex;
     Kept s_kept[kMaxKept];
     std::atomic<uint32_t> s_released_map{ 0 };
+    // Nonzero while another player's copy is around; see OtherPlayerSeen.
+    std::atomic<uint64_t> s_other_player_ms{ 0 };
+    constexpr ULONGLONG kOtherPlayerFreshMs = 15000;
+
+    bool HoldingForSession()
+    {
+        const uint64_t Seen = s_other_player_ms.load();
+        return Seen != 0 && GetTickCount64() - Seen < kOtherPlayerFreshMs;
+    }
     std::atomic<uint64_t> s_request_ms{ 0 };
 
     // Touched only from the game's thread, inside the detour.
@@ -349,11 +358,18 @@ namespace
                 // at the end of the travel (the earlier fix) was too early -
                 // this release comes thirty seconds later, and by then the
                 // sync had been rebuilt and filled again.
-                DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
-                const uint8_t Zero = 0;
-                WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
-                Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
-                DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
+                if (HoldingForSession())
+                {
+                    Append(StringFormat("%s  mapa %08x nao e mais de ninguem, mas ha sessao; fica\n", Clock().c_str(), Map));
+                }
+                else
+                {
+                    DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
+                    const uint8_t Zero = 0;
+                    WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
+                    Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
+                    DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
+                }
             }
 
             if (Map == s_map.load())
@@ -364,7 +380,8 @@ namespace
             {
                 // Not from under another player: its keep holds the byte.
                 const bool StillKept = Verdict == KeepVerdict::Keep;
-                if (!StillKept)
+                const bool Held = !StillKept && HoldingForSession();
+                if (!StillKept && !Held)
                 {
                     DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto a pedido");
                     const uint8_t Zero = 0;
@@ -372,7 +389,8 @@ namespace
                 }
                 s_released_map.store(0);
                 Append(StringFormat("%s  mapa %08x solto%s\n", Clock().c_str(), Map,
-                    StillKept ? ", mas segue mantido por outro jogador" : ""));
+                    StillKept ? ", mas segue mantido por outro jogador"
+                              : (Held ? ", mas ha sessao; fica carregado" : "")));
             }
         }
 
@@ -657,6 +675,13 @@ void DS2_Backread::Request(uint32_t MapId, const uint32_t Mask[4])
     {
         s_released_map.store(Previous);
     }
+#endif
+}
+
+void DS2_Backread::OtherPlayerSeen()
+{
+#ifdef _WIN32
+    s_other_player_ms.store(GetTickCount64());
 #endif
 }
 
