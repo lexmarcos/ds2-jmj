@@ -668,6 +668,10 @@ namespace
     // participant for one vote and then tells everyone to drop the curtain
     // with the same message.
     constexpr ULONGLONG kBarrierGiveUpMs = 25000;
+    // A guest arriving by warp has a real load, the host's world to ask for
+    // and a presence to rebuild in front of it; 25 s is the old transport's
+    // budget and would cut it loose halfway.
+    constexpr ULONGLONG kBarrierWarpGiveUpMs = 70000;
     constexpr size_t kMaxReporters = 4;
 
     // Host side, game thread only.
@@ -680,6 +684,7 @@ namespace
         size_t Guests = 0;
         bool HostArrived = false;
         bool Incomplete = false;      // somebody failed, or the wait ran out
+        bool HadWarp = false;         // a guest is coming by warp, which is slower
         ULONGLONG Since = 0;
         size_t ReporterCount = 0;
         uint64_t Reporters[kMaxReporters] = {};
@@ -693,6 +698,9 @@ namespace
         bool Active = false;
         bool Reported = false;
         bool Failed = false;
+        // The warp does not go through the travel outcome contract - that one
+        // is the old transport's - so the ghost machine is what reports it.
+        bool ByWarp = false;
         uint32_t Vote = 0;
         ULONGLONG Since = 0;
     };
@@ -706,9 +714,39 @@ namespace
         uint32_t Map = 0;
         ULONGLONG Since = 0;
         ULONGLONG SeenAt = 0;   // first frame in the destination with a character; 0 not yet
+        // Second half: the world has been asked for, and what is left is to
+        // put the presence back and tell the host this machine is in.
+        bool Asked = false;
+        ULONGLONG AskedAt = 0;
+        uint32_t Vote = 0;      // 0 when the warp came from a request, not a vote
     };
     GhostTravel s_ghost;
     constexpr ULONGLONG kGhostSettleMs = 3000;
+    // After the host's world is back, before the presence is rebuilt.
+    constexpr ULONGLONG kGhostRebuildMs = 5000;
+
+    // A warp the guest announced and has not started yet: the host is given a
+    // moment to take its copy out first, which is the order the recipe was
+    // measured in (host removes, then the guest warps a few seconds later).
+    struct PendingWarp
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        uint32_t Vote = 0;
+        ULONGLONG At = 0;
+    };
+    PendingWarp s_pending_warp;
+    constexpr ULONGLONG kWarpAnnounceMs = 2500;
+
+    // Host side: a guest warped, so this machine's presence has to be put
+    // back once that guest is in.
+    struct HostRebuild
+    {
+        bool Active = false;
+        ULONGLONG At = 0;
+    };
+    HostRebuild s_host_rebuild;
 
     // A receipt counts once per player.
     bool NoteReporter(uint64_t Who)
@@ -2309,6 +2347,18 @@ void DS2_BonfireInSession_Tick()
     // answers from its own tick. On a guest the wait has an end.
     {
         DS2_CoopChannel::Bonfire Asked;
+        // A guest is about to warp: this machine's copy of it goes out before
+        // the warp destroys it, and goes back when that guest is in.
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Asked))
+        {
+            if (OwnsTheWorld())
+            {
+                Append(StringFormat("host: o convidado %016llx nao alcanca o mapa %08x e vai de warp; retiro a presenca\n",
+                    (unsigned long long)Asked.From, Asked.Map));
+                RemovePresences("um convidado vai de warp");
+                s_barrier.HadWarp = true;
+            }
+        }
         while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::SnapshotPlease, Asked))
         {
             if (OwnsTheWorld())
@@ -2316,7 +2366,16 @@ void DS2_BonfireInSession_Tick()
                 Append(StringFormat("host: o convidado %016llx pediu o mundo de novo (mapa %08x)\n",
                     (unsigned long long)Asked.From, Asked.Map));
                 ExportSnapshot("pedido do convidado");
+                // The guest rebuilds its own presence a few seconds from now;
+                // this side does the same, so the two registries match again.
+                s_host_rebuild.Active = true;
+                s_host_rebuild.At = Now + kGhostRebuildMs;
             }
+        }
+        if (s_host_rebuild.Active && Now >= s_host_rebuild.At)
+        {
+            s_host_rebuild.Active = false;
+            RebuildPresence("o convidado chegou de warp");
         }
         const ULONGLONG Until = s_reimport_until.load();
         if (Until != 0 && Now > Until)
@@ -2339,18 +2398,38 @@ void DS2_BonfireInSession_Tick()
             {
                 s_ghost.SeenAt = Now;
             }
-            else if (Now - s_ghost.SeenAt >= kGhostSettleMs)
+            else if (!s_ghost.Asked && Now - s_ghost.SeenAt >= kGhostSettleMs)
             {
-                s_ghost.Active = false;
+                s_ghost.Asked = true;
+                s_ghost.AskedAt = Now;
                 Append(StringFormat("convidado: o warp de fantasma chegou ao mapa %08x em %llu ms\n", s_ghost.Map,
                     (unsigned long long)(Now - s_ghost.Since)));
                 AskSnapshot("chegada do warp de fantasma");
+            }
+            // The world is back (the import cleared the wait, or it ran out):
+            // the presence goes back and the host is told this machine is in.
+            else if (s_ghost.Asked && s_reimport_until.load() == 0 && Now - s_ghost.AskedAt >= kGhostRebuildMs)
+            {
+                s_ghost.Active = false;
+                RebuildPresence("chegada do warp de fantasma");
+                if (s_ghost.Vote != 0)
+                {
+                    s_await.Reported = true;
+                    DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, 0, s_ghost.Vote);
+                    Append(StringFormat("convidado: cheguei de warp (votacao %u); espero o resto do grupo\n", s_ghost.Vote));
+                }
             }
             if (s_ghost.Active && Now - s_ghost.Since > kWatchNativeMs)
             {
                 s_ghost.Active = false;
                 Append(StringFormat("convidado: o warp de fantasma nao chegou ao mapa %08x em %u ms; nao peco o mundo\n",
                     s_ghost.Map, kWatchNativeMs));
+                if (s_ghost.Vote != 0 && !s_await.Reported)
+                {
+                    s_await.Reported = true;
+                    s_await.Failed = true;
+                    DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, s_ghost.Vote);
+                }
             }
         }
     }
@@ -2376,7 +2455,8 @@ void DS2_BonfireInSession_Tick()
             }
         }
         const bool Everyone = s_barrier.HostArrived && s_barrier.ReporterCount >= s_barrier.Guests;
-        const bool RanOut = Now - s_barrier.Since > kBarrierGiveUpMs;
+        const bool RanOut = Now - s_barrier.Since >
+            (s_barrier.HadWarp ? kBarrierWarpGiveUpMs : kBarrierGiveUpMs);
         if (Everyone || RanOut)
         {
             const bool Whole = Everyone && !s_barrier.Incomplete;
@@ -2847,18 +2927,69 @@ void DS2_BonfireInSession_Tick()
             s_await.Vote = (uint32_t)Said.Type;
             s_await.Since = Now;
         }
+        else if (s_original_import != nullptr && s_travel_build != nullptr)
+        {
+            // The streamer cannot bring that map in from here - measured
+            // 17/09, Iron Keep from Heide: the host arrived and the guest was
+            // left 857 m behind, silently. So this machine takes the other
+            // road instead of refusing: the warp with the phantom flag, which
+            // is a real load and reaches anywhere. It costs the borrowed
+            // world, which is why the arrival asks the host for it again, and
+            // the presence, which is rebuilt on both sides.
+            //
+            // Announced first, and the warp waits a moment: the host has to
+            // take its copy of this guest out *before* the warp destroys it,
+            // which is the order the recipe was measured in.
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Said.Map, (uint32_t)Said.Type);
+            RemovePresences("vou de warp; o mapa nao vem ate aqui");
+            s_pending_warp = PendingWarp();
+            s_pending_warp.Active = true;
+            s_pending_warp.Map = Said.Map;
+            s_pending_warp.Bonfire = Bonfire;
+            s_pending_warp.Vote = (uint32_t)Said.Type;
+            s_pending_warp.At = Now + kWarpAnnounceMs;
+            s_await = AwaitRelease();
+            s_await.Active = true;
+            s_await.ByWarp = true;
+            s_await.Vote = (uint32_t)Said.Type;
+            s_await.Since = Now;
+            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x), mas o mapa nao vem ate aqui; vou de warp (votacao %d)\n",
+                (unsigned)Bonfire, Said.Map, Said.Type));
+        }
         else
         {
             _snwprintf_s(s_message, _TRUNCATE, L"Travel canceled: %ls could not be reached from here.",
                 PlaceName(Bonfire, Said.Map).c_str());
             ShowMessage(s_message);
-            Append(StringFormat("convidado: viagem para a fogueira %04x (mapa %08x), mas o mapa nao pode ser trazido aqui\n",
+            Append(StringFormat("convidado: viagem para a fogueira %04x (mapa %08x), mas o mapa nao pode ser trazido aqui e o warp nao esta pronto\n",
                 (unsigned)Bonfire, Said.Map));
+        }
+    }
+
+    // The announced warp, once the host has had its moment to take its copy
+    // of this guest out.
+    if (s_pending_warp.Active && Now >= s_pending_warp.At)
+    {
+        const PendingWarp Asked = s_pending_warp;
+        s_pending_warp.Active = false;
+        DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma (votacao)");
+        const bool Went = TravelAsPhantom(Asked.Bonfire);
+        if (Went)
+        {
+            s_ghost.Vote = Asked.Vote;
+        }
+        else
+        {
+            s_await.Reported = true;
+            s_await.Failed = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, Asked.Vote);
+            Append(StringFormat("convidado: o warp para a fogueira %04x foi recusado; aviso o host (votacao %u)\n",
+                (unsigned)Asked.Bonfire, Asked.Vote));
         }
     }
     // This machine is done: tell the host how it went, then stand behind the
     // loading screen until the host says everybody is in.
-    if (s_await.Active && !s_await.Reported && !s_go.Active)
+    if (s_await.Active && !s_await.Reported && !s_await.ByWarp && !s_go.Active)
     {
         const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
         if (Outcome == DS2_DeathIntercept::Outcome::Arrived)
@@ -2875,7 +3006,8 @@ void DS2_BonfireInSession_Tick()
             Append(StringFormat("convidado: nao consegui chegar (votacao %u); aviso o host\n", s_await.Vote));
         }
     }
-    if (s_await.Active && Now - s_await.Since > kBarrierGiveUpMs + 5000)
+    if (s_await.Active &&
+        Now - s_await.Since > (s_await.ByWarp ? kBarrierWarpGiveUpMs : kBarrierGiveUpMs) + 5000)
     {
         s_await.Active = false;
         Append("convidado: o host nao mandou soltar a tela a tempo; solto por conta propria\n");

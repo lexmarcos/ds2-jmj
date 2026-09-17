@@ -126,8 +126,13 @@ namespace DS2_CoopChannel
         TravelArrived = 2,   // this guest is standing on the destination; Id the vote
         TravelFailed = 3,    // this guest could not get there; Id the vote
         SnapshotPlease = 4,  // this guest reloaded its map and wants the host's world again; Map the map it stands in
+        // This guest cannot reach the destination the way the host did and is
+        // about to warp: the host takes its copy of this guest out before the
+        // warp destroys it, and puts it back once the guest reports arrival.
+        // Map the destination, Id the vote.
+        WarpNotice = 5,
     };
-    constexpr uint8_t kGuestEventCount = 5;
+    constexpr uint8_t kGuestEventCount = 6;
     void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
     bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
 
