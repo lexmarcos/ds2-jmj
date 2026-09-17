@@ -460,6 +460,68 @@ tela de carregamento do jogo serve de cortina.
 > **Custo até aqui:** Samuel de 10 a 70 pontos ao longo da noite. Chico intacto
 > em 80 — o convidado nunca pagou por esta linha de trabalho.
 
+> ## O veredito da noite de 16/09: a viagem nativa com sessão viva não se
+> conserta por remendo
+>
+> O último conserto — zerar o estado do sync no instante exato em que o
+> silêncio da rede termina — **funcionou uma vez e falhou na seguinte**.
+>
+>     23:01:46  sync (o mundo voltou): estado 1 -> 0
+>     23:01:46  rede: o mundo voltou; 193 batida(s) puladas
+>     ... 120 s vigiados, nenhuma queda. Host em Majula, sessao verificada.
+>
+>     23:05:04  sync (o mundo voltou): estado 1 -> 0
+>     23:05:04  rede: o mundo voltou; 153 batida(s) puladas
+>     23:06:08  excecao c0000005 em +0x1e5c30      <- 64 s depois
+>
+> **Cinco intervenções, cinco endereços diferentes:**
+>
+> | intervenção | onde a queda foi parar |
+> | --- | --- |
+> | guarda no pré-desenho (`FUN_1403f4f10`) | `+0x17b260`, um `GetComponent<T>` |
+> | varredura das listas de entidade | `+0xfd8592`, busca que devolve nulo |
+> | retirada das presenças | `+0x5180a8`, consulta de papel do sync |
+> | silêncio da batida da rede | `+0x5180a8`, no ms em que a janela fecha |
+> | zerar o sync ao soltar a janela | `+0x1e5c30`, 64 s depois |
+>
+> Cada conserto foi tecnicamente correto sobre o que o anterior revelou, e
+> nenhum terminou. O warp derruba o mundo assumindo que **nada** aponta para
+> ele; uma sessão viva aponta por estruturas demais, e elas não estão
+> enumeradas em lugar nenhum.
+>
+> **O que está provado e vale guardar:**
+>
+> - o host **pode** warpar nativo sem que a sessão seja encerrada pelo case 2
+>   (`ctrl+0x30 = 1` medido, e a sessão seguiu verificada nas duas corridas);
+> - `FUN_14051c820` retira uma presença **sem tocar na sessão** (medido, não
+>   mais leitura);
+> - a batida da rede **pode** ser silenciada durante o carregamento
+>   (192 e 153 batidas puladas, mundo caindo e voltando);
+> - e uma viagem nativa completa com sessão preservada **é possível** — ela
+>   aconteceu, uma vez, com o host chegando em Majula e o convidado seguindo
+>   fantasma em Heide.
+>
+> **O que não está:** que ela seja repetível. É uma em duas com o último
+> conserto, e as quedas são intermitentes e às vezes tardias, o que torna
+> qualquer corrida curta inconclusiva.
+>
+> **Recomendação:** parar de remendar consumidor. Os caminhos que sobram, em
+> ordem de honestidade:
+>
+> 1. **D-3a** — os dois saem da sessão, viajam nativo, o party reinvoca do
+>    outro lado. Funciona hoje, é inteiramente nativo, e custa o ritual de
+>    invocação. Não é seamless, e é o único caminho com zero quedas medidas.
+> 2. **Achar a enumeração**, se existir: o que o jogo faz quando *ele* encerra
+>    uma sessão antes de um warp, que é o caminho limpo das duas corridas de
+>    controle. Se houver uma função que desfaz tudo o que a sessão pendurou no
+>    mundo, chamá-la antes do warp e refazer depois é um conserto de raiz e não
+>    um remendo. Não foi procurada.
+> 3. Continuar remendando, sabendo que a sexta intervenção tem a mesma forma
+>    das cinco anteriores.
+>
+> **Custo da noite:** Samuel de 10 a 90 pontos. Chico intacto em 80. O convidado
+> nunca pagou por esta linha de trabalho — todas as quedas foram do host.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
