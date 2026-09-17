@@ -1512,6 +1512,30 @@ void DS2_BonfireInSession_Tick()
                         DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
                     StartGo(Map, (uint16_t)Bonfire);
                 }
+                else if (sscanf_s(Line.c_str(), "nativo %x %x", &Map, &Bonfire) == 2)
+                {
+                    // The host's own travel, by the game's own chain, with the
+                    // session **left alone**: no TravelLeave, the guests stay.
+                    //
+                    // This has no other caller on purpose. The fallback path
+                    // also ends in StartTravel, but it sends the guests out of
+                    // the session first, so it can never answer the question
+                    // phase 2 of DS2_NATIVE_TRAVEL_PLAN.md asks - whether the
+                    // host can warp natively while a session is live. Measured
+                    // 16/09 by the fallback: the host arrives, and the host
+                    // controller object is gone by then, because the session
+                    // ended before the warp, not because of it.
+                    //
+                    // Phase 1 is what makes this worth trying: ctrl+0x30 read
+                    // 1 in a live session, and the branch of FUN_1402bd0d0
+                    // case 2 that ends the session needs it >= 5 (or 0, which
+                    // wraps). So the warp should leave the session standing.
+                    const bool Owner = OwnsTheWorld();
+                    const bool Went = StartTravel((uint16_t)Bonfire);
+                    Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
+                        Bonfire, Map, Owner ? "sim" : "nao",
+                        Went ? "iniciada" : "a fogueira nao esta na tabela"));
+                }
                 else if (sscanf_s(Line.c_str(), "votar %x %x", &Map, &Bonfire) == 2)
                 {
                     // The host starts the vote as if it had picked that bonfire
