@@ -321,16 +321,22 @@ namespace
                 // load.
                 const uint8_t One = 1;
                 WriteBytes((uintptr_t)Owner + kOwnerForced, &One, 1);
-                for (const size_t At : kOwnerMasks)
+                // Nothing to add means nothing written: a keep with no parts
+                // of its own holds the map exactly as the game loaded it.
+                const bool Any = (KeptMask[0] | KeptMask[1] | KeptMask[2] | KeptMask[3]) != 0;
+                if (Any)
                 {
-                    uint32_t Mask[4] = {};
-                    if (ReadBytes((uintptr_t)Owner + At, Mask, sizeof(Mask)))
+                    for (const size_t At : kOwnerMasks)
                     {
-                        for (int i = 0; i < 4; ++i)
+                        uint32_t Mask[4] = {};
+                        if (ReadBytes((uintptr_t)Owner + At, Mask, sizeof(Mask)))
                         {
-                            Mask[i] |= KeptMask[i];
+                            for (int i = 0; i < 4; ++i)
+                            {
+                                Mask[i] |= KeptMask[i];
+                            }
+                            WriteBytes((uintptr_t)Owner + At, Mask, sizeof(Mask));
                         }
-                        WriteBytes((uintptr_t)Owner + At, Mask, sizeof(Mask));
                     }
                 }
             }
@@ -672,7 +678,7 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
     {
         return;
     }
-    const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+    const uint32_t Nothing[4] = {};
     const ULONGLONG Until = GetTickCount64() + Milliseconds;
     bool Added = false, Changed = false;
     uint32_t Now[4] = {};
@@ -697,9 +703,20 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
             Entry = Free;
             Entry->Index = Index;
             Entry->Forced = false;
-            // With nothing to say which parts, every part: the player is not
-            // left without ground.
-            memcpy(Entry->Mask, Mask != nullptr ? Mask : Every, sizeof(Entry->Mask));
+            // With nothing to say which parts, no parts at all: the force
+            // byte alone holds a map that is already in, and that is every
+            // case this keep serves - the other player is standing in it.
+            //
+            // Asking for every part used to be what happened here, and it is
+            // a request for parts the map does not have: 128 bits per block
+            // over six blocks, against maps whose part tables are far
+            // shorter. The teardown walks the set bits, and on 17/09 the
+            // guest's release of Brume Tower faulted twice inside it
+            // (+0x3f6476 and +0x3ba0be, both on a part pointer built out of
+            // rubbish), the trap left the map half gone, and the next map to
+            // load died on the wreckage. A keep that carries real parts still
+            // ORs them; only the invented ones are gone.
+            memcpy(Entry->Mask, Mask != nullptr ? Mask : Nothing, sizeof(Entry->Mask));
             Added = true;
         }
         else if (Entry != nullptr && Mask != nullptr)
@@ -734,8 +751,10 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
     }
     if (Added || Changed)
     {
-        Append(StringFormat("%s  mapa de indice %d mantido: um jogador esta nele, partes %s\n", Clock().c_str(), Index,
-            DescribeMask(Now).c_str()));
+        const bool AnyPart = (Now[0] | Now[1] | Now[2] | Now[3]) != 0;
+        Append(StringFormat("%s  mapa de indice %d mantido: um jogador esta nele, %s\n", Clock().c_str(), Index,
+            AnyPart ? StringFormat("partes %s", DescribeMask(Now).c_str()).c_str()
+                    : "sem pedir parte nenhuma; seguro o mapa como esta"));
     }
 #endif
 }
