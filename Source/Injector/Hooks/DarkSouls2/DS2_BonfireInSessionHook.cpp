@@ -638,6 +638,10 @@ namespace
         ULONGLONG At = 0;
     };
     Go s_go;
+    // The old transport's travel as the last tick saw it, so the end of one
+    // can be noticed: the net character sync has to be put back to idle right
+    // there, and only the warp paths were doing it.
+    bool s_was_moving = false;
     // Travelling without leaving the session is on by default (16/09), and
     // this time the number behind that says so.
     //
@@ -2311,6 +2315,24 @@ void DS2_BonfireInSession_Tick()
             }
         }
     }
+
+    // The old transport tears the map's characters down just as the warp
+    // does - the player leaves the map behind - but it never went through
+    // the net silence, which is what puts the character sync back to idle.
+    // So the sync kept walking the map that was left: measured 17/09, 18:34,
+    // the guest died at +0x517843 on the net thread with the sync object in
+    // r13 and the origin map id in rdx, three seconds after arriving by a
+    // plain `ir` with no vote anywhere near it.
+    //
+    // Right here is the moment that matters, and the warp path learned it the
+    // expensive way: written early the state machine restores it before the
+    // travel, so it has to be the instant the move ends.
+    const bool MovingNow = DS2_DeathIntercept::Moving();
+    if (s_was_moving && !MovingNow)
+    {
+        IdleNetSync("a viagem pelo transporte antigo terminou");
+    }
+    s_was_moving = MovingNow;
 
     KeepJobPatch(Now);
     KeepCurtain(Now);
