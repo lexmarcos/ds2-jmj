@@ -24,7 +24,10 @@ namespace
 {
 #ifdef _WIN32
 
-    constexpr uint32_t kMaxReports = 32;
+    // 256, not 32: on 17/09 a burst of eight handled faults during one warp
+    // (+0x1caa60/+0x1caaf0, a rotten list node) spent the cap, and the fatal
+    // fault three legs later left no record at all.
+    constexpr uint32_t kMaxReports = 256;
     constexpr int kStackWords = 256;
     constexpr int kMaxReturns = 24;
 
