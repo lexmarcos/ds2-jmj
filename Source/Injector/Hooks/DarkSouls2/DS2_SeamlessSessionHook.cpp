@@ -87,6 +87,7 @@ namespace
     void* s_host_ctrl = nullptr;
     uint32_t s_host_state = 0xffffffff;
     uint64_t s_host_ticks = 0;
+    ULONGLONG s_host_seen = 0;
 
     void Append(const std::string& Text)
     {
@@ -154,6 +155,7 @@ namespace
         }
 
         ++s_host_ticks;
+        s_host_seen = GetTickCount64();
         s_original_host_tick(Ctrl, Delta);
     }
 
@@ -245,6 +247,15 @@ namespace
         }
     }
 
+#endif
+}
+
+void* DS2_SeamlessSession_HostCtrl()
+{
+#ifdef _WIN32
+    return s_host_seen != 0 && GetTickCount64() - s_host_seen < 1000 ? s_host_ctrl : nullptr;
+#else
+    return nullptr;
 #endif
 }
 

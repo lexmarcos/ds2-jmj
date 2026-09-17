@@ -11,6 +11,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SeamlessSessionHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 
@@ -157,6 +158,22 @@ namespace
     constexpr ULONGLONG kCurtainGiveUpMs = 25000;
     // A moment more after arriving, so the map left behind goes away behind it.
     constexpr ULONGLONG kCurtainHoldMs = 1200;
+    // The game's own "the world is in", what its load machine waits for
+    // before taking its curtain down (FUN_140481900, states 4 and 0xd):
+    // FUN_1403bcfe0(*(ctx+0x38)) says every map owner has settled and
+    // nothing is queued, and FUN_140b04ca0(*(render+0x80)) says the drawing
+    // still has work. Measured 17/09 on every host travel of the day: our
+    // curtain came down 2.2 s after `ir` - 1.2 s after the physics contact -
+    // with the far pillars of Heide still streaming in behind the player.
+    // So after arriving the curtain also waits for these two, for at most
+    // this long: a transport that leaves an owner unsettled would otherwise
+    // turn every travel into a 25 s black screen.
+    constexpr size_t kWorldLoadedOffset = 0x3bcfe0;
+    constexpr uint8_t kWorldLoadedPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x08, 0x32, 0xc0, 0x48 };
+    constexpr size_t kRenderBusyOffset = 0xb04ca0;
+    constexpr uint8_t kRenderBusyPrologue[] = { 0x48, 0x83, 0xec, 0x28, 0x80, 0x79, 0x08, 0x00, 0x75, 0x07, 0x32, 0xc0, 0x48, 0x83, 0xc4, 0x28 };
+    constexpr size_t kWorldManager = 0x38;
+    constexpr ULONGLONG kWorldSettleGiveUpMs = 10000;
 
     constexpr size_t kBonfireManager = 0x58;
     constexpr size_t kBonfireList = 0x08;
@@ -265,6 +282,46 @@ namespace
 
     constexpr size_t kPresenceRemoveOffset = 0x51c820;
     constexpr uint8_t kPresenceRemovePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x41, 0x48, 0x48, 0x8b, 0xd9 };
+
+    // The host's world, again, for a guest that has just reloaded its map.
+    //
+    // A guest's join brings the host's world in **one** message (type 0xc,
+    // some 33 KB): the host's controller exports it in its state 0xd
+    // (FUN_1402bf8f0 - flags, event values, lit bonfires, map object states,
+    // dead enemies, the map's event script states, the member records) and
+    // the guest's controller imports it in join state 4 (FUN_1402c2fa0, slot
+    // 10 of its vftable), see docs/DS2_WORLD_STATE.md. The phantom warp
+    // rebuilds the map from the guest's own save and none of that comes
+    // again: measured 17/09 in Heide, after the warp the guest had **zero**
+    // event flags in every category, its map scripts evaluated nothing (the
+    // esd spy saw 0 queries in 4 s where the host saw 4 a frame) and the
+    // bonfire never offered "Rest" - the symptom the user reported.
+    //
+    // So the host is asked to export once more, from its own tick, and the
+    // import is let through with the guest's controller put in state 4 for
+    // the length of the call and back to 7 right after: the import ends in
+    // state 5 (presences from the records) and 6 (the "I am in" handshake
+    // with the host), and the host's controller is long past both. Left
+    // alone, FUN_1402c2fa0 in any state but 4 writes ctrl+0x120 = 1, which
+    // ends the session on the next frame.
+    //
+    // The import files the map sections under ctrl+0x19c, which still names
+    // the map of the original join (0a040000 read while standing in Heide),
+    // so it is pointed at the map this machine stands in first - the same
+    // place the host's export reads it from, `*(R+0x5b8)+0xc`.
+    constexpr size_t kSnapshotExportOffset = 0x2bf8f0;
+    constexpr uint8_t kSnapshotExportPrologue[] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8d, 0xac, 0x24, 0xb0, 0x76, 0xff, 0xff, 0xb8, 0x50 };
+    constexpr size_t kSnapshotImportOffset = 0x2c2fa0;
+    constexpr uint8_t kSnapshotImportPrologue[] = { 0x40, 0x55, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xf1, 0x48 };
+    constexpr size_t kAcceptCtrlVftable = 0x10d7998;
+    constexpr size_t kAcceptState = 0x150;
+    constexpr int32_t kAcceptPlaying = 0x10;
+    constexpr size_t kJoinMap = 0x19c;
+    constexpr int32_t kJoinImporting = 4;
+    constexpr int32_t kJoinPresences = 5;
+    constexpr size_t kPresenceArea = 0x5b8;
+    constexpr size_t kAreaMap = 0xc;
+    constexpr ULONGLONG kSnapshotWaitMs = 30000;
 
     // The net layer's per-frame sync of the map's characters, and the thing
     // that killed the host on every native travel with a session live.
@@ -508,12 +565,25 @@ namespace
     uint8_t s_blob_flag = 0;
     bool s_blob_known = false;
     PresenceRemove_p s_presence_remove = nullptr;
+    using SnapshotExport_p = void(*)(void* Ctrl, float Delta);
+    using SnapshotImport_p = void(*)(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7);
+    SnapshotExport_p s_snapshot_export = nullptr;
+    SnapshotImport_p s_original_import = nullptr;
+    // Guest: an import is expected until then (0: none), and lets the
+    // controller through state 4. Host: export on the next frame.
+    std::atomic<ULONGLONG> s_reimport_until{ 0 };
+    std::atomic<bool> s_export_wanted{ false };
     TravelBuild_p s_travel_build = nullptr;
     TravelStart_p s_travel_start = nullptr;
     RecordSet_p s_record_set = nullptr;
     TravelBonfire_p s_travel_bonfire = nullptr;
     MenuCancel_p s_menu_cancel = nullptr;
     Curtain_p s_curtain = nullptr;
+    using WorldLoaded_p = uint8_t(*)(void* World);
+    using RenderBusy_p = uint8_t(*)(void* Switch);
+    WorldLoaded_p s_world_loaded = nullptr;
+    RenderBusy_p s_render_busy = nullptr;
+    ULONGLONG s_curtain_arrived_at = 0;   // when the travel said arrived; the world wait counts from here
     bool s_curtain_up = false;
     ULONGLONG s_curtain_since = 0;
     ULONGLONG s_curtain_down_at = 0;
@@ -1108,6 +1178,7 @@ namespace
         }
         s_curtain_up = Up;
         s_curtain_since = GetTickCount64();
+        s_curtain_arrived_at = 0;
         Append(Up ? StringFormat("tela de carregamento: subiu%s\n", Screen ? " (com a tela do jogo)" : " (so o desenho do mundo)")
                   : "tela de carregamento: desceu\n");
         return true;
@@ -1115,6 +1186,29 @@ namespace
 
     // Called every frame: the curtain comes down once this machine's player
     // has arrived and stood still for a moment, and always before 25 s.
+    // True when the game itself would take its curtain down: every map owner
+    // settled and the drawing idle. True as well when there is nothing to
+    // ask, so a missing object never holds the screen black.
+    bool WorldLoaded()
+    {
+        uintptr_t Context = 0, World = 0, Render = 0, Switch = 0;
+        if (s_world_loaded == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kWorldManager, World) || World == 0)
+        {
+            return true;
+        }
+        if (s_world_loaded((void*)World) == 0)
+        {
+            return false;
+        }
+        if (s_render_busy != nullptr && ReadPointer(s_base + kRenderGlobal, Render) && Render != 0 &&
+            ReadPointer(Render + kRenderSwitch, Switch) && Switch != 0 && s_render_busy((void*)Switch) != 0)
+        {
+            return false;
+        }
+        return true;
+    }
+
     void KeepCurtain(ULONGLONG Now)
     {
         if (!s_curtain_up)
@@ -1127,12 +1221,35 @@ namespace
         if (!Arrived)
         {
             s_curtain_down_at = 0;
+            s_curtain_arrived_at = 0;
             if (Now - s_curtain_since > kCurtainGiveUpMs)
             {
                 Append("tela de carregamento: a viagem nao terminou a tempo; desco assim mesmo\n");
                 Curtain(false);
             }
             return;
+        }
+        // Arrived, but the game is still bringing the world in.
+        if (s_curtain_arrived_at == 0)
+        {
+            s_curtain_arrived_at = Now;
+        }
+        if (!WorldLoaded())
+        {
+            s_curtain_down_at = 0;
+            if (Now - s_curtain_arrived_at > kWorldSettleGiveUpMs)
+            {
+                Append(StringFormat("tela de carregamento: o mundo nao assentou em %llu ms depois de chegar; desco assim mesmo\n",
+                    (unsigned long long)kWorldSettleGiveUpMs));
+                s_curtain_arrived_at = 0;
+                Curtain(false);
+            }
+            return;
+        }
+        if (s_curtain_down_at == 0 && Now != s_curtain_arrived_at)
+        {
+            Append(StringFormat("tela de carregamento: o mundo assentou %llu ms depois de chegar\n",
+                (unsigned long long)(Now - s_curtain_arrived_at)));
         }
         if (s_curtain_down_at == 0)
         {
@@ -1265,6 +1382,90 @@ namespace
             return 0;
         }
         return Net;
+    }
+
+    // The map this machine stands in, as the net layer keeps it; 0 unknown.
+    uint32_t AreaMap()
+    {
+        const uintptr_t R = PresenceRegistry();
+        uintptr_t Area = 0;
+        uint32_t Map = 0;
+        if (R == 0 || !ReadPointer(R + kPresenceArea, Area) || Area == 0 ||
+            !ReadBytes(Area + kAreaMap, &Map, sizeof(Map)))
+        {
+            return 0;
+        }
+        return Map;
+    }
+
+    // Guest: the import of the host's world, let through once outside the
+    // join. Anything not asked for goes to the game untouched.
+    void SnapshotImportHook(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7)
+    {
+        int32_t State = -1;
+        ReadBytes((uintptr_t)Ctrl + kJoinState, &State, sizeof(State));
+        if (State != kJoinPlaying || s_reimport_until.load() == 0)
+        {
+            if (State != kJoinImporting)
+            {
+                Append(StringFormat("convidado: o mundo do host chegou com o controlador no estado %d, sem eu ter pedido; o jogo decide\n", State));
+            }
+            s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7);
+            return;
+        }
+        s_reimport_until.store(0);
+        const uint32_t Map = AreaMap();
+        uint32_t Before = 0;
+        ReadBytes((uintptr_t)Ctrl + kJoinMap, &Before, sizeof(Before));
+        if (Map != 0)
+        {
+            memcpy((void*)((uintptr_t)Ctrl + kJoinMap), &Map, sizeof(Map));
+        }
+        int32_t Importing = kJoinImporting;
+        memcpy((void*)((uintptr_t)Ctrl + kJoinState), &Importing, sizeof(Importing));
+        s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7);
+        int32_t After = -1;
+        ReadBytes((uintptr_t)Ctrl + kJoinState, &After, sizeof(After));
+        if (After == kJoinPresences)
+        {
+            int32_t Playing = kJoinPlaying;
+            memcpy((void*)((uintptr_t)Ctrl + kJoinState), &Playing, sizeof(Playing));
+        }
+        Append(StringFormat("convidado: mundo do host importado de novo (mapa do controlador %08x -> %08x; estado 7 -> 4 -> %d -> %s)\n",
+            Before, Map, After, After == kJoinPresences ? "7" : "deixado como esta"));
+    }
+
+    // Guest: ask the host for its world, and expect the import for a while.
+    void AskSnapshot(const char* Why)
+    {
+        if (s_original_import == nullptr)
+        {
+            Append(StringFormat("convidado (%s): o import do mundo nao esta enganchado; nao peco\n", Why));
+            return;
+        }
+        s_reimport_until.store(GetTickCount64() + kSnapshotWaitMs);
+        DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::SnapshotPlease, AreaMap(), 0);
+        Append(StringFormat("convidado (%s): pedi ao host o mundo dele de novo (mapa %08x); espero o import por %llu s\n",
+            Why, AreaMap(), (unsigned long long)(kSnapshotWaitMs / 1000)));
+    }
+
+    // Host: the world exported once more, by the controller's own state-0xd
+    // code, from the game's thread.
+    void ExportSnapshot(const char* Why)
+    {
+        void* Ctrl = DS2_SeamlessSession_HostCtrl();
+        uintptr_t Vftable = 0;
+        int32_t State = -1;
+        if (s_snapshot_export == nullptr || Ctrl == nullptr || !ReadPointer((uintptr_t)Ctrl, Vftable) ||
+            Vftable != s_base + kAcceptCtrlVftable ||
+            !ReadBytes((uintptr_t)Ctrl + kAcceptState, &State, sizeof(State)) || State != kAcceptPlaying)
+        {
+            Append(StringFormat("host (%s): nao exporto o mundo (funcao %p, controlador %p, vftable %s, estado 0x%x)\n", Why,
+                (void*)s_snapshot_export, Ctrl, Vftable == s_base + kAcceptCtrlVftable ? "certa" : "outra", State));
+            return;
+        }
+        s_snapshot_export(Ctrl, 0.0f);
+        Append(StringFormat("host (%s): mundo exportado de novo para o convidado (controlador %p, mapa %08x)\n", Why, Ctrl, AreaMap()));
     }
 
     // Puts the captured presence back, by the game's own registration.
@@ -1885,6 +2086,10 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             ? (NetTick_p)(Base + kNetTickOffset) : nullptr;
         s_presence_remove = Matches(Base + kPresenceRemoveOffset, kPresenceRemovePrologue, sizeof(kPresenceRemovePrologue))
             ? (PresenceRemove_p)(Base + kPresenceRemoveOffset) : nullptr;
+        s_snapshot_export = Matches(Base + kSnapshotExportOffset, kSnapshotExportPrologue, sizeof(kSnapshotExportPrologue))
+            ? (SnapshotExport_p)(Base + kSnapshotExportOffset) : nullptr;
+        s_original_import = Matches(Base + kSnapshotImportOffset, kSnapshotImportPrologue, sizeof(kSnapshotImportPrologue))
+            ? (SnapshotImport_p)(Base + kSnapshotImportOffset) : nullptr;
         s_travel_build = (TravelBuild_p)(Base + kTravelBuildOffset);
         s_travel_start = (TravelStart_p)(Base + kTravelStartOffset);
         s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
@@ -1892,6 +2097,14 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
         s_curtain = Matches(Base + kCurtainOffset, kCurtainPrologue, sizeof(kCurtainPrologue))
             ? (Curtain_p)(Base + kCurtainOffset) : nullptr;
+        s_world_loaded = Matches(Base + kWorldLoadedOffset, kWorldLoadedPrologue, sizeof(kWorldLoadedPrologue))
+            ? (WorldLoaded_p)(Base + kWorldLoadedOffset) : nullptr;
+        s_render_busy = Matches(Base + kRenderBusyOffset, kRenderBusyPrologue, sizeof(kRenderBusyPrologue))
+            ? (RenderBusy_p)(Base + kRenderBusyOffset) : nullptr;
+        if (s_world_loaded == nullptr || s_render_busy == nullptr)
+        {
+            Error("[DS2BonfireInSession] o 'mundo carregado' do jogo nao tem o codigo esperado; a cortina desce pelo contato fisico");
+        }
         if (Matches(Base + kLoadingOpenOffset, kLoadingOpenPrologue, sizeof(kLoadingOpenPrologue)) &&
             Matches(Base + kLoadingCloseOffset, kLoadingClosePrologue, sizeof(kLoadingClosePrologue)) &&
             Matches(Base + kHudHideOffset, kHudHidePrologue, sizeof(kHudHidePrologue)) &&
@@ -1931,6 +2144,10 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         {
             DetourAttach(&(PVOID&)s_original_register, PresenceRegisterHook);
         }
+        if (s_original_import != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_import, SnapshotImportHook);
+        }
         if (s_votes_ready)
         {
             DetourAttach(&(PVOID&)s_original_pick, PickHook);
@@ -1948,6 +2165,9 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
                 s_original_net_tick != nullptr ? "enganchada; posso silenciar na viagem" : "codigo inesperado; nao vou enganchar"));
             Append(StringFormat("=== registro de presenca (FUN_14051b0e0) %s ===\n",
                 s_original_register != nullptr ? "enganchado; guardo o blob e posso recriar" : "codigo inesperado"));
+            Append(StringFormat("=== mundo do host de novo: export (FUN_1402bf8f0) %s, import (FUN_1402c2fa0) %s ===\n",
+                s_snapshot_export != nullptr ? "pronto" : "codigo inesperado",
+                s_original_import != nullptr ? "enganchado" : "codigo inesperado"));
             Append(StringFormat("=== retirada de presenca (FUN_14051c820) %s ===\n",
                 s_presence_remove != nullptr ? "pronta" : "codigo inesperado; nao vou chamar"));
         }
@@ -2042,6 +2262,27 @@ void DS2_BonfireInSession_Tick()
     // wait running out instead of on the last arrival. Two Steam accounts is
     // all this machine can test (docs/DS2_TO_VALIDATE.md), so this is written
     // down rather than solved.
+    // A guest that reloaded its map wants the host's world again; the host
+    // answers from its own tick. On a guest the wait has an end.
+    {
+        DS2_CoopChannel::Bonfire Asked;
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::SnapshotPlease, Asked))
+        {
+            if (OwnsTheWorld())
+            {
+                Append(StringFormat("host: o convidado %016llx pediu o mundo de novo (mapa %08x)\n",
+                    (unsigned long long)Asked.From, Asked.Map));
+                ExportSnapshot("pedido do convidado");
+            }
+        }
+        const ULONGLONG Until = s_reimport_until.load();
+        if (Until != 0 && Now > Until)
+        {
+            s_reimport_until.store(0);
+            Append("convidado: o mundo do host nao chegou a tempo; deixo de esperar o import\n");
+        }
+    }
+
     if (s_barrier.Active)
     {
         DS2_CoopChannel::Bonfire Got;
@@ -2146,6 +2387,19 @@ void DS2_BonfireInSession_Tick()
                     else
                     {
                         ReportPresences("pedido");
+                    }
+                }
+                else if (Line.rfind("snapshot", 0) == 0)
+                {
+                    // `snapshot`: the host exports its world again; a guest
+                    // asks the host for it and lets the import through.
+                    if (OwnsTheWorld())
+                    {
+                        ExportSnapshot("pedido");
+                    }
+                    else
+                    {
+                        AskSnapshot("pedido");
                     }
                 }
                 else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
@@ -2628,6 +2882,10 @@ void DS2_BonfireInSessionHook::Uninstall()
         if (s_original_register != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_register, PresenceRegisterHook);
+        }
+        if (s_original_import != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_import, SnapshotImportHook);
         }
         DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
         DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);

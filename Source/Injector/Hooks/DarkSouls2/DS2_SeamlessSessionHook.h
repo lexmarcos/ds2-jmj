@@ -43,3 +43,9 @@ public:
     virtual void Uninstall() override;
     virtual const char* GetName() override;
 };
+
+// The host's session controller (NetSummonAcceptMultiplayCtrl, vftable
+// 0x1410d7998) as its per-frame tick last handed it over, or null when the
+// tick has not run for a second - the object is destroyed with the session
+// and nothing else says so. Read on the game's thread.
+void* DS2_SeamlessSession_HostCtrl();

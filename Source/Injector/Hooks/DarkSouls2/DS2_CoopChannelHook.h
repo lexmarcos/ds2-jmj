@@ -125,8 +125,9 @@ namespace DS2_CoopChannel
         TravelPropose = 1,   // the guest picked a bonfire to travel to; Map/Id the bonfire
         TravelArrived = 2,   // this guest is standing on the destination; Id the vote
         TravelFailed = 3,    // this guest could not get there; Id the vote
+        SnapshotPlease = 4,  // this guest reloaded its map and wants the host's world again; Map the map it stands in
     };
-    constexpr uint8_t kGuestEventCount = 4;
+    constexpr uint8_t kGuestEventCount = 5;
     void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
     bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
 
