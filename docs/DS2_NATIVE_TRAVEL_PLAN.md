@@ -179,6 +179,74 @@ exigir um hook novo do lado do **host** suprimindo o fim de sessão no case 2 �
 uma classe de intervenção que nunca existiu aqui (toda supressão até hoje é do
 convidado). Se for < 5, o host viaja nativo sem encerrar e D fica barato.
 
+> ## Fase 2 medida em 16/09: o warp passa, e **mata o host pelas presenças**
+>
+> Duas corridas, mesmo destino (`0a1f0000`, fogueira `7ba7`), mesma função
+> `StartTravel`. A diferença entre elas é uma só, e por isso valem como
+> controle e experimento.
+>
+> **Controle — convidado fora da sessão.** Pelo caminho de fallback
+> (`junta desliga` → votação → `TravelLeave` → `StartTravel`): o host viaja e
+> **chega** em Heide (`-18.5, 209`). O objeto do controlador some no mesmo
+> segundo, mas por causa da saída dos convidados, não do warp.
+>
+> **Experimento — convidado dentro da sessão.** Pelo pedido `nativo`, que
+> chama `StartTravel` sem mandar ninguém embora:
+>
+>     21:36:58  estado=0x10 papel=1 flags=0x261 armado=False relogio=54.2
+>     21:36:59  host: viagem iniciada para a fogueira 7ba7
+>     21:37:01  estado=0x10 papel=1 flags=0x271 armado=True  relogio=57.2
+>     21:37:03  excecao c0000005 em +0x5180a8, lendo 0xffffffffffffffff
+>
+> **Três coisas medidas, em ordem de importância.**
+>
+> **1. A fase 1 se confirmou em ação.** No instante do warp o estado seguiu
+> `0x10` e o papel seguiu 1: o ramo do case 2 que encerra a sessão **não
+> rodou**. O host pode warpar sem que a sessão seja encerrada por aquele
+> caminho.
+>
+> **2. O warp arma o watchdog de 300 s e não renova a marca.** As flags foram
+> de `0x261` para `0x271` — o bit `0x10` ligou — com `+0x1b4` ainda em `0.0` e
+> o relógio em 57,2 s. É exatamente a configuração que o levantamento previu
+> como perigosa, e agora está medida: a partir daí a sessão está num
+> cronômetro que dispara quando o relógio passar de 300.
+>
+> **3. E o host caiu 3,7 s depois, dentro do código de presença.**
+>
+>     1405180a0:  sub  $0x28,%rsp
+>     1405180a4:  mov  0x60(%rcx),%rax     rcx = 0x7fffe81ed980
+>     1405180a8:  mov  0x18(%rax),%edx     <- aqui
+>
+>     rax = 3f800000293988ec  -> dois floats (1.0 e 4.1e-14), nao um ponteiro
+>     retornos: +0x5184b0 +0xa480d2 +0x10c5118 +0x517154 +0x5140c0
+>
+> A pilha inteira está em `0x51xxxx`, a região do registro de presenças
+> remotas. O campo `+0x60` do objeto devolveu dados de ponto flutuante onde o
+> código espera um ponteiro.
+>
+> **O que o par controle/experimento isola.** Mesmo warp, mesmo destino, mesma
+> fogueira: **sem presenças, chega limpo; com presenças, mata o host em 3,7 s.**
+> O warp não é o problema — as presenças remotas sendo desmontadas debaixo de
+> uma sessão viva são.
+>
+> **Consequência para o plano.** O que era inferência vira medição: "presenças
+> remotas **não** são reconstruídas por um warp" é fraco demais. Elas são
+> desmontadas, e a maquinaria de sessão continua andando por cima do que sobrou.
+> Portanto **D-3b exige retirar as presenças antes do warp** — `FUN_14051c820`
+> por jogador, a primitiva do `DS2_PRESENCE_REBUILD_PLAN.md` — e recriá-las
+> depois. Isto é, **D = carregamento nativo + alternativa A**, agora com apoio
+> empírico e não só por leitura.
+>
+> **Custo.** O host caiu (Samuel estava em 30 antes). O convidado **não pagou**:
+> ficou em 80, e foi parado sem `--force` depois.
+>
+> **E um erro de método que custou caro, registrado para não repetir:** antes
+> deste experimento eu parei os jogos com `game stop --force` achando que não
+> havia sessão; o party tinha reinvocado e havia. **Vinte pontos**, dez em cada
+> personagem (Samuel 20→30, Chico 70→80). O `--force` existe justamente para
+> atropelar a checagem que evita isso. Nunca usar `--force` sem antes ler o
+> estado da sessão.
+
 **Fase 2 — viagem nativa só do host, sem convidado, custo ~zero.** Instrumentar
 `FUN_1402be090` e a cadeia do warp; confirmar que o controlador do host
 sobrevive além de 300 s e que o watchdog não arma. Aqui também se responde se a
