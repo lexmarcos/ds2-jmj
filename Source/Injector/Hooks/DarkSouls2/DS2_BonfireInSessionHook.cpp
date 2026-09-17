@@ -230,6 +230,36 @@ namespace
     // So the state is put back to 0 for the travel. It is one int, it is the
     // game's own idle state, and the list is per-map anyway: the map id at
     // +0x18 says this thing is rebuilt when a map loads.
+    // The one place the whole net layer is walked from.
+    //
+    // FUN_140514020(objeto, delta) is the net tick: it reads the global
+    // 0x141616cf8 and calls every subsystem hanging off it - the presence
+    // registry at slot 0x20, the character sync at 0x28, and the rest. Every
+    // list that killed the host today is walked from under it.
+    //
+    // Three consumers were patched one at a time on 16/09 and the crash simply
+    // moved: the pre-draw guard, the entity component lists, the character
+    // sync. The warp tears the world down assuming nothing else points at it,
+    // and a live session points at it through several structures at once.
+    // There is no single list to fix - but there **is** a single place that
+    // walks them all, and that is this one.
+    //
+    // So instead of mending lists, the tick is skipped while there is no world
+    // to walk: armed just before the travel, dropped as soon as the loader is
+    // idle again with a character in place. Nothing in the net layer runs
+    // while the world does not exist.
+    //
+    // It also stops the two watchdogs for the duration, since they are ticked
+    // from this same tree - which is a side effect in our favour, and one to
+    // watch: a peer that hears nothing for about 23 s drops the session
+    // (measured, attempt 9). A load is 10 to 20 s, so it fits, and the server
+    // log is what says whether it fitted.
+    constexpr size_t kNetTickOffset = 0x514020;
+    constexpr uint8_t kNetTickPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0x05, 0xcb, 0x2c, 0x10, 0x01 };
+    constexpr size_t kLoaderState = 0x24ac;     // 0x1e when the loader is idle
+    constexpr uint8_t kLoaderIdle = 0x1e;
+    constexpr ULONGLONG kQuietCapMs = 60000;    // never silence the net for longer
+
     constexpr size_t kNetSyncSlot = 0x28;
     constexpr size_t kSyncState = 0x08;
     constexpr size_t kSyncCount = 0x0c;
@@ -375,6 +405,7 @@ namespace
     using BonfireIndex_p = uint32_t*(*)(uint32_t* Out, uint16_t Id);
     using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
     using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
+    using NetTick_p = void(*)(void* Object, float Delta);
     using PresenceRemove_p = void(*)(void* Entry);
     using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
     using TravelStart_p = void(*)(void* Travel, uint8_t* Request);
@@ -394,6 +425,10 @@ namespace
     BonfireIndex_p s_bonfire_index = nullptr;
     BonfireMap_p s_bonfire_map = nullptr;
     BonfireLit_p s_bonfire_lit = nullptr;
+    NetTick_p s_original_net_tick = nullptr;
+    std::atomic<ULONGLONG> s_quiet_until{ 0 };
+    std::atomic<uint64_t> s_quiet_skipped{ 0 };
+    std::atomic<uint64_t> s_quiet_windows{ 0 };
     PresenceRemove_p s_presence_remove = nullptr;
     TravelBuild_p s_travel_build = nullptr;
     TravelStart_p s_travel_start = nullptr;
@@ -1165,6 +1200,66 @@ namespace
         return Asked;
     }
 
+    // Is the world back? The loader idle and a local character in place.
+    // Both, because the loader reaching idle before the character exists is
+    // exactly the window the crashes live in.
+    bool WorldIsUp()
+    {
+        uintptr_t Context = 0, Character = 0;
+        uint8_t State = 0;
+        if (!ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadBytes(Context + kLoaderState, &State, sizeof(State)) ||
+            !ReadPointer(Context + kLocalCharacter, Character))
+        {
+            return false;
+        }
+        return State == kLoaderIdle && Character != 0;
+    }
+
+    // The net tick, skipped while the world is being torn down and rebuilt.
+    void NetTickHook(void* Object, float Delta)
+    {
+        const ULONGLONG Until = s_quiet_until.load();
+        if (Until != 0)
+        {
+            if (GetTickCount64() >= Until)
+            {
+                // The cap, so a load that never finishes cannot leave the net
+                // silent forever.
+                s_quiet_until.store(0);
+                Append(StringFormat("rede: a janela de silencio acabou pelo teto de %llu ms; volto a bater\n",
+                    (unsigned long long)kQuietCapMs));
+            }
+            else if (!WorldIsUp())
+            {
+                s_quiet_skipped.fetch_add(1);
+                return;     // nothing to walk, so nothing walks
+            }
+            else
+            {
+                s_quiet_until.store(0);
+                Append(StringFormat("rede: o mundo voltou; %llu batida(s) puladas\n",
+                    (unsigned long long)s_quiet_skipped.load()));
+            }
+        }
+        s_original_net_tick(Object, Delta);
+    }
+
+    // Stops the net layer until the world is back, or the cap runs out.
+    void QuietNet(const char* Why)
+    {
+        if (s_original_net_tick == nullptr)
+        {
+            Append(StringFormat("rede (%s): sem detour; nao da para silenciar\n", Why));
+            return;
+        }
+        s_quiet_skipped.store(0);
+        s_quiet_windows.fetch_add(1);
+        s_quiet_until.store(GetTickCount64() + kQuietCapMs);
+        Append(StringFormat("rede (%s): parei a batida ate o mundo voltar (teto %llu ms)\n", Why,
+            (unsigned long long)kQuietCapMs));
+    }
+
     uintptr_t NetSync()
     {
         uintptr_t Root = 0, Sync = 0;
@@ -1551,6 +1646,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         // Checked before it is ever called: a function this file pokes into
         // the game with the wrong bytes under it would be the worst kind of
         // failure, silent and in another object's memory.
+        s_original_net_tick = Matches(Base + kNetTickOffset, kNetTickPrologue, sizeof(kNetTickPrologue))
+            ? (NetTick_p)(Base + kNetTickOffset) : nullptr;
         s_presence_remove = Matches(Base + kPresenceRemoveOffset, kPresenceRemovePrologue, sizeof(kPresenceRemovePrologue))
             ? (PresenceRemove_p)(Base + kPresenceRemoveOffset) : nullptr;
         s_travel_build = (TravelBuild_p)(Base + kTravelBuildOffset);
@@ -1591,6 +1688,10 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         DetourUpdateThread(GetCurrentThread());
         DetourAttach(&(PVOID&)s_original_rest, RestStartHook);
         DetourAttach(&(PVOID&)s_original_reset, WorldResetHook);
+        if (s_original_net_tick != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_net_tick, NetTickHook);
+        }
         if (s_votes_ready)
         {
             DetourAttach(&(PVOID&)s_original_pick, PickHook);
@@ -1604,6 +1705,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             s_events_ready.store(true);
             Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso, votacao de viagem (%s), descanso do convidado (%s) ===\n",
                 s_votes_ready ? "pronta" : "codigo inesperado", s_guest_rest_ready ? "pronto" : "codigo inesperado"));
+            Append(StringFormat("=== batida da rede (FUN_140514020) %s ===\n",
+                s_original_net_tick != nullptr ? "enganchada; posso silenciar na viagem" : "codigo inesperado; nao vou enganchar"));
             Append(StringFormat("=== retirada de presenca (FUN_14051c820) %s ===\n",
                 s_presence_remove != nullptr ? "pronta" : "codigo inesperado; nao vou chamar"));
         }
@@ -1820,6 +1923,7 @@ void DS2_BonfireInSession_Tick()
                     const bool Owner = OwnsTheWorld();
                     ReportPresences("antes da viagem nativa");
                     ReportNetSync("antes da viagem nativa");
+                    QuietNet("viagem nativa");
                     const bool Went = StartTravel((uint16_t)Bonfire);
                     Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
                         Bonfire, Map, Owner ? "sim" : "nao",
@@ -2237,6 +2341,11 @@ void DS2_BonfireInSessionHook::Uninstall()
     {
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
+        s_quiet_until.store(0);
+        if (s_original_net_tick != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_net_tick, NetTickHook);
+        }
         DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
         DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
         if (s_votes_ready)
