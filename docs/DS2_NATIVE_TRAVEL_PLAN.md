@@ -660,7 +660,44 @@ tela de carregamento do jogo serve de cortina.
 > `140b0000`**. E as primeiras fogueiras: `122a` The Far Fire, `7ba2` Tower of
 > Flame, `4cc2` Ironhearth Hall, `2d82` Tower of Prayer.
 >
-> ### O que ainda não está feito
+> ### Correção de 17/09: a chegada estava certa e a co-presença não
+>
+> Uma captura do usuário mostrou o que a minha régua não media: **o convidado
+> não vê o host**. O host vê o fantasma do convidado; a tela do convidado está
+> vazia, e ele não consegue usar a fogueira.
+>
+> As coordenadas batiam a 1,7 m e a sessão estava verificada, mas proximidade
+> de coordenadas não prova co-presença. O bit "estou no mundo de outro" está
+> certo (`ctx+0x24b1 = 0x40` no convidado, `0x00` no host), então o problema
+> não é o warp com flag 1.
+>
+> **É que a reconstrução de presença é de mão única.** Medido, o estado normal
+> de uma sessão é simétrico:
+>
+>     host      -> 1 presenca: papel 1 (o convidado), net id 513
+>     convidado -> 1 presenca: papel 0 (o host),      net id 32512
+>
+> O warp do convidado destrói o registro **dele**, que é onde mora a cópia do
+> host, e eu só recriava no host. Recriar no convidado **não funciona**: o
+> pedido é aceito, o slot pendente é preenchido e consumido, e nenhuma das
+> cinco entradas nasce.
+>
+> A causa provável é o atalho que tomei conscientemente: guardo o **ponteiro**
+> do membro capturado na entrada em vez de re-resolvê-lo da lista viva
+> (`FUN_140520040`), que é o que o `DS2_PRESENCE_REBUILD_PLAN.md` mandava. No
+> host o ponteiro sobrevive; no convidado, aparentemente não. O portão do
+> nascimento em `FUN_14051dbb0` não é o problema - ele só exige liberação para
+> papel `0xe`, e o nosso é 0.
+>
+> ### E o transporte antigo não alcança tudo
+>
+> Testado nos quatro destinos com os dois lados nele: Majula e Heide passam
+> (1,2 m e 0,9 m), **Iron Keep falha** - o host vai e o convidado fica 857 m
+> atrás, porque o backread só traz mapas que o streamer alcança a partir do
+> atual. Para destino distante o convidado precisa mesmo do warp nativo, o que
+> torna a reconstrução de presença obrigatória e não opcional.
+
+### O que ainda não está feito
 >
 > A viagem é acionada por dois pedidos (`ir` no host e `fantasma` no
 > convidado), não pela votação. Falta ligar a receita ao caminho de votação e à
