@@ -625,6 +625,47 @@ tela de carregamento do jogo serve de cortina.
 >   A régua tem de conferir processo vivo, sessão verificada, papel de fantasma
 >   e mapa de destino, na chegada **e** ao longo da vigília.
 
+> ## A viagem em conjunto funcionando, nos quatro destinos (17/09, 13:30)
+>
+> **Transportes diferentes para cada lado**, e essa assimetria é o achado
+> central. Veio do par de experimentos que isola a causa:
+>
+>     convidado viaja sozinho -> sessao sobrevive 5 min, segue fantasma
+>     host viaja sozinho      -> sessao cai em 10 s, convidado vai para casa
+>
+> O warp nativo do **host** é o que mata a sessão. O do convidado é seguro.
+> Então cada lado usa o que não o quebra:
+>
+> | lado | transporte | por quê |
+> | --- | --- | --- |
+> | host | o antigo: backread + teleporte | não há warp, então a sessão nunca é tocada; 52 trechos sem uma queda de sessão |
+> | convidado | warp nativo com flag 1 | carregamento de verdade, que é o que resolve a corrupção dele; e é seguro para a sessão |
+>
+> O convidado **não** precisa do silêncio da rede — ele foi feito para o warp
+> do host. Tirá-lo é uma peça a menos.
+>
+> ### Medido, quatro destinos numa sessão só, três minutos de vigília cada
+>
+>     Majula       (122a, 0a040000)   2.2 m entre os dois
+>     Heide        (7ba2, 0a1f0000)   1.7 m
+>     Iron Keep    (4cc2, 0a130000)   1.1 m
+>     Brume Tower  (2d82, 140b0000)   1.7 m
+>
+> Em todos: `p2pSessionVerified: true`, convidado papel 1, nenhuma queda dos
+> dois lados. No fim: host estado `0x10`, convidado estado 7, os dois na lista
+> de membros, pacotes cruzando, e o registro de presenças com uma entrada viva.
+>
+> **Os quatro ids de mapa**, que não estavam documentados em lugar nenhum:
+> Majula `0a040000`, Heide `0a1f0000`, **Iron Keep `0a130000`**, **Brume Tower
+> `140b0000`**. E as primeiras fogueiras: `122a` The Far Fire, `7ba2` Tower of
+> Flame, `4cc2` Ironhearth Hall, `2d82` Tower of Prayer.
+>
+> ### O que ainda não está feito
+>
+> A viagem é acionada por dois pedidos (`ir` no host e `fantasma` no
+> convidado), não pela votação. Falta ligar a receita ao caminho de votação e à
+> barreira, para virar uma ação só.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
