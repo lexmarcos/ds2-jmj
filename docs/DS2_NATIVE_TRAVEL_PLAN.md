@@ -522,6 +522,52 @@ tela de carregamento do jogo serve de cortina.
 > **Custo da noite:** Samuel de 10 a 90 pontos. Chico intacto em 80. O convidado
 > nunca pagou por esta linha de trabalho — todas as quedas foram do host.
 
+> ## A taxa medida, e o que o silêncio realmente comprou (16/09, 23:36)
+>
+> Com os pontos de penalidade deixando de ser recurso escasso (o `save restore`
+> do harness desfaz), deu para medir taxa em vez de anedota.
+>
+> **O teste precisou ser corrigido primeiro.** Depois de uma viagem a presença
+> do parceiro **some** — visto numa captura do usuário, e é o que o plano
+> previa. Sem presença a viagem é o caso seguro, então uma série de viagens
+> seguidas mede o caso fácil e devolve um número bonito e falso. O
+> `taxa.sh` espera o party reinvocar e só conta a tentativa quando o log
+> confirma `1 viva(s)` antes de viajar.
+>
+>     tentativa 1 (Majula):  limpa (193 batidas puladas)
+>     tentativa 2 (Heide):   limpa (154)
+>     tentativa 3 (Majula):  limpa (194)
+>     tentativa 4 (Heide):   limpa (158)
+>     tentativa 5 (Majula):  CAIU em +0x3f39b3, 3 s depois
+>
+> Somando com as duas corridas anteriores do mesmo build: **5 limpas e 2
+> quedas**. Antes do conserto eram 4 quedas em 5.
+>
+> **O que o silêncio comprou, com precisão.** Ele tirou a família de quedas da
+> **camada de rede** — `+0x5180a8` e `+0x1e5c30` não voltaram. A queda da
+> tentativa 5 é outra coisa: aconteceu **dentro** da janela, com a rede calada
+> (não há linha "o mundo voltou"), e em `+0x3f39b3`, que é a vizinhança do
+> `MapModelComponent` — a mesma família da manhã, que o `DS2_TravelWatchHook`
+> guarda.
+>
+> Ou seja: silenciar a rede resolveu a rede, e agora quem tropeça na demolição
+> do mundo é a camada de mapa. O warp é perigoso para mais de um subsistema, e
+> cada um precisa do seu próprio tratamento — ou de um que os cubra todos.
+>
+> **Leitura honesta:** isto é uma melhora real e medida, de ~20% para ~70% de
+> viagens limpas, e **não** é um conserto. Uma viagem em conjunto que falha uma
+> vez a cada três não serve para jogar.
+>
+> **Também confirmado visualmente:** depois da viagem o fantasma do parceiro
+> **não aparece mais** no mundo do host. A sessão segue verificada e os pacotes
+> cruzam, mas a presença foi destruída e não reconstruída. A segunda metade da
+> 3b continua inteira, e agora tem prova de tela.
+>
+> **E um confundidor descartado:** doze capturas de tela seguidas, sem viajar,
+> com sessão de pé, não derrubaram nada. `game shot` sozinho não mata o jogo;
+> uma captura na janela instável depois da viagem pode encontrá-lo já quebrado,
+> que é coisa diferente.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
