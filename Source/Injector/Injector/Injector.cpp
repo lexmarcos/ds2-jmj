@@ -31,6 +31,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_NetSyncGuardHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ProgressCarryHook.h"
@@ -228,6 +229,8 @@ bool Injector::Init()
                 // The owner of the world rests with phantoms in it (M8).
                 Hooks.push_back(std::make_unique<DS2_BonfireInSessionHook>());
                 Hooks.push_back(std::make_unique<DS2_BackreadHook>());
+                // The net thread reads a released map's character table (M8).
+                Hooks.push_back(std::make_unique<DS2_NetSyncGuardHook>());
                 // Who destroys what in the seconds after a travel (M8).
                 Hooks.push_back(std::make_unique<DS2_TravelWatchHook>());
             }
