@@ -316,6 +316,7 @@ namespace
     constexpr size_t kAcceptCtrlVftable = 0x10d7998;
     constexpr size_t kAcceptState = 0x150;
     constexpr int32_t kAcceptPlaying = 0x10;
+    constexpr int32_t kAcceptExported = 0xe;
     constexpr size_t kJoinMap = 0x19c;
     constexpr int32_t kJoinImporting = 4;
     constexpr int32_t kJoinPresences = 5;
@@ -588,6 +589,7 @@ namespace
     WorldLoaded_p s_world_loaded = nullptr;
     RenderBusy_p s_render_busy = nullptr;
     ULONGLONG s_curtain_arrived_at = 0;   // when the travel said arrived; the world wait counts from here
+    bool s_curtain_settled_logged = false;
     bool s_curtain_up = false;
     ULONGLONG s_curtain_since = 0;
     ULONGLONG s_curtain_down_at = 0;
@@ -695,6 +697,18 @@ namespace
         ULONGLONG Since = 0;
     };
     AwaitRelease s_await;
+
+    // Guest: the phantom warp under way, so the host's world is asked for
+    // once this machine stands in the destination with a character again.
+    struct GhostTravel
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        ULONGLONG Since = 0;
+        ULONGLONG SeenAt = 0;   // first frame in the destination with a character; 0 not yet
+    };
+    GhostTravel s_ghost;
+    constexpr ULONGLONG kGhostSettleMs = 3000;
 
     // A receipt counts once per player.
     bool NoteReporter(uint64_t Who)
@@ -1183,6 +1197,7 @@ namespace
         s_curtain_up = Up;
         s_curtain_since = GetTickCount64();
         s_curtain_arrived_at = 0;
+        s_curtain_settled_logged = false;
         Append(Up ? StringFormat("tela de carregamento: subiu%s\n", Screen ? " (com a tela do jogo)" : " (so o desenho do mundo)")
                   : "tela de carregamento: desceu\n");
         return true;
@@ -1250,8 +1265,11 @@ namespace
             }
             return;
         }
-        if (s_curtain_down_at == 0 && Now != s_curtain_arrived_at)
+        // Once per curtain: the predicate flickers for a few frames on its
+        // way to true (three lines 50 ms apart on 17/09).
+        if (!s_curtain_settled_logged && Now != s_curtain_arrived_at)
         {
+            s_curtain_settled_logged = true;
             Append(StringFormat("tela de carregamento: o mundo assentou %llu ms depois de chegar\n",
                 (unsigned long long)(Now - s_curtain_arrived_at)));
         }
@@ -1469,7 +1487,21 @@ namespace
             return;
         }
         s_snapshot_export(Ctrl, 0.0f);
-        Append(StringFormat("host (%s): mundo exportado de novo para o convidado (controlador %p, mapa %08x)\n", Why, Ctrl, AreaMap()));
+        // The handler moves the controller on to 0xe, where it waits for the
+        // guest's "I am in" - a message the guest never sends, because its
+        // states 5 and 6 are skipped. Measured 17/09, 16:32: the session
+        // kept its packets and both presences with the host at 0xe, but the
+        // harness read it unverified, and the game's own checks for a playing
+        // host key on 0x10. Writing 0x10 back live brought it to verified.
+        int32_t After = -1;
+        ReadBytes((uintptr_t)Ctrl + kAcceptState, &After, sizeof(After));
+        if (After == kAcceptExported)
+        {
+            int32_t Playing = kAcceptPlaying;
+            memcpy((void*)((uintptr_t)Ctrl + kAcceptState), &Playing, sizeof(Playing));
+        }
+        Append(StringFormat("host (%s): mundo exportado de novo para o convidado (controlador %p, mapa %08x; estado 0x10 -> 0x%x -> %s)\n",
+            Why, Ctrl, AreaMap(), After, After == kAcceptExported ? "0x10" : "deixado como esta"));
     }
 
     // Puts the captured presence back, by the game's own registration.
@@ -1751,6 +1783,13 @@ namespace
         const char Took = ((Warp_p)Entry)((void*)Context, Request, 1);
         Append(StringFormat("convidado: warp para a fogueira %04x com a flag de outro mundo; o jogo %s\n",
             (unsigned)Bonfire, Took != 0 ? "aceitou" : "RECUSOU"));
+        if (Took != 0)
+        {
+            s_ghost = GhostTravel();
+            s_ghost.Active = true;
+            s_ghost.Map = MapOfBonfire(Bonfire);
+            s_ghost.Since = GetTickCount64();
+        }
         return Took != 0;
     }
 
@@ -2284,6 +2323,35 @@ void DS2_BonfireInSession_Tick()
         {
             s_reimport_until.store(0);
             Append("convidado: o mundo do host nao chegou a tempo; deixo de esperar o import\n");
+        }
+        // The phantom warp landed: standing in the destination with a
+        // character for a moment, the host's world is asked for by itself.
+        if (s_ghost.Active)
+        {
+            uintptr_t Context = 0, Character = 0;
+            const bool There = AreaMap() == s_ghost.Map && ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+                ReadPointer(Context + kLocalCharacter, Character) && Character != 0;
+            if (!There)
+            {
+                s_ghost.SeenAt = 0;
+            }
+            else if (s_ghost.SeenAt == 0)
+            {
+                s_ghost.SeenAt = Now;
+            }
+            else if (Now - s_ghost.SeenAt >= kGhostSettleMs)
+            {
+                s_ghost.Active = false;
+                Append(StringFormat("convidado: o warp de fantasma chegou ao mapa %08x em %llu ms\n", s_ghost.Map,
+                    (unsigned long long)(Now - s_ghost.Since)));
+                AskSnapshot("chegada do warp de fantasma");
+            }
+            if (s_ghost.Active && Now - s_ghost.Since > kWatchNativeMs)
+            {
+                s_ghost.Active = false;
+                Append(StringFormat("convidado: o warp de fantasma nao chegou ao mapa %08x em %u ms; nao peco o mundo\n",
+                    s_ghost.Map, kWatchNativeMs));
+            }
         }
     }
 
