@@ -201,6 +201,21 @@ namespace
     constexpr size_t kEntryNetId = 0x6a;
     constexpr size_t kEntryName = 0x8c;
     constexpr uint32_t kEntryAlive = 2;
+    // Putting a presence back. FUN_14051b0e0(R, membro, blob, flag) finds a
+    // free pending slot from R+0x5c0 stepping 0x640, copies the member into
+    // it, copies the 0x5f0-byte player blob to slot+0x40 and writes the flag
+    // at slot+0x630; the registry's own tick then materialises it.
+    //
+    // The blob and the member are taken at the one moment the game itself has
+    // them - the ingress of that same function, when the guest joins - and
+    // kept. The member is kept as the **pointer** the game passed, not as a
+    // copy of its bytes: the copy is what the plan warns against, and the
+    // session outlives the travel, so the list it lives in should too. If that
+    // turns out to be wrong it will show as a failed recreate, not as damage.
+    constexpr size_t kPresenceRegisterOffset = 0x51b0e0;
+    constexpr uint8_t kPresenceRegisterPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18 };
+    constexpr size_t kPlayerBlob = 0x5f0;
+
     constexpr size_t kPresenceRemoveOffset = 0x51c820;
     constexpr uint8_t kPresenceRemovePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x41, 0x48, 0x48, 0x8b, 0xd9 };
 
@@ -406,6 +421,7 @@ namespace
     using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
     using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
     using NetTick_p = void(*)(void* Object, float Delta);
+    using PresenceRegister_p = uint64_t(*)(void* Registry, void* Member, void* Blob, uint8_t Flag);
     using PresenceRemove_p = void(*)(void* Entry);
     using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
     using TravelStart_p = void(*)(void* Travel, uint8_t* Request);
@@ -436,6 +452,12 @@ namespace
     std::atomic<bool> s_quiet_saw_teardown{ false };
     std::atomic<uint64_t> s_quiet_skipped{ 0 };
     std::atomic<uint64_t> s_quiet_windows{ 0 };
+    PresenceRegister_p s_original_register = nullptr;
+    // What the guest's join handed the game, kept for putting it back.
+    uint8_t s_blob[kPlayerBlob] = {};
+    void* s_member = nullptr;
+    uint8_t s_blob_flag = 0;
+    bool s_blob_known = false;
     PresenceRemove_p s_presence_remove = nullptr;
     TravelBuild_p s_travel_build = nullptr;
     TravelStart_p s_travel_start = nullptr;
@@ -1121,6 +1143,23 @@ namespace
     }
 
     // The registry of remote presences, or 0 when there is none yet.
+    // Capture, then pass through. Nothing is changed on the way in.
+    uint64_t PresenceRegisterHook(void* Registry, void* Member, void* Blob, uint8_t Flag)
+    {
+        if (Blob != nullptr && Member != nullptr)
+        {
+            if (ReadBytes((uintptr_t)Blob, s_blob, sizeof(s_blob)))
+            {
+                s_member = Member;
+                s_blob_flag = Flag;
+                s_blob_known = true;
+                Append(StringFormat("presencas: guardei o blob de %zu bytes e o membro %p (flag %u)\n",
+                    sizeof(s_blob), Member, (unsigned)Flag));
+            }
+        }
+        return s_original_register(Registry, Member, Blob, Flag);
+    }
+
     uintptr_t PresenceRegistry()
     {
         uintptr_t Root = 0, Registry = 0;
@@ -1166,6 +1205,32 @@ namespace
                 i, (void*)E, State,
                 State == kEntryAlive ? "viva" : (State == 3 ? "saindo" : "?"), Role, (unsigned)NetId, (void*)Ctrl));
         }
+    }
+
+    // Puts the captured presence back, by the game's own registration.
+    bool RebuildPresence(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0 || s_original_register == nullptr || !s_blob_known)
+        {
+            Append(StringFormat("presencas (%s): nao da para recriar (registro %p, funcao %p, blob %s)\n", Why,
+                (void*)R, (void*)s_original_register, s_blob_known ? "guardado" : "nunca visto"));
+            return false;
+        }
+        // A living entry for this player already there would be overwritten
+        // without being destroyed - the duplication the plan names - so the
+        // count is checked first and nothing is done when it is not zero.
+        uint32_t Alive = 0;
+        ReadBytes(R + kPresenceAliveCount, &Alive, sizeof(Alive));
+        if (Alive != 0)
+        {
+            Append(StringFormat("presencas (%s): ja ha %u viva(s); nao recrio para nao duplicar\n", Why, Alive));
+            return false;
+        }
+        const uint64_t Went = s_original_register((void*)R, s_member, s_blob, s_blob_flag);
+        Append(StringFormat("presencas (%s): pedi a recriacao com o membro %p; o jogo %s\n", Why, s_member,
+            Went != 0 ? "aceitou (slot pendente preenchido)" : "RECUSOU (sem slot livre ou membro invalido)"));
+        return Went != 0;
     }
 
     // Takes every living presence out, by the game's own FUN_14051c820.
@@ -1677,6 +1742,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         // Checked before it is ever called: a function this file pokes into
         // the game with the wrong bytes under it would be the worst kind of
         // failure, silent and in another object's memory.
+        s_original_register = Matches(Base + kPresenceRegisterOffset, kPresenceRegisterPrologue, sizeof(kPresenceRegisterPrologue))
+            ? (PresenceRegister_p)(Base + kPresenceRegisterOffset) : nullptr;
         s_original_net_tick = Matches(Base + kNetTickOffset, kNetTickPrologue, sizeof(kNetTickPrologue))
             ? (NetTick_p)(Base + kNetTickOffset) : nullptr;
         s_presence_remove = Matches(Base + kPresenceRemoveOffset, kPresenceRemovePrologue, sizeof(kPresenceRemovePrologue))
@@ -1723,6 +1790,10 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         {
             DetourAttach(&(PVOID&)s_original_net_tick, NetTickHook);
         }
+        if (s_original_register != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_register, PresenceRegisterHook);
+        }
         if (s_votes_ready)
         {
             DetourAttach(&(PVOID&)s_original_pick, PickHook);
@@ -1738,6 +1809,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
                 s_votes_ready ? "pronta" : "codigo inesperado", s_guest_rest_ready ? "pronto" : "codigo inesperado"));
             Append(StringFormat("=== batida da rede (FUN_140514020) %s ===\n",
                 s_original_net_tick != nullptr ? "enganchada; posso silenciar na viagem" : "codigo inesperado; nao vou enganchar"));
+            Append(StringFormat("=== registro de presenca (FUN_14051b0e0) %s ===\n",
+                s_original_register != nullptr ? "enganchado; guardo o blob e posso recriar" : "codigo inesperado"));
             Append(StringFormat("=== retirada de presenca (FUN_14051c820) %s ===\n",
                 s_presence_remove != nullptr ? "pronta" : "codigo inesperado; nao vou chamar"));
         }
@@ -1922,7 +1995,12 @@ void DS2_BonfireInSession_Tick()
                     // `presenca` writes the registry down; `presenca retira`
                     // asks every living copy to go. Apart on purpose: reading
                     // costs nothing and is how the removal is checked.
-                    if (Line.find("retira") != std::string::npos)
+                    if (Line.find("recria") != std::string::npos)
+                    {
+                        ReportPresences("antes de recriar");
+                        RebuildPresence("pedido");
+                    }
+                    else if (Line.find("retira") != std::string::npos)
                     {
                         ReportPresences("antes de retirar");
                         const int Asked = RemovePresences("pedido");
@@ -2377,6 +2455,10 @@ void DS2_BonfireInSessionHook::Uninstall()
         if (s_original_net_tick != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_net_tick, NetTickHook);
+        }
+        if (s_original_register != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_register, PresenceRegisterHook);
         }
         DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
         DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
