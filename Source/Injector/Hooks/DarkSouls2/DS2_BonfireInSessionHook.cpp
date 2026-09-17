@@ -12,6 +12,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_SeamlessSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 
@@ -752,6 +753,34 @@ namespace
     };
     PendingWarp s_pending_warp;
     constexpr ULONGLONG kWarpAnnounceMs = 2500;
+
+    // Which road to take is **asked of the streamer**, not predicted.
+    //
+    // `MapReachable` only says an owner exists for that map, and every one of
+    // the 38 owners exists from the first load. It cannot tell "has an owner"
+    // from "will load", so it answers yes for both. Measured 17/09, 19:01,
+    // the documented failing case driven for real: the guest voted to travel
+    // from Heide to Iron Keep, the gate said yes, the guest took the old
+    // road, and the owner's load state went `255 -> 0` and never moved. Three
+    // seconds later the map it was standing in was released under it and it
+    // died at +0x517843. A working load walks `255 -> 1 -> 2 -> 3 -> 4 -> 5`
+    // in about half a second, so the difference is visible in a second and a
+    // half - long before anything is torn down.
+    //
+    // So the map is asked for first and the state watched. Reaching 5 means
+    // the old road works; not moving means the warp. Nothing is torn down
+    // while this runs: the player has not left yet.
+    struct MapProbe
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        uint32_t Vote = 0;
+        ULONGLONG Since = 0;
+    };
+    MapProbe s_probe;
+    constexpr ULONGLONG kProbeMs = 3000;
+    constexpr uint8_t kMapLoaded = 5;
 
     // Host side: a guest warped, so this machine's presence has to be put
     // back once that guest is in.
@@ -2949,7 +2978,26 @@ void DS2_BonfireInSession_Tick()
             s_open_vote.Active = false;
         }
         s_proposal.Active = false;
-        if (DS2_DeathIntercept::MapReachable(Said.Map))
+        if (s_original_import != nullptr && s_travel_build != nullptr)
+        {
+            // Ask the streamer for the map and watch its load state; the road
+            // is chosen from the answer, below, with nobody moved yet.
+            const uint32_t Every[4] = { 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu };
+            s_probe = MapProbe();
+            s_probe.Active = true;
+            s_probe.Map = Said.Map;
+            s_probe.Bonfire = Bonfire;
+            s_probe.Vote = (uint32_t)Said.Type;
+            s_probe.Since = Now;
+            DS2_Backread::Request(Said.Map, Every);
+            s_await = AwaitRelease();
+            s_await.Active = true;
+            s_await.Vote = (uint32_t)Said.Type;
+            s_await.Since = Now;
+            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); pedindo o mapa para ver por onde vou (votacao %d)\n",
+                (unsigned)Bonfire, Said.Map, Said.Type));
+        }
+        else if (DS2_DeathIntercept::MapReachable(Said.Map))
         {
             Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); vou junto (votacao %d)\n",
                 (unsigned)Bonfire, Said.Map, Said.Type));
@@ -2959,35 +3007,6 @@ void DS2_BonfireInSession_Tick()
             s_await.Vote = (uint32_t)Said.Type;
             s_await.Since = Now;
         }
-        else if (s_original_import != nullptr && s_travel_build != nullptr)
-        {
-            // The streamer cannot bring that map in from here - measured
-            // 17/09, Iron Keep from Heide: the host arrived and the guest was
-            // left 857 m behind, silently. So this machine takes the other
-            // road instead of refusing: the warp with the phantom flag, which
-            // is a real load and reaches anywhere. It costs the borrowed
-            // world, which is why the arrival asks the host for it again, and
-            // the presence, which is rebuilt on both sides.
-            //
-            // Announced first, and the warp waits a moment: the host has to
-            // take its copy of this guest out *before* the warp destroys it,
-            // which is the order the recipe was measured in.
-            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Said.Map, (uint32_t)Said.Type);
-            RemovePresences("vou de warp; o mapa nao vem ate aqui");
-            s_pending_warp = PendingWarp();
-            s_pending_warp.Active = true;
-            s_pending_warp.Map = Said.Map;
-            s_pending_warp.Bonfire = Bonfire;
-            s_pending_warp.Vote = (uint32_t)Said.Type;
-            s_pending_warp.At = Now + kWarpAnnounceMs;
-            s_await = AwaitRelease();
-            s_await.Active = true;
-            s_await.ByWarp = true;
-            s_await.Vote = (uint32_t)Said.Type;
-            s_await.Since = Now;
-            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x), mas o mapa nao vem ate aqui; vou de warp (votacao %d)\n",
-                (unsigned)Bonfire, Said.Map, Said.Type));
-        }
         else
         {
             _snwprintf_s(s_message, _TRUNCATE, L"Travel canceled: %ls could not be reached from here.",
@@ -2995,6 +3014,47 @@ void DS2_BonfireInSession_Tick()
             ShowMessage(s_message);
             Append(StringFormat("convidado: viagem para a fogueira %04x (mapa %08x), mas o mapa nao pode ser trazido aqui e o warp nao esta pronto\n",
                 (unsigned)Bonfire, Said.Map));
+        }
+    }
+
+    // The streamer has answered: the old road if the map is coming, the warp
+    // if it is not. Nobody has moved yet either way, which is the whole point
+    // of asking before leaving.
+    if (s_probe.Active)
+    {
+        uint8_t State = 0;
+        uint32_t Mask[4] = {};
+        const bool Known = DS2_Backread::Query(s_probe.Map, State, Mask);
+        const bool Loaded = Known && State >= kMapLoaded;
+        const bool GaveUp = Now - s_probe.Since > kProbeMs;
+        if (Loaded || GaveUp)
+        {
+            const MapProbe Asked = s_probe;
+            s_probe.Active = false;
+            if (Loaded)
+            {
+                // The travel asks for the map itself, and one request replaces
+                // another, so this one is left standing rather than released
+                // into a gap.
+                Append(StringFormat("convidado: o mapa %08x veio (estado %u em %llu ms); vou junto (votacao %u)\n",
+                    Asked.Map, (unsigned)State, (unsigned long long)(Now - Asked.Since), Asked.Vote));
+                StartGo(Asked.Map, Asked.Bonfire);
+            }
+            else
+            {
+                DS2_Backread::Release();
+                Append(StringFormat("convidado: o mapa %08x nao veio (estado %u depois de %llu ms); vou de warp (votacao %u)\n",
+                    Asked.Map, Known ? (unsigned)State : 0xffu, (unsigned long long)(Now - Asked.Since), Asked.Vote));
+                DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Asked.Map, Asked.Vote);
+                RemovePresences("vou de warp; o mapa nao vem ate aqui");
+                s_pending_warp = PendingWarp();
+                s_pending_warp.Active = true;
+                s_pending_warp.Map = Asked.Map;
+                s_pending_warp.Bonfire = Asked.Bonfire;
+                s_pending_warp.Vote = Asked.Vote;
+                s_pending_warp.At = Now + kWarpAnnounceMs;
+                s_await.ByWarp = true;
+            }
         }
     }
 
