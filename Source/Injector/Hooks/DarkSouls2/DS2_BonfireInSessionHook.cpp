@@ -427,6 +427,13 @@ namespace
     BonfireLit_p s_bonfire_lit = nullptr;
     NetTick_p s_original_net_tick = nullptr;
     std::atomic<ULONGLONG> s_quiet_until{ 0 };
+    // The window cannot end on "the world is up", because the world is still
+    // up at the instant it is armed - the warp has not torn anything down
+    // yet. Measured 16/09: the window opened and closed three milliseconds
+    // later having skipped **zero** ticks, so the silence never happened and
+    // the run proved nothing about it. It ends on "the world went away and
+    // came back", which is two edges, not one.
+    std::atomic<bool> s_quiet_saw_teardown{ false };
     std::atomic<uint64_t> s_quiet_skipped{ 0 };
     std::atomic<uint64_t> s_quiet_windows{ 0 };
     PresenceRemove_p s_presence_remove = nullptr;
@@ -1227,19 +1234,28 @@ namespace
                 // The cap, so a load that never finishes cannot leave the net
                 // silent forever.
                 s_quiet_until.store(0);
-                Append(StringFormat("rede: a janela de silencio acabou pelo teto de %llu ms; volto a bater\n",
-                    (unsigned long long)kQuietCapMs));
+                Append(StringFormat("rede: a janela acabou pelo teto de %llu ms (%s, %llu batida(s) puladas); volto a bater\n",
+                    (unsigned long long)kQuietCapMs,
+                    s_quiet_saw_teardown.load() ? "o mundo caiu e nao voltou" : "o mundo nunca caiu",
+                    (unsigned long long)s_quiet_skipped.load()));
             }
             else if (!WorldIsUp())
             {
+                s_quiet_saw_teardown.store(true);
                 s_quiet_skipped.fetch_add(1);
                 return;     // nothing to walk, so nothing walks
             }
-            else
+            else if (s_quiet_saw_teardown.load())
             {
                 s_quiet_until.store(0);
                 Append(StringFormat("rede: o mundo voltou; %llu batida(s) puladas\n",
                     (unsigned long long)s_quiet_skipped.load()));
+            }
+            else
+            {
+                // Still the old world, before the warp took it down. Let the
+                // net run normally until it does.
+                s_quiet_skipped.fetch_add(0);
             }
         }
         s_original_net_tick(Object, Delta);
@@ -1254,6 +1270,7 @@ namespace
             return;
         }
         s_quiet_skipped.store(0);
+        s_quiet_saw_teardown.store(false);
         s_quiet_windows.fetch_add(1);
         s_quiet_until.store(GetTickCount64() + kQuietCapMs);
         Append(StringFormat("rede (%s): parei a batida ate o mundo voltar (teto %llu ms)\n", Why,
@@ -2342,6 +2359,7 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         s_quiet_until.store(0);
+        s_quiet_saw_teardown.store(false);
         if (s_original_net_tick != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_net_tick, NetTickHook);
