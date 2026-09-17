@@ -357,6 +357,63 @@ tela de carregamento do jogo serve de cortina.
 > impede `FUN_1405170e0` de chamar a função que quebra. Nenhum dos dois foi
 > testado.
 
+> ## O teste do sync, e o que ele revelou sem querer (16/09, 22:24)
+>
+> A leitura ao vivo tinha fechado bonito: o subsistema `*(raiz+0x28)` guarda o
+> **id do mapa corrente** em `+0x18`, estado em `+0x08`, e trinta registros de
+> `0x18` bytes com ponteiro para personagem em `+0x10`. **Os dois endereços das
+> duas quedas eram os registros 11 e 24 desse vetor**, ambos com etiqueta
+> `0x7f00` e bandeiras `0x11` — exatamente a combinação que chega na consulta
+> de papel. O encaixe era perfeito.
+>
+> O conserto: escrever 0 no estado, que é o estado ocioso do próprio jogo e
+> desliga o ramo que quebra.
+>
+> **Não funcionou, por dois motivos, e o primeiro é o que importa.**
+>
+> **1. A escrita não gruda.** `sync para` levou o estado de 1 para 0 às
+> 22:23:59. Treze segundos depois, no momento da viagem, o log da própria
+> viagem leu **estado 1**: a máquina de estados do jogo tinha restaurado
+> sozinha. A intervenção não estava em vigor quando importava. Qualquer
+> conserto aqui tem que ser um detour em `FUN_1405170e0`, não uma escrita.
+>
+> **2. E eu mudei duas variáveis de novo.** O destino desta corrida foi Majula
+> (`0a040000`) e não Heide (`0a1f0000`), porque o host já estava em Heide.
+> Então esta corrida não é comparável às duas anteriores.
+>
+> **A queda mudou de endereço**, de `+0x5180a8` para `+0x3ce81c`:
+>
+>     1403ce810:  mov 0x10(%rbx),%rax      o vetor
+>     1403ce814:  mov (%rax,%rdi,8),%rsi   indice 0x4e
+>     1403ce818:  mov 0x30(%rsi),%rcx      devolveu NULO
+>     1403ce81c:  mov 0x58(%rcx),%eax      <- aqui
+>
+> Com `rax = 0x7fffe81ecfd0`, dentro da mesma vizinhança dos objetos do sync.
+> **Não dá para saber se mudou por causa do destino ou da intervenção**, e a
+> intervenção nem estava ativa. É mais uma lista com referência pendurada.
+>
+> ## A conclusão que eu tiraria, e ela é desagradável
+>
+> Este é o terceiro consumidor distinto a morrer pelo mesmo motivo hoje: as
+> listas de componentes das entidades (74 cópias do mesmo laço), a lista de
+> sincronia de personagens do mapa, e agora este vetor. **Consertar consumidor
+> não termina** — é a mesma lição da manhã, cobrada outra vez à noite.
+>
+> O warp derruba o mundo **assumindo que nada mais aponta para ele**. Uma
+> sessão viva aponta, por várias estruturas ao mesmo tempo. Não parece haver
+> um ponto único onde intervir.
+>
+> Isso empurra a leitura para: **"host warpa enquanto a sessão vive" pode
+> simplesmente não ser viável por remendo.** O que funciona hoje, e funcionou
+> limpo nas duas vezes que foi testado, é o warp com a sessão **encerrada** —
+> que é a D-3a.
+>
+> A regra do projeto é sessão preservada, então a saída, se existir, não é
+> impedir que a sessão toque o mundo durante o warp: é **suspender a sessão**
+> durante a travessia e retomá-la do outro lado, sem que ela seja encerrada do
+> ponto de vista do servidor nem dos saves. Isso não foi investigado, e não sei
+> se existe.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
