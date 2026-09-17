@@ -185,6 +185,13 @@ namespace
     // session is not known and is what the test says.
     constexpr size_t kWarpSlot = 0x40;
     constexpr uint32_t kWatchNativeMs = 180000;   // the crash came four minutes out
+    // The loader saying "idle" with a character in place is not the same as a
+    // world that has settled. Measured 17/09 on the guest, twice: it died 14 ms
+    // and 21 ms after the silence was lifted, both times in the frame right
+    // after. So the net stays quiet for a moment longer, and the moment is
+    // generous on purpose - two seconds of a loading screen costs nothing and
+    // the alternative costs the session.
+    constexpr ULONGLONG kSettleMs = 2000;
 
     // The registry of remote presences - the copies of the other players in
     // this world - read in Ghidra and written down in
@@ -474,6 +481,7 @@ namespace
     // the run proved nothing about it. It ends on "the world went away and
     // came back", which is two edges, not one.
     std::atomic<bool> s_quiet_saw_teardown{ false };
+    std::atomic<ULONGLONG> s_quiet_up_at{ 0 };
     std::atomic<uint64_t> s_quiet_skipped{ 0 };
     std::atomic<uint64_t> s_quiet_windows{ 0 };
     PresenceRegister_p s_original_register = nullptr;
@@ -1336,6 +1344,20 @@ namespace
                 s_quiet_skipped.fetch_add(1);
                 return;     // nothing to walk, so nothing walks
             }
+            else if (s_quiet_saw_teardown.load() && s_quiet_up_at.load() == 0)
+            {
+                // First frame with a world again: start the settle timer and
+                // keep quiet.
+                s_quiet_up_at.store(GetTickCount64());
+                s_quiet_skipped.fetch_add(1);
+                return;
+            }
+            else if (s_quiet_saw_teardown.load() &&
+                     GetTickCount64() - s_quiet_up_at.load() < kSettleMs)
+            {
+                s_quiet_skipped.fetch_add(1);
+                return;     // the world is back but has not settled
+            }
             else if (s_quiet_saw_teardown.load())
             {
                 // The world is back, but the character sync is still the old
@@ -1374,6 +1396,7 @@ namespace
         }
         s_quiet_skipped.store(0);
         s_quiet_saw_teardown.store(false);
+        s_quiet_up_at.store(0);
         s_quiet_windows.fetch_add(1);
         s_quiet_until.store(GetTickCount64() + kQuietCapMs);
         Append(StringFormat("rede (%s): parei a batida ate o mundo voltar (teto %llu ms)\n", Why,
@@ -2516,6 +2539,7 @@ void DS2_BonfireInSessionHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         s_quiet_until.store(0);
         s_quiet_saw_teardown.store(false);
+        s_quiet_up_at.store(0);
         if (s_original_net_tick != nullptr)
         {
             DetourDetach(&(PVOID&)s_original_net_tick, NetTickHook);
