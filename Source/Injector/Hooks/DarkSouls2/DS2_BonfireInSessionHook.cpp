@@ -242,6 +242,23 @@ namespace
     // copy of its bytes: the copy is what the plan warns against, and the
     // session outlives the travel, so the list it lives in should too. If that
     // turns out to be wrong it will show as a failed recreate, not as damage.
+    // A lista viva de membros da sessao, que e de onde o `membro` tem de sair.
+    //
+    // Medido em 17/09: o objeto de rede `*(0x141616cf8)` guarda seis registros
+    // de 0x48 bytes a partir de `+0xb8`, com uma marca de validade em `+0x40`.
+    // Numa sessao de dois havia exatamente dois validos. Os primeiros 0x40
+    // bytes sao o membro - e o tamanho que `FUN_140a3dbd0` copia para o slot.
+    //
+    // Guardar o ponteiro que o jogo passou na entrada nao serve, e isso agora
+    // esta medido e nao suposto: o convidado guardou `0x7FFFFE5C1B80` e a lista
+    // viva trazia `0x7ffffe430600` e `0x7ffffe622280`. No host o atalho
+    // funcionava por sorte; no convidado a recriacao era aceita, o slot era
+    // consumido e nenhuma das cinco entradas nascia.
+    constexpr size_t kNetMembers = 0xb8;
+    constexpr size_t kNetMemberStride = 0x48;
+    constexpr size_t kNetMemberValid = 0x40;
+    constexpr int kNetMemberSlots = 6;
+
     constexpr size_t kPresenceRegisterOffset = 0x51b0e0;
     constexpr uint8_t kPresenceRegisterPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18 };
     constexpr size_t kPlayerBlob = 0x5f0;
@@ -1239,6 +1256,17 @@ namespace
         }
     }
 
+    // O objeto de rede, que hospeda a lista de membros.
+    uintptr_t NetObject()
+    {
+        uintptr_t Root = 0, Net = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 || !ReadPointer(Root, Net))
+        {
+            return 0;
+        }
+        return Net;
+    }
+
     // Puts the captured presence back, by the game's own registration.
     bool RebuildPresence(const char* Why)
     {
@@ -1259,10 +1287,45 @@ namespace
             Append(StringFormat("presencas (%s): ja ha %u viva(s); nao recrio para nao duplicar\n", Why, Alive));
             return false;
         }
-        const uint64_t Went = s_original_register((void*)R, s_member, s_blob, s_blob_flag);
-        Append(StringFormat("presencas (%s): pedi a recriacao com o membro %p; o jogo %s\n", Why, s_member,
-            Went != 0 ? "aceitou (slot pendente preenchido)" : "RECUSOU (sem slot livre ou membro invalido)"));
-        return Went != 0;
+        // Cada membro vivo e tentado, e a prova e a entrada nascer. Com dois
+        // jogadores ha dois candidatos e um deles e este jogador; em vez de
+        // adivinhar qual, tenta-se e olha-se o resultado.
+        const uintptr_t Net = NetObject();
+        if (Net == 0)
+        {
+            Append(StringFormat("presencas (%s): nao achei o objeto de rede\n", Why));
+            return false;
+        }
+        for (int i = 0; i < kNetMemberSlots; ++i)
+        {
+            const uintptr_t Member = Net + kNetMembers + (uintptr_t)i * kNetMemberStride;
+            uint32_t Valid = 0;
+            if (!ReadBytes(Member + kNetMemberValid, &Valid, sizeof(Valid)) || Valid == 0)
+            {
+                continue;
+            }
+            const uint64_t Went = s_original_register((void*)R, (void*)Member, s_blob, s_blob_flag);
+            Append(StringFormat("presencas (%s): membro vivo %d (%p), o jogo %s\n", Why, i, (void*)Member,
+                Went != 0 ? "aceitou" : "recusou"));
+            if (Went == 0)
+            {
+                continue;
+            }
+            // Da tempo de a batida do registro materializar antes de julgar.
+            for (int w = 0; w < 40; ++w)
+            {
+                Sleep(50);
+                uint32_t Now = 0;
+                if (ReadBytes(R + kPresenceAliveCount, &Now, sizeof(Now)) && Now != 0)
+                {
+                    Append(StringFormat("presencas (%s): nasceu pelo membro %d\n", Why, i));
+                    return true;
+                }
+            }
+            Append(StringFormat("presencas (%s): o membro %d foi aceito e nao nasceu; tento o proximo\n", Why, i));
+        }
+        Append(StringFormat("presencas (%s): nenhum membro vivo produziu uma presenca\n", Why));
+        return false;
     }
 
     // Takes every living presence out, by the game's own FUN_14051c820.
