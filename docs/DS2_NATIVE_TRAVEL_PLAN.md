@@ -301,6 +301,62 @@ tela de carregamento do jogo serve de cortina.
 > **Custo.** O host caiu (Samuel 30 → 40, contando a queda da fase 2). O
 > convidado ficou em 80 e foi parado sem `--force`.
 
+> ## Quem é o `param_1` e quem o invalida (16/09, leitura estática)
+>
+> **O despachante.** `FUN_140514020(param_1, delta)` é a batida por quadro da
+> camada de rede, e ela percorre os slots do objeto global `DAT_141616cf8`:
+>
+>     raiz[0] = *raiz        -> FUN_140520ed0      (e lido em +0xa4 e +0xb4)
+>     raiz[1] = raiz+0x08    -> FUN_14051e860
+>     raiz[2] = raiz+0x10    -> FUN_14025b460
+>     raiz[3] = raiz+0x18    -> FUN_1402c9540
+>     raiz[4] = raiz+0x20    -> FUN_14051c940      o registro de presencas
+>     raiz[5] = raiz+0x28    -> FUN_1405170e0      <- o que quebra
+>     raiz[6] = raiz+0x30    -> FUN_140291170
+>
+> Então **`param_1` é `*(0x141616cf8 + 0x28)`**: um irmão do registro de
+> presenças, no mesmo objeto de rede, batido todo quadro. Ele tem estado em
+> `+0x08` (0, 1 ou 2), uma trava em `+0x78` que `FUN_1405170e0` fecha no começo
+> e abre no fim, e só chama a função que quebra quando o estado é 1 ou 2.
+>
+> **O objeto que morre.** Dentro de `FUN_140518230` existe um vetor:
+>
+>     registros = *(param_1 + 0x10)     contagem em param_1 + 0x0c
+>     cada registro tem 0x18 bytes:
+>       +0x00  etiqueta (o caminho que quebra exige 0x7f00)
+>       +0x04  float que acumula o delta do quadro
+>       +0x0a  bandeiras; bit 0 "em uso", bit 1 "ja tratado"
+>       +0x10  **um ponteiro para um objeto do jogo**
+>
+> É esse `registro+0x10` que vai para `FUN_1405180a0`, que lê `+0x60` dele,
+> depois `+0x18` daquilo, e indexa a tabela de papéis `DAT_1410c0050`. Nas duas
+> quedas o `+0x60` devolveu ponto flutuante (`3f800000293988ec` e `bf7c1c5d`),
+> e os dois endereços eram vizinhos (`0x7fffe81ed980` e `0x7fffe81ed160`):
+> elementos de uma mesma coleção, reaproveitados.
+>
+> `FUN_1405180a0` também chama `FUN_14017b7e0(param_1 + 0x10)`, que é da mesma
+> família dos `GetComponent<T>` que já nos morderam — o objeto é do tipo
+> personagem.
+>
+> **Quem invalida:** o próprio warp. O carregador passa pelo estado `0x14`, que
+> destrói mapa e personagens e zera `ctx+0xd0`. O objeto de `registro+0x10`
+> morre ali, e **nada limpa o registro** — o bit "em uso" continua ligado, a
+> etiqueta continua `0x7f00`, e no quadro seguinte a camada de rede anda por
+> cima dele. É a mesma doença de sempre, numa lista nova.
+>
+> **Isto é leitura, não medição.** O que falta medir é quem escreve por cima do
+> objeto, e agora há um alvo com endereço: a cadeia
+> `*(*(0x141616cf8 + 0x28) + 0x10) + i*0x18 + 0x10` dá o objeto **antes** do
+> warp, e a vigia de página (`wp` em `DS2_Trace.req`) pode ser armada sobre ele
+> enquanto ele ainda existe. É a ferramenta que achou o corpo rígido, e é a
+> primeira vez nesta investigação que ela tem um endereço para vigiar.
+>
+> **E sugere um conserto mais barato que reconstruir presença:** limpar o bit
+> "em uso" dos registros com etiqueta `0x7f00` antes do warp, ou segurar o
+> estado de `*(raiz+0x28)` em 0 durante a transação de viagem, que é o que
+> impede `FUN_1405170e0` de chamar a função que quebra. Nenhum dos dois foi
+> testado.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
