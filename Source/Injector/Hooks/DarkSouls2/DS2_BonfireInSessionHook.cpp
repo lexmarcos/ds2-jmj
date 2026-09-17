@@ -163,6 +163,27 @@ namespace
     constexpr size_t kComponentEntity = 0x08;
     constexpr size_t kEntityPosition = 0x70;
 
+    // The guest's own travel, which cannot go through the bonfire chain.
+    //
+    // Every warp goes through FUN_1401c2a80(ctx, pedido, flag), slot +0x40 of
+    // the context's vftable. The third argument is what decides whose world
+    // the player lands in: the entry folds it into `ctx+0x24b1 & 0x20`, and at
+    // loader state 0x12 that becomes the `0x40` bit, which is "I am a phantom
+    // in somebody else's world". The bonfire chain always passes 0, so a guest
+    // travelling by the menu goes home - which is what attempt 4 of the old
+    // work saw and never explained.
+    //
+    // So the guest builds the same request the host builds (motive 2, by
+    // FUN_1401843b0) and calls the warp itself with flag 1. The motive gate
+    // lets motive 2 through whenever the multiplay counter is positive, which
+    // it is inside a session.
+    //
+    // What this does **not** do is rebuild the snapshot of the host's world
+    // (flags, bonfires, objects), which only the join handler at session state
+    // 4 writes. Whether the guest needs it again after a warp inside the same
+    // session is not known and is what the test says.
+    constexpr size_t kWarpSlot = 0x40;
+
     // The registry of remote presences - the copies of the other players in
     // this world - read in Ghidra and written down in
     // DS2_PRESENCE_REBUILD_PLAN.md, whose thirteen prologues were checked
@@ -421,6 +442,7 @@ namespace
     using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
     using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
     using NetTick_p = void(*)(void* Object, float Delta);
+    using Warp_p = char(*)(void* Context, void* Request, uint32_t Flag);
     using PresenceRegister_p = uint64_t(*)(void* Registry, void* Member, void* Blob, uint8_t Flag);
     using PresenceRemove_p = void(*)(void* Entry);
     using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
@@ -1412,6 +1434,30 @@ namespace
         return (int32_t)State;
     }
 
+    // The guest's travel: the host's request, the guest's flag.
+    bool TravelAsPhantom(uint16_t Bonfire)
+    {
+        uintptr_t Context = 0, Vftable = 0;
+        if (s_travel_build == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context, Vftable) || Vftable == 0 || MapOfBonfire(Bonfire) == 0xffffffff)
+        {
+            Append("convidado: nao da para viajar (contexto ou fogueira fora da tabela)\n");
+            return false;
+        }
+        uintptr_t Entry = 0;
+        if (!ReadPointer(Vftable + kWarpSlot, Entry) || Entry == 0)
+        {
+            Append("convidado: nao achei a entrada do warp no slot +0x40\n");
+            return false;
+        }
+        uint8_t Request[0x40] = {};
+        s_travel_build(Request, Bonfire, 2);
+        const char Took = ((Warp_p)Entry)((void*)Context, Request, 1);
+        Append(StringFormat("convidado: warp para a fogueira %04x com a flag de outro mundo; o jogo %s\n",
+            (unsigned)Bonfire, Took != 0 ? "aceitou" : "RECUSOU"));
+        return Took != 0;
+    }
+
     // The host's own travel, started by the game's functions. False when the
     // bonfire is not in the table.
     bool StartTravel(uint16_t Bonfire)
@@ -2010,6 +2056,14 @@ void DS2_BonfireInSession_Tick()
                     {
                         ReportPresences("pedido");
                     }
+                }
+                else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
+                {
+                    ReportNetSync("antes da viagem de fantasma");
+                    QuietNet("viagem de fantasma");
+                    const bool Went = TravelAsPhantom((uint16_t)Bonfire);
+                    Append(StringFormat("pedido: viagem de fantasma para a fogueira %04x do mapa %08x: %s\n",
+                        Bonfire, Map, Went ? "iniciada" : "recusada"));
                 }
                 else if (sscanf_s(Line.c_str(), "nativo %x %x", &Map, &Bonfire) == 2)
                 {
