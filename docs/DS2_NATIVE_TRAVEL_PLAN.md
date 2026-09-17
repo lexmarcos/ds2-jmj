@@ -568,6 +568,63 @@ tela de carregamento do jogo serve de cortina.
 > uma captura na janela instável depois da viagem pode encontrá-lo já quebrado,
 > que é coisa diferente.
 
+> ## Onde a viagem em conjunto chegou (17/09)
+>
+> **A chegada funciona, e é reprodutível.** Três corridas independentes com a
+> régua completa:
+>
+>     host:      papel 0, Heide, fogueira 7ba2
+>     convidado: papel 1, ao lado do host
+>     sessao:    verificada
+>
+> A receita, na ordem, e cada passo foi medido separadamente:
+>
+> 1. o host retira as presenças (`FUN_14051c820` por entrada viva) — medido:
+>    tira sem tocar na sessão;
+> 2. o host viaja pela cadeia nativa com a batida da rede calada durante o
+>    carregamento (`FUN_140514020` silenciada, ~155 batidas puladas);
+> 3. **três segundos depois** o convidado viaja pelo warp direto com flag 1, a
+>    flag de "sou fantasma no mundo de outro" — zero segundos e doze segundos
+>    ambos falham, o intervalo importa;
+> 4. o host recria a presença com o blob capturado na entrada de
+>    `FUN_14051b0e0`; a cópia recriada **se move** quando o dono anda.
+>
+> A rede só volta **dois segundos depois** de o mundo assentar. Sem isso o
+> convidado morria 14 e 21 ms depois da soltura, duas de duas.
+>
+> **O que falta: a sessão cai 180 a 190 segundos depois.**
+>
+> Não é o watchdog de 300 s — a marca `ctrl+0x1b4` foi renovada à mão e a queda
+> veio igual, aos 190 s. O servidor diz quem sai: **o convidado**, por
+> `RequestNotifyLeaveSession`. E o log dele mostra por quê, em duas linhas:
+>
+>     canal 7: enviados=0 recebidos=333
+>     sessao ...: 1 membros (so eu)  ->  0 membros
+>
+> A sessão P2P do convidado perde o host da lista de membros e então ele sai
+> sozinho. O warp do convidado quebra a participação dele, não a do host.
+> `FUN_1402c2820`, que escreve o `+0x120` da saída, tem guarda `+0xf8 < 3` e o
+> convidado ativo está em 7, então **não é por ali** — o caminho ainda não foi
+> achado.
+>
+> ## Armadilhas de bancada que invalidaram corridas
+>
+> Registradas porque cada uma me fez medir coisa nenhuma achando que media:
+>
+> - o backup usado como base tinha o **host em Heide e o convidado em Majula**;
+>   mapas diferentes nunca formam sessão, e o sintoma lê como party quebrado.
+>   Existe agora `base-majula` com os dois no mesmo lugar;
+> - **`session end` pausa o `DS2_Party` e o `up` não retoma** — sem um `retoma`
+>   explícito nenhuma sessão se forma depois de uma limpeza;
+> - **`game stop` falha calado com sessão viva**, os jogos seguem com o estado
+>   velho e o `up` seguinte não faz nada. Um ciclo inteiro rodou com o convidado
+>   já morto sem eu notar, e produziu um "a sessão sobreviveu seis minutos" de
+>   uma sessão que não existia;
+> - **sobreviver não é passar**: houve corrida com os dois jogos de pé, sem
+>   queda, e sem co-op nenhum — convidado de volta ao próprio mundo, papel 0.
+>   A régua tem de conferir processo vivo, sessão verificada, papel de fantasma
+>   e mapa de destino, na chegada **e** ao longo da vigília.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
