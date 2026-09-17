@@ -414,6 +414,52 @@ tela de carregamento do jogo serve de cortina.
 > ponto de vista do servidor nem dos saves. Isso não foi investigado, e não sei
 > se existe.
 
+> ## O silêncio da rede: funcionou, e a queda esperou (16/09, 22:50)
+>
+> O detour em `FUN_140514020` — a batida única de onde toda a camada de rede é
+> percorrida — foi armado antes do warp e solto quando o mundo voltasse.
+>
+> **A primeira corrida não provou nada e o log disse por quê:** a janela abriu e
+> fechou em três milissegundos, com **zero** batidas puladas, porque no instante
+> de armar o mundo ainda estava de pé. A condição de saída tinha uma borda só.
+> Corrigida para duas — o mundo cair e depois voltar.
+>
+> **A segunda corrida funcionou:** 192 batidas puladas em 5,3 s, com o mundo
+> caindo e voltando. Nenhum subsistema de rede andou enquanto não havia mundo.
+>
+> **E o host caiu assim mesmo, no mesmo milissegundo em que a janela fechou:**
+>
+>     22:50:42.945  rede: parei a batida ate o mundo voltar
+>     22:50:48.278  rede: o mundo voltou; 192 batida(s) puladas
+>     22:50:48.279  excecao c0000005 em +0x5180a8
+>
+> Em `+0x5180a8`, que é a consulta de papel do sync — a mesma de antes.
+>
+> **O que isso diz, com precisão.** O silêncio não era pouco: era cedo demais
+> para acabar. Quando o carregador volta ao ocioso e o personagem existe, a
+> **lista de sincronia ainda é a do mapa velho** — no momento da viagem ela
+> lia `mapa 0a1f0000` e o destino era `0a040000`. A primeira batida depois do
+> silêncio anda a lista velha e morre.
+>
+> **O conserto que a evidência aponta**, e ele é de uma linha: ao soltar a
+> janela, **pôr o estado do sync em 0 antes** de deixar a batida passar, para
+> que `FUN_1405170e0` tome o ramo que reconstrói em vez do que anda. A escrita
+> avulsa de 22:23 não colou porque foi treze segundos antes e a máquina
+> restaurou; no instante exato da soltura, a batida seguinte é a que lê.
+>
+> **Mas é a quinta intervenção**, e as quatro anteriores tiveram esta mesma
+> forma: evidência boa, conserto plausível, e a queda aparecendo no lugar
+> seguinte. Vale dizer isso antes de gastar mais.
+>
+> **Duas correções ao que eu já tinha escrito aqui.** A queda **não** é
+> determinística, e também **não** é imediata: a corrida das 22:41 pareceu
+> limpa, e o host morreu minutos depois, o que só se descobriu quando o
+> `session end` falhou por falta de processo. Qualquer medição daqui para
+> frente precisa vigiar minutos, não os 3,7 s do primeiro caso.
+>
+> **Custo até aqui:** Samuel de 10 a 70 pontos ao longo da noite. Chico intacto
+> em 80 — o convidado nunca pagou por esta linha de trabalho.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
