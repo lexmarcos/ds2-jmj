@@ -7,6 +7,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
@@ -183,6 +184,7 @@ namespace
     // 4 writes. Whether the guest needs it again after a warp inside the same
     // session is not known and is what the test says.
     constexpr size_t kWarpSlot = 0x40;
+    constexpr uint32_t kWatchNativeMs = 180000;   // the crash came four minutes out
 
     // The registry of remote presences - the copies of the other players in
     // this world - read in Ghidra and written down in
@@ -2059,6 +2061,7 @@ void DS2_BonfireInSession_Tick()
                 }
                 else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
                 {
+                    DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma");
                     ReportNetSync("antes da viagem de fantasma");
                     QuietNet("viagem de fantasma");
                     const bool Went = TravelAsPhantom((uint16_t)Bonfire);
@@ -2084,6 +2087,13 @@ void DS2_BonfireInSession_Tick()
                     // case 2 that ends the session needs it >= 5 (or 0, which
                     // wraps). So the warp should leave the session standing.
                     const bool Owner = OwnsTheWorld();
+                    // The travel watch's window is what runs the sweep of the
+                    // entity component lists. The native path never opened it,
+                    // so the whole net of guards was bypassed - which is how a
+                    // dead node survived a travel on 17/09 and killed the host
+                    // four minutes later. Three minutes, because the crash was
+                    // delayed and a short window proves nothing.
+                    DS2_TravelWatch::Open(kWatchNativeMs, "viagem nativa");
                     ReportPresences("antes da viagem nativa");
                     ReportNetSync("antes da viagem nativa");
                     QuietNet("viagem nativa");

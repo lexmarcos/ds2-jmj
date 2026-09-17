@@ -1028,7 +1028,16 @@ namespace
     // the same log line, and that cost a whole cycle to find out.
     void TendComponent(uintptr_t Component)
     {
-        if (Component == 0 || !WindowOpen())
+        // The sweep is **not** gated on WindowOpen(): that also stops at
+        // kMaxLines, which is a cap on writing, not on protecting. Measured
+        // 17/09: a native travel left a dead node in an entity's list and the
+        // host died on it **four minutes later**, at +0x1e5c36, in one of the
+        // 74 GetComponent<T> copies, reading `0x3f800000` - the float 1.0 -
+        // where a vftable belongs. A window that closes on a log cap would
+        // have let exactly that through.
+        const ULONGLONG Until = s_open_until.load();
+        const bool Travelling = Until != 0 && GetTickCount64() < Until;
+        if (Component == 0 || !Travelling)
         {
             return;
         }
