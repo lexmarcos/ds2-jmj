@@ -18,6 +18,7 @@ server.
 | [DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md](DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md) | An outside opinion on rebuilding group travel; **its central premise was refuted — read the two below with it** |
 | [DS2_PRESENCE_REBUILD_PLAN.md](DS2_PRESENCE_REBUILD_PLAN.md) | The refutation: removing a player's presence is native and per-player, rebuilding it natively is not; the hybrid and its phases |
 | [DS2_PRESENCE_ASTRA_REVIEW.md](DS2_PRESENCE_ASTRA_REVIEW.md) | A third pass over both: the offsets all check out, and the crash we blamed on one function belongs to another |
+| [DS2_NATIVE_TRAVEL_PLAN.md](DS2_NATIVE_TRAVEL_PLAN.md) | **Rebuilding group travel on the game's own loading**: the warp chain, the four parts of a borrowed world, two watchdogs, and the one free measurement that can kill the whole idea |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas; carries corrections where it was wrong |
 | [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md) | **Multiplayer in Majula and the other closed areas: the three things required, how to apply and verify them** |
 | [DS2_SERVER_DEPLOY.md](DS2_SERVER_DEPLOY.md) | **Running the server on a small shared host: build here, seed the config, the service, the firewall, the key** |
