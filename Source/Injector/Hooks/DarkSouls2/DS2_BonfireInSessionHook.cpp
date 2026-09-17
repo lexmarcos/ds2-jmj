@@ -1817,6 +1817,35 @@ namespace
     // Puts the sync back to its idle state, which is what stops
     // FUN_1405170e0 from walking a list of characters the warp is about to
     // destroy. Returns the state it found, or -1 when there is nothing to do.
+    // Points the character sync at the map this machine now stands in.
+    //
+    // `sync+0x18` is the map whose owner the sync looks objects up in, and
+    // only a real load writes it: the old transport moves the player without
+    // one, so it stays on the map that was left. Read on 17/09 from every
+    // guest death at +0x517843 - `FUN_1405177c0` takes that id (rdx held the
+    // origin map every time), finds its owner, and reads the owner's `+0x168`
+    // table with no load-state guard. The origin's thirty-second hold ends,
+    // the map unloads, the table is null, and the next object packet
+    // (`FUN_140516380`, kind 0x14, gated on nothing but `+0x10`) dies 170 ms
+    // later. Idling the state did nothing because packets never look at it.
+    void RetargetNetSync(uint32_t Map, const char* Why)
+    {
+        const uintptr_t Sync = NetSync();
+        uint32_t Before = 0;
+        if (Sync == 0 || Map == 0 || !ReadBytes(Sync + kSyncMap, &Before, sizeof(Before)))
+        {
+            Append(StringFormat("sync (%s): nao da para reapontar (sync %p, mapa %08x)\n", Why, (void*)Sync, Map));
+            return;
+        }
+        if (Before == Map)
+        {
+            Append(StringFormat("sync (%s): ja aponta para o mapa %08x\n", Why, Map));
+            return;
+        }
+        WriteBytes(Sync + kSyncMap, &Map, sizeof(Map));
+        Append(StringFormat("sync (%s): mapa %08x -> %08x\n", Why, Before, Map));
+    }
+
     int32_t IdleNetSync(const char* Why)
     {
         const uintptr_t Sync = NetSync();
@@ -2371,6 +2400,12 @@ void DS2_BonfireInSession_Tick()
     const bool MovingNow = DS2_DeathIntercept::Moving();
     if (s_was_moving && !MovingNow)
     {
+        // The map first, then the state: the rebuild that state 0 triggers
+        // fills the records for whatever map the sync names.
+        if (DS2_DeathIntercept::TravelOutcome() == DS2_DeathIntercept::Outcome::Arrived)
+        {
+            RetargetNetSync(s_go.Map, "cheguei pelo transporte antigo");
+        }
         IdleNetSync("a viagem pelo transporte antigo terminou");
     }
     s_was_moving = MovingNow;
