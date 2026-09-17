@@ -758,6 +758,61 @@ tela de carregamento do jogo serve de cortina.
 > **Ainda não medido:** se depois do `snapshot` as flags batem, os scripts
 > voltam a avaliar e a fogueira aparece — é o próximo teste.
 
+> ## O `snapshot` medido, e a campanha das quatro pernas (17/09, 16:43–17:07)
+>
+> Com o pedido automático (`AskSnapshot` na chegada do warp de fantasma) e o
+> host de volta a `0x10` depois de exportar, a fogueira do convidado **passou
+> a funcionar** — o defeito que o usuário apontou. Prova de uma perna
+> (Heide, 16:43), régua completa:
+>
+> - **flags iguais** nos dois lados depois do `snapshot` (antes: convidado
+>   zerado; a categoria 10 voltou a bater);
+> - **scripts avaliando**: 4 consultas de `esd` por quadro no convidado,
+>   contra 0 antes;
+> - **`A: Rest at bonfire`** na tela do convidado, e ele descansou
+>   (`convidado: descanso na fogueira 00007ba2 no mundo do host`);
+> - **sessão verificada** depois de tudo (`p2pSessionVerified: true`).
+>
+> **O host de volta a 0x10.** O export (`FUN_1402bf8f0`) move o controlador do
+> host de `0x10` para `0xe`, onde ele espera o "estou dentro" do convidado —
+> mensagem que o convidado **não** manda, porque os estados 5 e 6 do import
+> foram pulados. Com o host em `0xe` a sessão seguiu com pacotes e as duas
+> presenças, mas a régua a leu não-verificada e as checagens do próprio jogo
+> para um host jogando batem em `0x10`. Escrever `0x10` de volta ao vivo
+> devolveu verificada. Lido no binário (`FUN_1402c03e0`, o handler do `0xf`):
+> é o estado que fecha o join do convidado do lado do host.
+>
+> **O registro de volta para casa não se mexeu, e isso é o certo.** Sondado
+> nas quatro pernas em `ctrl+0x1a0` (0x48 bytes) e no `character`: ficou
+> `0a1f0000/00007ba7` — a fogueira de casa do convidado, em Heide — do join
+> até o descanso, em todos os mapas. O convidado viaja como fantasma, descansa
+> no mundo do host (que reinicia o mundo do **host**), e o próprio ponto de
+> renascimento dele nunca é contaminado. É exatamente o aviso da seção 2:
+> só o host grava `FUN_14044fe30`.
+>
+> **A campanha: 4 de 4 pernas, com uma queda na última.** Iron Keep, Brume,
+> Majula, Heide, uma emenda na outra sem parar a sessão. As três primeiras
+> passaram inteiras — warp, pedido automático, import, presença, descanso,
+> dois minutos de vigília com sessão verificada. A **quarta (Heide)** derrubou
+> o convidado três segundos dentro do warp, antes de chegar:
+>
+>     17:06:12  excecao c0000005 em +0x2fd4b0 (thread 360), lendo 0xffff...
+>     17:06:12  excecao c0000005 em +0x3f64a7 (thread 360), lendo 0x8
+>     17:06:12  excecao c0000005 em +0x3f6326 (thread 360), lendo 0x20
+>
+> É o desmonte do mapa velho do convidado (Majula) enquanto Heide carrega:
+> `FUN_1403f6300`/`FUN_1403f4500` (o destrutor do `MapModelComponent`),
+> chamado de `FUN_1403ba070` → `FUN_1403ce966`, sobre um nó podre da lista de
+> componentes — a mesma classe das quedas do host, mas na **thread de
+> trabalho 360**, não na thread do jogo (364) onde a varredura do
+> `DS2_TravelWatch` roda. O teto de relatos de exceção, subido de 32 para 256
+> nesta corrida, foi o que deixou os três serem gravados; sem ele a queda
+> ficaria sem registro. A varredura não alcança a thread 360 — é o mesmo
+> limite anotado na morte de 17/09 em `+0x2f0987`. **É intermitente**: a mesma
+> Heide passou limpa às 16:43. Fica como o próximo alvo de estabilidade: um
+> guarda do desmonte que rode na thread de trabalho, ou calar essa lista
+> durante o warp do convidado.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
