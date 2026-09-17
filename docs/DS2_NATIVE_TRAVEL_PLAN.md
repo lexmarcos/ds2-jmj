@@ -252,6 +252,55 @@ convidado). Se for < 5, o host viaja nativo sem encerrar e D fica barato.
 sobrevive além de 300 s e que o watchdog não arma. Aqui também se responde se a
 tela de carregamento do jogo serve de cortina.
 
+> ## A primeira metade de 3b, medida em 16/09: **a hipótese caiu**
+>
+> A regra decidida é viagem em conjunto com **sessão preservada**, que é a 3b.
+> O experimento mais barato para a primeira metade: se o host morre 3,7 s depois
+> do warp porque as presenças são desmontadas debaixo de uma sessão viva, então
+> retirá-las antes deve fazer a queda sumir.
+>
+> **Retirar funciona.** `presenca` leu o registro `0x7FFFFE479D80` com 1 viva,
+> entrada 0, estado 2, papel 1, net id 257, personagem `0x7FFFEB7B9E60`.
+> `presenca retira` chamou `FUN_14051c820` e três segundos depois o registro
+> lia **0 vivas**.
+>
+> **E a sessão sobreviveu à retirada** — `p2pSessionVerified: true`, host em
+> `0x10`, convidado em 7, pacotes cruzando. Esta é a primeira **medição** da
+> premissa central do `DS2_PRESENCE_REBUILD_PLAN.md`, que até aqui era leitura
+> estática: `FUN_14051c820` tira uma presença sem tocar na sessão.
+>
+> **Mas o host caiu do mesmo jeito**, no mesmo endereço e no mesmo tempo:
+>
+>     22:03:27.531  presencas (antes da viagem nativa): 0 viva(s)
+>     22:03:27.531  host: viagem iniciada para a fogueira 7ba7
+>     22:03:31.200  excecao c0000005 em +0x5180a8, rax=00000000bf7c1c5d
+>
+> **Onde eu errei.** O "controle" da fase 2 — o caminho de fallback que chegou
+> limpo — tirava as presenças **e** encerrava a sessão. Eu atribuí às presenças
+> o que podia ser de qualquer uma das duas. Com presenças fora e sessão viva a
+> queda continua, então **as presenças não são a causa**. É a terceira hipótese
+> minha derrubada por medição hoje, e as três tinham a mesma forma: uma
+> explicação plausível sustentada por um teste que não separava as variáveis.
+>
+> **O que a queda é, com precisão.** `FUN_1405180a0(param_1)`:
+>
+>     uVar4 = *(param_1 + 0x60);      // devolveu bf7c1c5d, um float
+>     iVar1 = *(int *)(uVar4 + 0x18); // <- +0x5180a8, aqui
+>     ... &DAT_1410c0050 + papel * 0x10
+>
+> É uma consulta de **papel**, na mesma tabela de 20 papéis que o case 2 de
+> `FUN_1402bd0d0` indexa. Chamada por `FUN_140518230(objeto, float)`, que é uma
+> **atualização por quadro**. Ou seja: o warp invalida um objeto e a máquina de
+> rede continua rodando por cima dele no quadro seguinte.
+>
+> **O que isso muda no plano.** A 3b não começa com "retirar as presenças". Ela
+> começa com **parar a máquina de rede durante o warp**, ou impedir que ela
+> ande sobre o objeto que o warp derruba. Retirar presença continua sendo
+> necessário para a reconstrução, mas não é o que evita esta queda.
+>
+> **Custo.** O host caiu (Samuel 30 → 40, contando a queda da fase 2). O
+> convidado ficou em 80 e foi parado sem `--force`.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
