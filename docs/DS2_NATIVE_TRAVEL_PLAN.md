@@ -13,7 +13,8 @@ Leia com `DS2_PRESENCE_ASTRA_REVIEW.md` (que define as alternativas A a D) e
 ## A conclusão que decide o rumo
 
 **D puro — carregamento nativo nos dois lados preservando a mesma sessão — não
-está disponível hoje**, e por dois motivos independentes:
+está disponível hoje**, e por dois motivos independentes. **O primeiro deles
+foi medido em 16/09 e caiu** (ver a caixa na fase 1); o segundo continua de pé:
 
 1. **A viagem nativa do host provavelmente encerra a própria sessão.**
    `FUN_1402bd0d0` (slot `+0xe0` do host ctrl) é chamado por `FUN_1402c7ec0` a
@@ -136,6 +137,39 @@ manda nada por segundos. Rankeia à frente do de 300 s.
 | cortina desenhada por nós | **em aberto** | provavelmente vira a tela do próprio jogo; `FUN_140b06270` é inerte fora de um warp real e **não foi testado dentro de um** |
 
 ## 5. As fases
+
+> ## Fase 1 medida em 16/09: **passou**
+>
+> Sessão de co-op viva e verificada, sem viajar. O controlador do host
+> (`0x7ffffe5bf120`, vftable `0x1410d7998`, `+0x150 = 0x10`) tem
+>
+>     ctrl+0x30 = 1
+>
+> A previsão estática era 7. **Está errada.** Com 1, a condição do case 2 é
+> `3 < (unsigned)(1 - 1)` = `3 < 0` = falsa, e o ramo que manda `0x15` ao par e
+> encerra a sessão **não roda**. A viagem nativa do host **não mata a sessão**.
+>
+> A aritmética foi conferida no binário e não só na decompilação do relatório:
+> em `FUN_1402bd0d0`, `param_1` é `longlong*`, então `param_1[6]` é o byte
+> `+0x30` e `param_1+0x37` como `uint*` é `+0x1b8`. Confere. E vale registrar o
+> outro lado da comparação: ela é verdadeira para `x >= 5` **e também para
+> `x == 0`**, que dá wrap em unsigned — então zero é tão perigoso quanto sete.
+>
+> A varredura pela vftable devolve dois endereços; o segundo (`0xa38fb08`) é
+> falso positivo — o `+0x150` dele é um ponteiro, não um estado.
+>
+> **Escopo desta medição:** uma amostra, um convidado, fantasma branco invocado
+> pelo sistema de party, logo depois da invocação. Não cobre invasor nem outros
+> papéis, e não foi observada ao longo de uma sessão inteira.
+>
+> **Consequência:** D-mesma-sessão **não** precisa do hook host-side de
+> supressão de fim de sessão. Esse risco, que era o mais caro do plano, está
+> fora. O caminho segue para a fase 2.
+>
+> **De brinde, para a fase 2:** no mesmo controlador, `+0x1b8 = 0x261` — o bit
+> `0x10` **não** está armado — e `+0x1b4 = 0.0` com o relógio `+0x08` em 65,9 s.
+> Ou seja `+0x1b4` nunca foi renovado; se algo armar aquele bit depois de 300 s
+> de sessão, o watchdog dispara **na hora**, sem os 300 s de folga.
 
 **Fase 1 — custo zero, e é a que pode matar D inteiro.** Ler `+0x30` do host
 ctrl (`NetSummonAcceptMultiplayCtrl`, vftable `0x1410d7998`) **numa sessão de
