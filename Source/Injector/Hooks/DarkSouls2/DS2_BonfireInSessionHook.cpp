@@ -3081,7 +3081,13 @@ void DS2_BonfireInSession_Tick()
     }
     // This machine is done: tell the host how it went, then stand behind the
     // loading screen until the host says everybody is in.
-    if (s_await.Active && !s_await.Reported && !s_await.ByWarp && !s_go.Active)
+    // `s_probe.Active` belongs in this guard, and leaving it out cost a run.
+    // The travel outcome still holds `Arrived` from the **previous** travel
+    // while the probe is deciding, and nothing else here is false yet - the
+    // player has not been sent anywhere. Measured 17/09, 19:14: the guest
+    // announced the probe and reported "cheguei" in the same millisecond, the
+    // host released the group, and the guest never left Heide.
+    if (s_await.Active && !s_await.Reported && !s_await.ByWarp && !s_go.Active && !s_probe.Active)
     {
         const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
         if (Outcome == DS2_DeathIntercept::Outcome::Arrived)
