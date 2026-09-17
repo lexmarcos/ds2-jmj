@@ -566,7 +566,11 @@ namespace
     bool s_blob_known = false;
     PresenceRemove_p s_presence_remove = nullptr;
     using SnapshotExport_p = void(*)(void* Ctrl, float Delta);
-    using SnapshotImport_p = void(*)(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7);
+    // Eight arguments, not the seven the decompiler shows: the eighth is read
+    // at rbp+0x7f (+0x2c334c) into r8d, the count of 0xd0-byte records for
+    // FUN_1404434c0. Forwarding seven left garbage there and the first join
+    // through the detour killed the guest at +0x12d5a8 (17/09, 15:56).
+    using SnapshotImport_p = void(*)(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7, uint64_t Count);
     SnapshotExport_p s_snapshot_export = nullptr;
     SnapshotImport_p s_original_import = nullptr;
     // Guest: an import is expected until then (0: none), and lets the
@@ -1400,7 +1404,7 @@ namespace
 
     // Guest: the import of the host's world, let through once outside the
     // join. Anything not asked for goes to the game untouched.
-    void SnapshotImportHook(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7)
+    void SnapshotImportHook(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7, uint64_t Count)
     {
         int32_t State = -1;
         ReadBytes((uintptr_t)Ctrl + kJoinState, &State, sizeof(State));
@@ -1410,7 +1414,7 @@ namespace
             {
                 Append(StringFormat("convidado: o mundo do host chegou com o controlador no estado %d, sem eu ter pedido; o jogo decide\n", State));
             }
-            s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7);
+            s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7, Count);
             return;
         }
         s_reimport_until.store(0);
@@ -1423,7 +1427,7 @@ namespace
         }
         int32_t Importing = kJoinImporting;
         memcpy((void*)((uintptr_t)Ctrl + kJoinState), &Importing, sizeof(Importing));
-        s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7);
+        s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7, Count);
         int32_t After = -1;
         ReadBytes((uintptr_t)Ctrl + kJoinState, &After, sizeof(After));
         if (After == kJoinPresences)
