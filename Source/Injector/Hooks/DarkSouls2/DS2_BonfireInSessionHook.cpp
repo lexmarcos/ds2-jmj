@@ -163,6 +163,47 @@ namespace
     constexpr size_t kComponentEntity = 0x08;
     constexpr size_t kEntityPosition = 0x70;
 
+    // The registry of remote presences - the copies of the other players in
+    // this world - read in Ghidra and written down in
+    // DS2_PRESENCE_REBUILD_PLAN.md, whose thirteen prologues were checked
+    // against the executable twice.
+    //
+    //   R = *(*0x141616cf8 + 0x20), 0x2500 bytes
+    //   R+0x08                 how many active entries are alive
+    //   R+0x174                this player's net id
+    //   R+0x1a8 .. +0x5b8      five active entries of 0xd0 bytes
+    //
+    // An active entry E: +0x40 the copy's PlayerCtrl, +0x48 the state (0 free,
+    // 2 alive, 3 leaving), +0x4c the role, +0x6a the net id, +0x8c the name.
+    //
+    // FUN_14051c820(E) takes one presence out: it starts a half-second fade
+    // and writes state 3. It touches no session and sends nothing to the
+    // server - which is the whole reason it is interesting, and the premise
+    // this file is here to test rather than assume.
+    //
+    // Why it matters now, measured 16/09: with a guest's presence alive, the
+    // host's native travel killed the host 3.7 s in, at +0x5180a8, reading
+    // `*(obj+0x60)` and getting two floats where a pointer belongs - with the
+    // whole stack inside this same 0x51xxxx region. The same travel to the
+    // same bonfire with no presence in the world arrived clean. So the
+    // question is exactly: does taking the presences out **first** make that
+    // crash go away?
+    constexpr size_t kPresenceRootGlobal = 0x1616cf8;
+    constexpr size_t kPresenceRegistry = 0x20;
+    constexpr size_t kPresenceAliveCount = 0x08;
+    constexpr size_t kPresenceOwnNetId = 0x174;
+    constexpr size_t kPresenceFirstEntry = 0x1a8;
+    constexpr size_t kPresenceEntryStride = 0xd0;
+    constexpr int kPresenceEntries = 5;
+    constexpr size_t kEntryPlayerCtrl = 0x40;
+    constexpr size_t kEntryState = 0x48;
+    constexpr size_t kEntryRole = 0x4c;
+    constexpr size_t kEntryNetId = 0x6a;
+    constexpr size_t kEntryName = 0x8c;
+    constexpr uint32_t kEntryAlive = 2;
+    constexpr size_t kPresenceRemoveOffset = 0x51c820;
+    constexpr uint8_t kPresenceRemovePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x41, 0x48, 0x48, 0x8b, 0xd9 };
+
     // A travel the game itself starts, the way FUN_14017fdb0 does once a
     // bonfire is picked: FUN_1401843b0(&request, id, 2) builds it,
     // FUN_140184830(*(*(ctx+0x70)+0x70), &request) starts it, and
@@ -302,6 +343,7 @@ namespace
     using BonfireIndex_p = uint32_t*(*)(uint32_t* Out, uint16_t Id);
     using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
     using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
+    using PresenceRemove_p = void(*)(void* Entry);
     using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
     using TravelStart_p = void(*)(void* Travel, uint8_t* Request);
     using RecordSet_p = void(*)(void* Record, int32_t* Fields);
@@ -320,6 +362,7 @@ namespace
     BonfireIndex_p s_bonfire_index = nullptr;
     BonfireMap_p s_bonfire_map = nullptr;
     BonfireLit_p s_bonfire_lit = nullptr;
+    PresenceRemove_p s_presence_remove = nullptr;
     TravelBuild_p s_travel_build = nullptr;
     TravelStart_p s_travel_start = nullptr;
     RecordSet_p s_record_set = nullptr;
@@ -509,6 +552,23 @@ namespace
         __try
         {
             Out = *(const uintptr_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // The same, for a field that is not a pointer. Its own function because
+    // __try cannot sit anywhere a C++ object would have to be unwound past,
+    // which is what C2712 says and what the travel watch learned by having a
+    // build refused.
+    bool ReadBytes(uintptr_t At, void* Out, size_t Length)
+    {
+        __try
+        {
+            memcpy(Out, (const void*)At, Length);
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -973,6 +1033,93 @@ namespace
             Closed ? "; menu da fogueira fechado, esperando levantar" : ""));
     }
 
+    // The registry of remote presences, or 0 when there is none yet.
+    uintptr_t PresenceRegistry()
+    {
+        uintptr_t Root = 0, Registry = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 ||
+            !ReadPointer(Root + kPresenceRegistry, Registry))
+        {
+            return 0;
+        }
+        return Registry;
+    }
+
+    // Every active entry written down, and nothing touched. The name is
+    // UTF-16 in the game and is left out here on purpose: the net id and the
+    // PlayerCtrl are what identify a copy across a travel, and a name would
+    // only make the line harder to read.
+    void ReportPresences(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0)
+        {
+            Append(StringFormat("presencas (%s): nao ha registro nesta maquina\n", Why));
+            return;
+        }
+        uint32_t Alive = 0, OwnId = 0;
+        ReadBytes(R + kPresenceAliveCount, &Alive, sizeof(Alive));
+        ReadBytes(R + kPresenceOwnNetId, &OwnId, sizeof(OwnId));
+        Append(StringFormat("presencas (%s): registro %p, %u viva(s), meu net id %u\n", Why, (void*)R, Alive, OwnId));
+        for (int i = 0; i < kPresenceEntries; ++i)
+        {
+            const uintptr_t E = R + kPresenceFirstEntry + (uintptr_t)i * kPresenceEntryStride;
+            uint32_t State = 0, Role = 0;
+            uint16_t NetId = 0;
+            uintptr_t Ctrl = 0;
+            ReadBytes(E + kEntryState, &State, sizeof(State));
+            if (State == 0)
+            {
+                continue;   // a free slot says nothing
+            }
+            ReadBytes(E + kEntryRole, &Role, sizeof(Role));
+            ReadBytes(E + kEntryNetId, &NetId, sizeof(NetId));
+            ReadPointer(E + kEntryPlayerCtrl, Ctrl);
+            Append(StringFormat("  entrada %d em %p: estado %u (%s), papel %u, net id %u, personagem %p\n",
+                i, (void*)E, State,
+                State == kEntryAlive ? "viva" : (State == 3 ? "saindo" : "?"), Role, (unsigned)NetId, (void*)Ctrl));
+        }
+    }
+
+    // Takes every living presence out, by the game's own FUN_14051c820.
+    // Returns how many were asked to go.
+    //
+    // This does **not** wait for them to be gone: the function starts a fade
+    // and writes state 3, and the real destruction is deferred by a list, so
+    // "state 3" is a request and not a receipt. Whoever calls this has to give
+    // the game frames before doing anything that assumes they are gone.
+    int RemovePresences(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0 || s_presence_remove == nullptr)
+        {
+            Append(StringFormat("presencas (%s): nao da para retirar (registro %p, funcao %p)\n", Why, (void*)R,
+                (void*)s_presence_remove));
+            return 0;
+        }
+        int Asked = 0;
+        for (int i = 0; i < kPresenceEntries; ++i)
+        {
+            const uintptr_t E = R + kPresenceFirstEntry + (uintptr_t)i * kPresenceEntryStride;
+            uint32_t State = 0;
+            if (!ReadBytes(E + kEntryState, &State, sizeof(State)) || State != kEntryAlive)
+            {
+                continue;
+            }
+            uint16_t NetId = 0;
+            ReadBytes(E + kEntryNetId, &NetId, sizeof(NetId));
+            s_presence_remove((void*)E);
+            ++Asked;
+            Append(StringFormat("presencas (%s): pedi a saida da entrada %d (%p), net id %u\n", Why, i, (void*)E,
+                (unsigned)NetId));
+        }
+        if (Asked == 0)
+        {
+            Append(StringFormat("presencas (%s): nenhuma viva para retirar\n", Why));
+        }
+        return Asked;
+    }
+
     // The host's own travel, started by the game's functions. False when the
     // bonfire is not in the table.
     bool StartTravel(uint16_t Bonfire)
@@ -1300,6 +1447,11 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
         s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
         s_bonfire_lit = (BonfireLit_p)(Base + kBonfireLitOffset);
+        // Checked before it is ever called: a function this file pokes into
+        // the game with the wrong bytes under it would be the worst kind of
+        // failure, silent and in another object's memory.
+        s_presence_remove = Matches(Base + kPresenceRemoveOffset, kPresenceRemovePrologue, sizeof(kPresenceRemovePrologue))
+            ? (PresenceRemove_p)(Base + kPresenceRemoveOffset) : nullptr;
         s_travel_build = (TravelBuild_p)(Base + kTravelBuildOffset);
         s_travel_start = (TravelStart_p)(Base + kTravelStartOffset);
         s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
@@ -1351,6 +1503,8 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
             s_events_ready.store(true);
             Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso, votacao de viagem (%s), descanso do convidado (%s) ===\n",
                 s_votes_ready ? "pronta" : "codigo inesperado", s_guest_rest_ready ? "pronto" : "codigo inesperado"));
+            Append(StringFormat("=== retirada de presenca (FUN_14051c820) %s ===\n",
+                s_presence_remove != nullptr ? "pronta" : "codigo inesperado; nao vou chamar"));
         }
         else
         {
@@ -1512,6 +1666,22 @@ void DS2_BonfireInSession_Tick()
                         DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
                     StartGo(Map, (uint16_t)Bonfire);
                 }
+                else if (Line.rfind("presenca", 0) == 0)
+                {
+                    // `presenca` writes the registry down; `presenca retira`
+                    // asks every living copy to go. Apart on purpose: reading
+                    // costs nothing and is how the removal is checked.
+                    if (Line.find("retira") != std::string::npos)
+                    {
+                        ReportPresences("antes de retirar");
+                        const int Asked = RemovePresences("pedido");
+                        Append(StringFormat("pedido: presencas, %d retirada(s) pedida(s)\n", Asked));
+                    }
+                    else
+                    {
+                        ReportPresences("pedido");
+                    }
+                }
                 else if (sscanf_s(Line.c_str(), "nativo %x %x", &Map, &Bonfire) == 2)
                 {
                     // The host's own travel, by the game's own chain, with the
@@ -1531,6 +1701,7 @@ void DS2_BonfireInSession_Tick()
                     // case 2 that ends the session needs it >= 5 (or 0, which
                     // wraps). So the warp should leave the session standing.
                     const bool Owner = OwnsTheWorld();
+                    ReportPresences("antes da viagem nativa");
                     const bool Went = StartTravel((uint16_t)Bonfire);
                     Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
                         Bonfire, Map, Owner ? "sim" : "nao",
