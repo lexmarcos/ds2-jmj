@@ -813,6 +813,60 @@ tela de carregamento do jogo serve de cortina.
 > guarda do desmonte que rode na thread de trabalho, ou calar essa lista
 > durante o warp do convidado.
 
+> ## O híbrido ligado ao jogo, e a queda é da votação e não da viagem (17/09, 18:00)
+>
+> **O que faltava ligar.** Sentar na fogueira e viajar nunca passou pelo
+> trabalho deste dia: o warp de fantasma, o `snapshot` e a recriação de
+> presença tinham **um** chamador cada, o leitor do `DS2_Bonfire.req`. O
+> caminho do jogo só tinha dois modos — os dois pelo transporte antigo, ou os
+> convidados **expulsos da sessão** quando o mapa não vinha. `99fb8d29` liga o
+> híbrido: no `TravelGo`, o convidado que não alcança o mapa avisa o host
+> (`GuestEvent::WarpNotice`), tira a própria presença, espera o host tirar a
+> dele, viaja de warp, pede o mundo do host ao pisar no destino, recria a
+> presença e só então relata chegada. A barreira ganha 70 s quando há warp;
+> 25 s é o orçamento do transporte antigo e cortaria a viagem no meio.
+>
+> **A queda que o usuário viu, isolada.** Duas viagens dele pelo caminho do
+> jogo terminaram com **os dois jogos fechando** ~1,2 s depois de a cortina
+> descer, 250 ms um do outro, duas de duas (17:38 e 17:44). O controle separa
+> a causa:
+>
+> | caminho | pernas | quedas | exceções |
+> | --- | --- | --- | --- |
+> | `ir` nos dois (mesmo transporte, sem votação nem menu) | 6 | 0 | 0 |
+> | fogueira → lista → votação | 2 | **2** | várias |
+>
+> As seis pernas de controle foram Majula ↔ Heide, ida e volta três vezes, com
+> o convidado **provadamente viajando** (seis cargas de mapa no log dele) e a
+> sessão verificada no fim. **O transporte é o mesmo nos dois casos** —
+> `StartGo` nas duas máquinas. O que difere é a cirurgia de interface.
+>
+> **Descartado:** a dança da trava do job ao fechar o menu da fogueira. Ela
+> rodou igual na primeira perna de `ir` (o host estava sentado na fogueira) —
+> `trava do job de volta depois de 16 ms` — e aquela perna passou limpa.
+>
+> **A melhor pista.** No convidado que caiu, a linha `tela de carregamento:
+> desceu` **nunca foi escrita**, embora `o mundo assentou` tenha sido, 1,8 s
+> antes. Essa linha é a última instrução de `Curtain(false)`, depois de
+> `s_hud_show`, `s_loading_close`, `s_hud_drop` e de religar o desenho do
+> mundo. Ou seja: **o convidado caiu dentro da descida da cortina**. E caiu no
+> renderizador, em **duas threads ao mesmo tempo** (360 e 624), lendo um
+> ponteiro com a metade alta carimbada (`00b010ffff483c10`).
+>
+> Junte com o que difere da votação: a caixa de Sim/Não é aberta e fechada
+> **no mesmo objeto de front-end** onde a cortina abre a tela de carregamento.
+> A hipótese é que o `close`/`release` da caixa deixa um nó morto na lista do
+> front-end, e o renderizador morre no primeiro quadro em que volta a desenhar.
+> É hipótese, não prova.
+>
+> **Como reproduzir sem o usuário — e o que travou.** `votar <mapa> <fogueira>`
+> abre a votação, mas responder exige apertar A na caixa do convidado, e neste
+> boot **o pad não alcança a instância 2**: nem a caixa de votação, nem a de
+> aviso, nem o menu de início respondem, com `pad status` dizendo `pad 1: no
+> ar` e `game focus` passando. Sem isso a votação estoura em 30 s. O próximo
+> passo barato é um verbo de pedido que responda a votação aberta, para o
+> caminho inteiro ficar testável sem ninguém na frente da tela.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
