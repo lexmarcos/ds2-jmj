@@ -703,6 +703,61 @@ tela de carregamento do jogo serve de cortina.
 > convidado), não pela votação. Falta ligar a receita ao caminho de votação e à
 > barreira, para virar uma ação só.
 
+> ## O mundo emprestado depois do warp: vazio (17/09, 15:30)
+>
+> O usuário relatou que o convidado, chegando em Heide pela receita, **não
+> consegue usar a fogueira**. Controle primeiro: numa invocação normal em
+> Majula o convidado vê "A: Rest at bonfire" e descansa (`convidado: descanso
+> na fogueira 0000122a no mundo do host`). Depois da receita, parado na
+> `7ba2` de Heide com o "Samuel" ao lado, nada.
+>
+> Três medições, todas na mesma bancada:
+>
+> - **`esd 4000`** no convidado: **0 consultas** de script de evento em 4 s.
+>   O host, no mesmo ponto: 4 consultas por quadro (130301, 130311, 130321,
+>   132003). Os scripts do mapa não estão avaliando nada no convidado.
+> - **`ds2os-dev flags`**: o convidado com **0 flags ligadas em todas as
+>   categorias** (10, 20, 13100…), o host com dezenas. Nem as flags do
+>   próprio save dele: a cópia 1 do `EventFlagBuffer` (o "mundo de outro")
+>   foi zerada pelo carregamento e nunca preenchida.
+> - **`ctrl+0x19c`** do controlador de join do convidado ainda lê
+>   `0a040000`, o mapa da invocação original.
+>
+> É exatamente a linha 3 da tabela da seção 2: o snapshot do host chega
+> **uma vez**, no estado 4 do join, e o warp de fantasma não o repete. A
+> fogueira é só o sintoma visível; o mundo inteiro do convidado (portas,
+> inimigos mortos, valores de evento) é o do save dele e não o do host — o M4
+> desfeito pela viagem.
+>
+> **O mecanismo, lido em Ghidra.** O host exporta no estado `0xd` do seu
+> controlador (`FUN_1402bddb0` despacha por `+0x150`; o handler é
+> `FUN_1402bf8f0`, que monta um blob de ~33 KB na pilha a partir do mapa em
+> `*(R+0x5b8)+0xc` — e esse campo já lê o mapa novo nos dois lados — e manda a
+> mensagem `0xc`). O convidado recebe em `FUN_1402cde30` case `0xc` →
+> `FUN_1402d09c0` (parse e validação) → slot 10 do controlador de join,
+> `FUN_1402c2fa0`, que importa **só se `+0xf8 == 4`**; em qualquer outro
+> estado grava `+0xf8 = 5` e `+0x120 = 1`, que encerra a sessão no quadro
+> seguinte. O import termina em estado 5 (presenças pelos registros do blob)
+> e 6 (o aperto de mão "estou dentro", que manda mensagem ao host).
+>
+> **O remédio, `d36f3f69`.** Pedido `snapshot` (e o evento de convidado
+> `SnapshotPlease` pelo canal): o host chama `FUN_1402bf8f0` do próprio tick
+> quando o controlador está em `0x10`; no convidado, um detour em
+> `FUN_1402c2fa0` — só quando pedido — aponta `+0x19c` para o mapa atual, põe
+> `+0xf8 = 4`, deixa o original importar e devolve `+0xf8 = 7`, sem passar
+> pelos estados 5 e 6, porque o controlador do host já está muito além deles.
+> As presenças continuam recriadas pela mod.
+>
+> **Uma armadilha que custou duas quedas.** O decompilador mostra sete
+> parâmetros para `FUN_1402c2fa0`; ela lê um **oitavo** em `rbp+0x7f`
+> (`+0x2c334c`, para `r8d`), a contagem dos registros de 0xd0 que
+> `FUN_1404434c0` percorre. O detour com sete argumentos matou o convidado em
+> `+0x12d5a8` nas duas invocações seguintes, no mesmo endereço. Conte os
+> acessos a `[rbp+0x67..]` na entrada antes de confiar numa assinatura.
+>
+> **Ainda não medido:** se depois do `snapshot` as flags batem, os scripts
+> voltam a avaliar e a fogueira aparece — é o próximo teste.
+
 **Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
 dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
 viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
