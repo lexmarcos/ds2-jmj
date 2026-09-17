@@ -85,3 +85,10 @@ public:
 /// the host's rest events.
 void DS2_BonfireInSession_Tick();
 
+/// Puts the net layer's character sync back to its idle state, the game's
+/// own state 0, which makes it rebuild its list for the map that is loaded.
+/// DS2_BackreadHook calls this the instant before it releases a map: the
+/// sync still holds records for that map's characters, and the net thread
+/// walked them ~170 ms after every release that killed a guest on 17/09.
+void DS2_BonfireInSession_IdleNetSync(const char* Why);
+

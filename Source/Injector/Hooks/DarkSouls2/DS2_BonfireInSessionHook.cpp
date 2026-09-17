@@ -2311,6 +2311,18 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
     return true;
 }
 
+void DS2_BonfireInSession_IdleNetSync(const char* Why)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    if (s_events_ready.load())
+    {
+        IdleNetSync(Why);
+    }
+#else
+    (void)Why;
+#endif
+}
+
 void DS2_BonfireInSession_Tick()
 {
 #if defined(_WIN32) && defined(_M_X64)

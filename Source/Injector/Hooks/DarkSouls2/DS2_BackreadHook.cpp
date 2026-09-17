@@ -9,6 +9,7 @@
 
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -335,6 +336,14 @@ namespace
             }
             else if (Verdict == KeepVerdict::Drop && Map != s_map.load())
             {
+                // The character sync goes idle **before** the map goes: every
+                // guest death at +0x517843 on 17/09 came 167-173 ms after one
+                // of these two lines, four of four, on the net thread, with
+                // the sync object in r13 and this map's id in rdx. Idling it
+                // at the end of the travel (the earlier fix) was too early -
+                // this release comes thirty seconds later, and by then the
+                // sync had been rebuilt and filled again.
+                DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
                 const uint8_t Zero = 0;
                 WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
                 Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
@@ -351,6 +360,7 @@ namespace
                 const bool StillKept = Verdict == KeepVerdict::Keep;
                 if (!StillKept)
                 {
+                    DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto a pedido");
                     const uint8_t Zero = 0;
                     WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
                 }
