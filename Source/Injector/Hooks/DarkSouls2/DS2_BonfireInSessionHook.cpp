@@ -439,7 +439,17 @@ namespace
     // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
     // (+0x324); FUN_140500440(frontend, n) says it closed, FUN_1404ff940
     // (frontend, n) which button (2 and 5 are the second, "No"), and
-    // FUN_1404ff2e0 / FUN_1404fe960 (frontend, 0) put it away.
+    // FUN_1404ff2e0 / FUN_1404fe960 (frontend, n) put it away.
+    //
+    // **The second argument is a guard, and passing 0 disarms it.** All four
+    // of these read `param_2 < 1 || *(frontend+0x324) == param_2`, so a zero
+    // means "whatever box is up right now", and the release then lands on a
+    // box that may already be gone - the player's own OK press tears it down
+    // - or on somebody else's. This file passed 0 everywhere until 17/09,
+    // and it is the only thing the travel vote does that the plain `ir`
+    // travel does not: six legs by `ir` ran clean while two of two by the
+    // vote closed both games, with the crashes scattered over worker threads
+    // and freed addresses, which is what a double release looks like.
     constexpr size_t kChoiceOffset = 0x4fe1c0;
     constexpr uint8_t kChoicePrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00, 0x0f, 0xb6, 0x84, 0x24, 0x08, 0x01 };
     constexpr size_t kClosedOffset = 0x500440;
@@ -2793,8 +2803,8 @@ void DS2_BonfireInSession_Tick()
             {
                 if (void* FrontEnd = FrontEndOrNull())
                 {
-                    s_close(FrontEnd, 0);
-                    s_release(FrontEnd, 0);
+                    s_close(FrontEnd, s_open_vote.Number);
+                    s_release(FrontEnd, s_open_vote.Number);
                 }
                 s_open_vote.Active = false;
             }
@@ -2814,8 +2824,8 @@ void DS2_BonfireInSession_Tick()
             const bool Yes = Ours && (uint32_t)Button != 2 && (uint32_t)Button != 5;
             if (Ours)
             {
-                s_close(FrontEnd, 0);
-                s_release(FrontEnd, 0);
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
             }
             s_open_vote.Active = false;
             if (s_open_vote.Host)
@@ -2872,8 +2882,8 @@ void DS2_BonfireInSession_Tick()
         {
             if (void* FrontEnd = FrontEndOrNull())
             {
-                s_close(FrontEnd, 0);
-                s_release(FrontEnd, 0);
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
             }
             s_open_vote.Active = false;
         }
@@ -2911,8 +2921,8 @@ void DS2_BonfireInSession_Tick()
         {
             if (void* FrontEnd = FrontEndOrNull())
             {
-                s_close(FrontEnd, 0);
-                s_release(FrontEnd, 0);
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
             }
             s_open_vote.Active = false;
         }
