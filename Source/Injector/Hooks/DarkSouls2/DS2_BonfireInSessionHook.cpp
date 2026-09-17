@@ -204,6 +204,38 @@ namespace
     constexpr size_t kPresenceRemoveOffset = 0x51c820;
     constexpr uint8_t kPresenceRemovePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x41, 0x48, 0x48, 0x8b, 0xd9 };
 
+    // The net layer's per-frame sync of the map's characters, and the thing
+    // that killed the host on every native travel with a session live.
+    //
+    // FUN_140514020 is the net tick and it walks the slots of the global
+    // 0x141616cf8: slot 0x20 is the presence registry (FUN_14051c940), slot
+    // **0x28** is this one (FUN_1405170e0). Measured live 16/09 with a session
+    // up: it carries the **current map id** at +0x18, a state at +0x08, a
+    // count at +0x0c and an array of 0x18-byte records at +0x10 - thirty of
+    // them, each with a tag at +0x00, flags at +0x0a, a float that accumulates
+    // the frame delta at +0x04, and a pointer to a character at +0x10. The
+    // characters sat in one contiguous run, 0xa0 apart.
+    //
+    // FUN_1405170e0 only reaches the crashing work when the state is 1 or 2;
+    // at 0 it takes the branch that rebuilds instead. FUN_140518230 then walks
+    // the records, and for a tag of 0x7f00 with bit 1 of the flags clear it
+    // calls FUN_1405180a0 on the character, which reads `chr+0x60` and then
+    // `+0x18` of that to index the role table at 0x1410c0050.
+    //
+    // The two host crashes were records 11 and 24 of that array, both tagged
+    // 0x7f00 with flags 0x11 - exactly the ones that reach the lookup. The
+    // warp destroys the map's characters and nothing clears the list, so the
+    // next frame walks it and reads floats where a pointer belongs.
+    //
+    // So the state is put back to 0 for the travel. It is one int, it is the
+    // game's own idle state, and the list is per-map anyway: the map id at
+    // +0x18 says this thing is rebuilt when a map loads.
+    constexpr size_t kNetSyncSlot = 0x28;
+    constexpr size_t kSyncState = 0x08;
+    constexpr size_t kSyncCount = 0x0c;
+    constexpr size_t kSyncRecords = 0x10;
+    constexpr size_t kSyncMap = 0x18;
+
     // A travel the game itself starts, the way FUN_14017fdb0 does once a
     // bonfire is picked: FUN_1401843b0(&request, id, 2) builds it,
     // FUN_140184830(*(*(ctx+0x70)+0x70), &request) starts it, and
@@ -552,6 +584,19 @@ namespace
         __try
         {
             Out = *(const uintptr_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool WriteBytes(uintptr_t At, const void* In, size_t Length)
+    {
+        __try
+        {
+            memcpy((void*)At, In, Length);
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -1120,6 +1165,62 @@ namespace
         return Asked;
     }
 
+    uintptr_t NetSync()
+    {
+        uintptr_t Root = 0, Sync = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 ||
+            !ReadPointer(Root + kNetSyncSlot, Sync))
+        {
+            return 0;
+        }
+        return Sync;
+    }
+
+    void ReportNetSync(const char* Why)
+    {
+        const uintptr_t Sync = NetSync();
+        if (Sync == 0)
+        {
+            Append(StringFormat("sync (%s): nao ha subsistema nesta maquina\n", Why));
+            return;
+        }
+        uint32_t State = 0, Count = 0, Map = 0;
+        ReadBytes(Sync + kSyncState, &State, sizeof(State));
+        ReadBytes(Sync + kSyncCount, &Count, sizeof(Count));
+        ReadBytes(Sync + kSyncMap, &Map, sizeof(Map));
+        Append(StringFormat("sync (%s): %p, estado %u, %u registro(s), mapa %08x\n", Why, (void*)Sync, State, Count,
+            Map));
+    }
+
+    // Puts the sync back to its idle state, which is what stops
+    // FUN_1405170e0 from walking a list of characters the warp is about to
+    // destroy. Returns the state it found, or -1 when there is nothing to do.
+    int32_t IdleNetSync(const char* Why)
+    {
+        const uintptr_t Sync = NetSync();
+        if (Sync == 0)
+        {
+            Append(StringFormat("sync (%s): nao ha subsistema; nada a fazer\n", Why));
+            return -1;
+        }
+        uint32_t State = 0;
+        if (!ReadBytes(Sync + kSyncState, &State, sizeof(State)))
+        {
+            return -1;
+        }
+        if (State == 0)
+        {
+            Append(StringFormat("sync (%s): ja estava parado\n", Why));
+            return 0;
+        }
+        const uint32_t Zero = 0;
+        WriteBytes(Sync + kSyncState, &Zero, sizeof(Zero));
+        uint32_t After = 0;
+        ReadBytes(Sync + kSyncState, &After, sizeof(After));
+        Append(StringFormat("sync (%s): estado %u -> %u\n", Why, State, After));
+        return (int32_t)State;
+    }
+
     // The host's own travel, started by the game's functions. False when the
     // bonfire is not in the table.
     bool StartTravel(uint16_t Bonfire)
@@ -1666,6 +1767,22 @@ void DS2_BonfireInSession_Tick()
                         DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
                     StartGo(Map, (uint16_t)Bonfire);
                 }
+                else if (Line.rfind("sync", 0) == 0)
+                {
+                    // `sync` writes the net sync down; `sync para` puts it in
+                    // its idle state, which is the experiment: does the host
+                    // survive a native travel once this list stops being
+                    // walked?
+                    if (Line.find("para") != std::string::npos)
+                    {
+                        ReportNetSync("antes de parar");
+                        IdleNetSync("pedido");
+                    }
+                    else
+                    {
+                        ReportNetSync("pedido");
+                    }
+                }
                 else if (Line.rfind("presenca", 0) == 0)
                 {
                     // `presenca` writes the registry down; `presenca retira`
@@ -1702,6 +1819,7 @@ void DS2_BonfireInSession_Tick()
                     // wraps). So the warp should leave the session standing.
                     const bool Owner = OwnsTheWorld();
                     ReportPresences("antes da viagem nativa");
+                    ReportNetSync("antes da viagem nativa");
                     const bool Went = StartTravel((uint16_t)Bonfire);
                     Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
                         Bonfire, Map, Owner ? "sim" : "nao",
