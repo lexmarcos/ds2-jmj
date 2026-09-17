@@ -1207,6 +1207,8 @@ namespace
         return Asked;
     }
 
+    int32_t IdleNetSync(const char* Why);   // defined below, used when the window closes
+
     // Is the world back? The loader idle and a local character in place.
     // Both, because the loader reaching idle before the character exists is
     // exactly the window the crashes live in.
@@ -1247,6 +1249,18 @@ namespace
             }
             else if (s_quiet_saw_teardown.load())
             {
+                // The world is back, but the character sync is still the old
+                // map's: measured 16/09, its map field read the origin while
+                // the player stood in the destination, and the very first tick
+                // after the silence walked that stale list and killed the host
+                // in the same millisecond the window closed.
+                //
+                // So the sync is put back to its idle state here, in the one
+                // instant where it matters - the tick that is about to run is
+                // the one that reads it. Writing this thirteen seconds early,
+                // which is what was tried first, achieved nothing: the state
+                // machine had restored it by the time the travel began.
+                IdleNetSync("o mundo voltou");
                 s_quiet_until.store(0);
                 Append(StringFormat("rede: o mundo voltou; %llu batida(s) puladas\n",
                     (unsigned long long)s_quiet_skipped.load()));
