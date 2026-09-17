@@ -2084,9 +2084,24 @@ void DS2_BonfireInSession_Tick()
                 }
                 else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
                 {
+                    // O silencio da rede foi feito para o warp do host, que
+                    // e quem derruba a sessao. No convidado ele pode nao ser
+                    // necessario - e pode ser nocivo: em 17/09 o convidado
+                    // morreu em +0x2f0987 durante o proprio carregamento, numa
+                    // **thread de trabalho** (360, nao a 364 do jogo), onde nem
+                    // o silencio nem as guardas alcancam. `sem-silencio` deixa
+                    // medir os dois casos sem outra build.
+                    const bool Quiet = Line.find("sem-silencio") == std::string::npos;
                     DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma");
                     ReportNetSync("antes da viagem de fantasma");
-                    QuietNet("viagem de fantasma");
+                    if (Quiet)
+                    {
+                        QuietNet("viagem de fantasma");
+                    }
+                    else
+                    {
+                        Append("rede: a pedido, NAO vou calar a batida nesta viagem\n");
+                    }
                     const bool Went = TravelAsPhantom((uint16_t)Bonfire);
                     Append(StringFormat("pedido: viagem de fantasma para a fogueira %04x do mapa %08x: %s\n",
                         Bonfire, Map, Went ? "iniciada" : "recusada"));
