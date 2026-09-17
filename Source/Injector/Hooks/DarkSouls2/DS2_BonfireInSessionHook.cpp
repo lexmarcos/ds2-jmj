@@ -1312,7 +1312,10 @@ namespace
                 continue;
             }
             // Da tempo de a batida do registro materializar antes de julgar.
-            for (int w = 0; w < 40; ++w)
+            // Dois segundos nao bastavam: em 17/09 os dois lados disseram
+            // "nenhum membro produziu presenca" e oito segundos depois os dois
+            // registros liam uma viva. O julgamento era cedo, nao a receita.
+            for (int w = 0; w < 240; ++w)
             {
                 Sleep(50);
                 uint32_t Now = 0;
