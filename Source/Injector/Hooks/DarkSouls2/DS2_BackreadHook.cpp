@@ -76,16 +76,37 @@ namespace
     // forced owner sits in state 0 for good (docs/research/streaming-budget.md).
     // The travel needs the session's map held for the whole session (see
     // DS2_BonfireInSession_IsSessionMap), the map it stands on and the
-    // destination, and near Heide's first bonfire the game streams No-man's
-    // Wharf in by itself: four. Measured 18/09 with the byte poked to 3: Iron
-    // Keep, which never left state 0 with Majula held, loaded at once, and the
-    // map heap read 57% of its 13.5 MiB with two maps in and never more during
-    // the travel.
+    // destination: three. Measured 18/09 with the byte poked: Iron Keep, which
+    // never left state 0 with Majula held, loaded at once, and the map heap
+    // read 57-60% of its 13.5 MiB. Neighbours the game streams in by itself
+    // would make a fourth; they are evicted while a travel waits.
     constexpr size_t kStreamCapOffset = 0x3cc4f0;
     constexpr uint8_t kStreamCapExpected[] = { 0x2b, 0xd8, 0x83, 0xfb, 0x01, 0x48, 0x8b, 0x5c, 0x24, 0x30, 0x7f, 0x1d };
     constexpr size_t kStreamCapByte = 4;
-    constexpr uint8_t kStreamCap = 0x03;
+    // Three maps, not four. Measured 18/09 on the real Brume Tower: the fourth
+    // map (Majula held, Iron Keep, Iron Keep's neighbour, Brume arriving) hit a
+    // null allocation at +0x1bee1c4 inside the load - a fixed global pool, not
+    // the 13.5 MiB map heap - the trap caught it and the host died a frame
+    // later at +0x1d8a02. The same null write came with four maps on the Heide
+    // leg of the 32-leg run. Three always fit; the travel makes room for its
+    // destination by evicting the neighbours the game streamed in by itself
+    // (StreamerMasksHook).
+    constexpr uint8_t kStreamCap = 0x02;
     bool s_cap_raised = false;
+
+    // FUN_1403dc930, `void(streamer, arg)`, once a frame from FUN_1403dc3e0
+    // before the owners update: turns the streamer's reach into each owner's
+    // masks and "wanted" byte (+0x1ea). Every mask source checks the per-map
+    // "allowed" byte at streamer+0x188[i], which FUN_1403dc3e0 rebuilds at the
+    // top of every frame; a zero there makes map i look exactly like one the
+    // search does not reach, and the game takes it down on its own path
+    // (5 -> 6 -> 7 -> 0), the one it uses when the player walks away
+    // (docs/research/streaming-budget.md, 2.2 and 2.3).
+    constexpr size_t kStreamerMasksOffset = 0x3dc930;
+    constexpr uint8_t kStreamerMasksBytes[] = { 0x40, 0x55, 0x53, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x20, 0xfb, 0xff, 0xff };
+    constexpr size_t kStreamerAllowed = 0x188;         // 42 bytes, one per owner
+    constexpr size_t kStreamerPlayerMap = 0x30;        // int, the owner index under the player
+    constexpr ULONGLONG kEvictWindowMs = 15000;
 
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
@@ -724,6 +745,83 @@ namespace
             ReadBytes(Owner + kOwnerMap, &Mine, sizeof(Mine)) && Mine == Map;
     }
 
+    using StreamerMasks_p = void(*)(void*, void*);
+    StreamerMasks_p s_original_masks = nullptr;
+    uint64_t s_evict_request_seen = 0;
+    uint64_t s_evict_logged = 0;           // bit per owner index, per request
+
+    // While a travel waits for its destination, the maps the game streamed in
+    // by itself - loaded or loading, not forced, not under the player, not the
+    // destination - are not allowed this frame. The held session's map, the
+    // map kept for the other player and the origin kept by the travel are all
+    // forced, so they are never touched.
+    void EvictNeighbours(uintptr_t Streamer)
+    {
+        const uint32_t Destination = s_map.load();
+        const uint64_t Requested = s_request_ms.load();
+        if (Destination == 0 || Requested == 0 || GetTickCount64() - Requested > kEvictWindowMs)
+        {
+            return;
+        }
+        if (Requested != s_evict_request_seen)
+        {
+            s_evict_request_seen = Requested;
+            s_evict_logged = 0;
+        }
+        int16_t Count = 0;
+        int32_t PlayerIndex = -1;
+        if (!ReadBytes(Streamer + kStreamerOwnerCount, &Count, sizeof(Count)) || Count <= 0 || Count > kMaxOwners)
+        {
+            return;
+        }
+        ReadBytes(Streamer + kStreamerPlayerMap, &PlayerIndex, sizeof(PlayerIndex));
+
+        // Nothing to make room for once the destination is in.
+        for (int i = 0; i < Count; ++i)
+        {
+            uintptr_t Owner = 0, Vftable = 0;
+            uint32_t Map = 0;
+            uint8_t State = 0;
+            if (ReadPointer(Streamer + kStreamerOwners + i * sizeof(uintptr_t), Owner) && ReadPointer(Owner, Vftable) &&
+                Vftable == s_base + kOwnerVftable && ReadBytes(Owner + kOwnerMap, &Map, sizeof(Map)) &&
+                Map == Destination && ReadBytes(Owner + kOwnerState, &State, 1) && State == 5)
+            {
+                return;
+            }
+        }
+
+        for (int i = 0; i < Count && i < 64; ++i)
+        {
+            uintptr_t Owner = 0, Vftable = 0;
+            uint32_t Map = 0;
+            uint8_t State = 0, Forced = 0;
+            if (!ReadPointer(Streamer + kStreamerOwners + i * sizeof(uintptr_t), Owner) || !ReadPointer(Owner, Vftable) ||
+                Vftable != s_base + kOwnerVftable || !ReadBytes(Owner + kOwnerMap, &Map, sizeof(Map)) ||
+                !ReadBytes(Owner + kOwnerState, &State, 1) || !ReadBytes(Owner + kOwnerForced, &Forced, 1))
+            {
+                continue;
+            }
+            if (State == 0 || Forced != 0 || i == PlayerIndex || Map == Destination)
+            {
+                continue;
+            }
+            const uint8_t Zero = 0;
+            WriteBytes(Streamer + kStreamerAllowed + i, &Zero, 1);
+            if ((s_evict_logged & (1ull << i)) == 0)
+            {
+                s_evict_logged |= 1ull << i;
+                Append(StringFormat("%s  mapa %08x (state %u) was streamed in by the game; not allowed until %08x is in\n",
+                    Clock().c_str(), Map, (unsigned)State, Destination));
+            }
+        }
+    }
+
+    void StreamerMasksHook(void* Streamer, void* Arg)
+    {
+        EvictNeighbours((uintptr_t)Streamer);
+        s_original_masks(Streamer, Arg);
+    }
+
     void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
     {
         const uint32_t Map = s_focus_map.load();
@@ -1069,7 +1167,8 @@ bool DS2_BackreadHook::Install(Injector& injector)
         !BytesMatch(s_base + kOwnerStatesOffset, kOwnerStatesBytes, sizeof(kOwnerStatesBytes)) ||
         !BytesMatch(s_base + kStreamerUpdateOffset, kStreamerUpdateBytes, sizeof(kStreamerUpdateBytes)) ||
         !BytesMatch(s_base + kNavFindMapOffset, kNavFindMapBytes, sizeof(kNavFindMapBytes)) ||
-        !BytesMatch(s_base + kNavFindCellOffset, kNavFindCellBytes, sizeof(kNavFindCellBytes)))
+        !BytesMatch(s_base + kNavFindCellOffset, kNavFindCellBytes, sizeof(kNavFindCellBytes)) ||
+        !BytesMatch(s_base + kStreamerMasksOffset, kStreamerMasksBytes, sizeof(kStreamerMasksBytes)))
     {
         Error("[DS2_BackreadHook] a atualizacao do dono do mapa nao e a esperada; recusando");
         return false;
@@ -1098,6 +1197,7 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_request_path = injector.GetDllPath() / "DS2_Backread.req";
     s_original_update = (OwnerUpdate_p)(s_base + kOwnerUpdateOffset);
     s_original_streamer = (StreamerUpdate_p)(s_base + kStreamerUpdateOffset);
+    s_original_masks = (StreamerMasks_p)(s_base + kStreamerMasksOffset);
     s_nav_find_map = (NavFindMap_p)(s_base + kNavFindMapOffset);
     s_nav_find_cell = (NavFindCell_p)(s_base + kNavFindCellOffset);
 
@@ -1105,6 +1205,7 @@ bool DS2_BackreadHook::Install(Injector& injector)
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original_update, OwnerUpdateHook);
     DetourAttach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
+    DetourAttach(&(PVOID&)s_original_masks, StreamerMasksHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_BackreadHook] nao consegui instalar o detour");
@@ -1116,7 +1217,7 @@ bool DS2_BackreadHook::Install(Injector& injector)
 
     Append(StringFormat("%s  === ds2os backread: pronto ===\n", Clock().c_str()));
     Append(StringFormat("%s  streaming cap: %s\n", Clock().c_str(),
-        s_cap_raised ? "raised to four maps" : "left at two maps"));
+        s_cap_raised ? "raised to three maps" : "left at two maps"));
     Log("[DS2_BackreadHook] pronto; escreva load <mapa> em DS2_Backread.req");
 #endif
     return true;
