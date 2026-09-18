@@ -78,16 +78,6 @@ namespace DS2_Backread
     // game loaded it.
     void KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask = nullptr);
 
-    // Another player's copy was on screen this frame. While one was seen
-    // recently, no map is let go: unloading a map out from under a session
-    // leaves freed objects linked into the game's own lists, and the next
-    // load of that map walks them. Measured 17/09, twice out of two, on the
-    // guest arriving in Majula about a minute after Majula was released:
-    // +0x3f3b20 calls through a list node whose vftable is rubbish, and
-    // +0x3ce81c reads a part record that is not there any more. A held map
-    // costs memory; a released one costs the session.
-    void OtherPlayerSeen();
-
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.
     bool Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4]);
