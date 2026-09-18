@@ -108,6 +108,33 @@ namespace
     constexpr size_t kStreamerPlayerMap = 0x30;        // int, the owner index under the player
     constexpr ULONGLONG kEvictWindowMs = 15000;
 
+    // FUN_1403cc3a0, `bool(owner)`: the whole teardown of one map, run inside
+    // one call (it loops FUN_1403cb1a0 until the step counter is spent).
+    //
+    // Nothing on that path touches live effects. The loading screen clears
+    // them all first (the game-manager step at 0x1401bf7bc calls
+    // FUN_140bebe00, which reaches SfxFxManagerBase slot +0x50,
+    // FUN_140a36b70 -> FUN_140a09a80(FXManager)), so in the unmodded game an
+    // effect never outlives the map that spawned it. Our travel leaves Brume
+    // Tower without a loading screen: an effect whose parameter block (node
+    // +0x50, handed in by its spawner, not owned by the effects system)
+    // belonged to the map kept ticking after the teardown, and the host died
+    // in FUN_140fd8570 about 0.4 s later, three times on 18/09. Only DLC maps
+    // (0x32xxxxxx) carry their own effect bank (sfx 5000 + area), and only
+    // they have crashed, so only their teardown clears effects first; the
+    // cost is that every live effect goes, the way it does on a load.
+    constexpr size_t kTeardownOffset = 0x3cc3a0;
+    constexpr uint8_t kTeardownBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kOwnerMapId = 0x08;
+    constexpr size_t kContextSfxSystem = 0xbc8;
+    constexpr size_t kSfxManagerBase = 0x10;
+    constexpr size_t kSfxClearAllSlot = 0x50;
+    constexpr size_t kSfxClearAllOffset = 0xa36b70;
+    constexpr uint8_t kSfxClearAllBytes[] = { 0x48, 0x8b, 0x49, 0x08, 0xe9 };
+    using Teardown_p = bool(*)(void* Owner);
+    using SfxClearAll_p = void(*)(void* ManagerBase);
+    Teardown_p s_original_teardown = nullptr;
+
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
@@ -816,6 +843,36 @@ namespace
         }
     }
 
+    bool TeardownHook(void* Owner)
+    {
+        uint32_t Map = 0;
+        if (Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) &&
+            (Map & 0xff000000u) == 0x32000000u)
+        {
+            uintptr_t Context = 0, Sfx = 0, Manager = 0, Table = 0, Slot = 0;
+            const char* Outcome = "cleared every live effect first";
+            if (!ReadBytes(s_base + kContextOffset, &Context, sizeof(Context)) || Context == 0 ||
+                !ReadBytes(Context + kContextSfxSystem, &Sfx, sizeof(Sfx)) || Sfx == 0 ||
+                !ReadBytes(Sfx + kSfxManagerBase, &Manager, sizeof(Manager)) || Manager == 0 ||
+                !ReadBytes(Manager, &Table, sizeof(Table)) ||
+                !ReadBytes(Table + kSfxClearAllSlot, &Slot, sizeof(Slot)))
+            {
+                Outcome = "could not reach the effects manager; effects left alone";
+            }
+            else if (Slot != s_base + kSfxClearAllOffset ||
+                !BytesMatch(Slot, kSfxClearAllBytes, sizeof(kSfxClearAllBytes)))
+            {
+                Outcome = "the effects manager's clear slot is not the expected one; effects left alone";
+            }
+            else
+            {
+                ((SfxClearAll_p)Slot)((void*)Manager);
+            }
+            Append(StringFormat("%s  mapa %08x teardown: %s\n", Clock().c_str(), Map, Outcome));
+        }
+        return s_original_teardown(Owner);
+    }
+
     void StreamerMasksHook(void* Streamer, void* Arg)
     {
         EvictNeighbours((uintptr_t)Streamer);
@@ -1168,7 +1225,8 @@ bool DS2_BackreadHook::Install(Injector& injector)
         !BytesMatch(s_base + kStreamerUpdateOffset, kStreamerUpdateBytes, sizeof(kStreamerUpdateBytes)) ||
         !BytesMatch(s_base + kNavFindMapOffset, kNavFindMapBytes, sizeof(kNavFindMapBytes)) ||
         !BytesMatch(s_base + kNavFindCellOffset, kNavFindCellBytes, sizeof(kNavFindCellBytes)) ||
-        !BytesMatch(s_base + kStreamerMasksOffset, kStreamerMasksBytes, sizeof(kStreamerMasksBytes)))
+        !BytesMatch(s_base + kStreamerMasksOffset, kStreamerMasksBytes, sizeof(kStreamerMasksBytes)) ||
+        !BytesMatch(s_base + kTeardownOffset, kTeardownBytes, sizeof(kTeardownBytes)))
     {
         Error("[DS2_BackreadHook] a atualizacao do dono do mapa nao e a esperada; recusando");
         return false;
@@ -1198,6 +1256,7 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_original_update = (OwnerUpdate_p)(s_base + kOwnerUpdateOffset);
     s_original_streamer = (StreamerUpdate_p)(s_base + kStreamerUpdateOffset);
     s_original_masks = (StreamerMasks_p)(s_base + kStreamerMasksOffset);
+    s_original_teardown = (Teardown_p)(s_base + kTeardownOffset);
     s_nav_find_map = (NavFindMap_p)(s_base + kNavFindMapOffset);
     s_nav_find_cell = (NavFindCell_p)(s_base + kNavFindCellOffset);
 
@@ -1206,6 +1265,7 @@ bool DS2_BackreadHook::Install(Injector& injector)
     DetourAttach(&(PVOID&)s_original_update, OwnerUpdateHook);
     DetourAttach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
     DetourAttach(&(PVOID&)s_original_masks, StreamerMasksHook);
+    DetourAttach(&(PVOID&)s_original_teardown, TeardownHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_BackreadHook] nao consegui instalar o detour");
@@ -1238,6 +1298,8 @@ void DS2_BackreadHook::Uninstall()
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original_update, OwnerUpdateHook);
         DetourDetach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
+        DetourDetach(&(PVOID&)s_original_masks, StreamerMasksHook);
+        DetourDetach(&(PVOID&)s_original_teardown, TeardownHook);
         DetourTransactionCommit();
         s_original_update = nullptr;
     }
