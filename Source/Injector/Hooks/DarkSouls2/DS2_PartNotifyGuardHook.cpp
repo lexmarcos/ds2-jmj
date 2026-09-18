@@ -17,6 +17,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <intrin.h>
 #include "ThirdParty/detours/src/detours.h"
 #endif
 
@@ -63,6 +64,27 @@ namespace
     FindFn s_original_find = nullptr;
     FindFn s_original_find_twin = nullptr;
 
+    // FUN_140fd8570, `int(FXEvaluatableReference<int, FXSingleParam<FXTick,36>>*,
+    // node)`: it resolves the reference through FUN_140a11100(node, kind, index)
+    // and calls slot 0x50 of what comes back, without checking it.
+    //
+    // Measured 18/09: twice, about 0.4 s after the streaming teardown of Brume
+    // Tower (32240000) with the host already standing in Heide, the lookup came
+    // back null (kind 1, index 1) and the host died here. An effect made in
+    // Brume Tower outlived the map, and what it points at left with it. In the
+    // unmodded game Brume Tower is only ever left through a loading screen,
+    // which takes every effect with it.
+    //
+    // This is a net and a witness, not the fix: when the lookup is null it
+    // writes down what the node is and answers 0 instead of dereferencing it.
+    constexpr size_t kFxIntRefOffset = 0xfd8570;
+    constexpr uint8_t kFxIntRefBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x44, 0x0f, 0xb7, 0x41, 0x0a };
+    constexpr size_t kFxLookupOffset = 0xa11100;
+    using FxIntRefFn = int(__fastcall*)(uintptr_t, uintptr_t);
+    using FxLookupFn = uintptr_t(__fastcall*)(uintptr_t, int16_t, int16_t);
+    FxIntRefFn s_original_fx_int_ref = nullptr;
+    std::atomic<uint64_t> s_fx_null{ 0 };
+
     uintptr_t s_base = 0;
     uintptr_t s_end = 0;
     std::atomic<uint64_t> s_cut{ 0 };
@@ -77,7 +99,7 @@ namespace
     // writes anywhere near there, so it is the game putting that stretch of
     // its own code back. Whatever the reason, a guard that is quietly lifted
     // is worse than no guard, so this writes it again and says so.
-    constexpr size_t kTargetCount = 3;
+    constexpr size_t kTargetCount = 4;
     size_t s_target_offset[kTargetCount] = {};
     uint8_t s_target_jump[kTargetCount][5] = {};
     std::atomic<bool> s_watching{ false };
@@ -248,6 +270,46 @@ namespace
         return s_original_find_twin(Obj);
     }
 
+    int __fastcall FxIntRefHook(uintptr_t Ref, uintptr_t Node)
+    {
+        int16_t Kind = 0, Index = 0;
+        uintptr_t Found = 0;
+        bool Readable = ReadBytes(Ref + 8, &Kind, sizeof(Kind)) && ReadBytes(Ref + 10, &Index, sizeof(Index));
+        if (Readable)
+        {
+            __try
+            {
+                Found = ((FxLookupFn)(s_base + kFxLookupOffset))(Node, Kind, Index);
+            }
+            __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+            {
+                Readable = false;
+            }
+        }
+        if (Readable && Found != 0)
+        {
+            return s_original_fx_int_ref(Ref, Node);
+        }
+
+        const uint64_t Count = s_fx_null.fetch_add(1);
+        if (Count < 20 || (Count & (Count - 1)) == 0)
+        {
+            uintptr_t NodeVftable = 0, Table = 0, Words[8] = {};
+            ReadPointer(Node, NodeVftable);
+            ReadPointer(Node + 0x50, Table);
+            ReadBytes(Node, Words, sizeof(Words));
+            const uintptr_t Caller = (uintptr_t)_ReturnAddress();
+            Log("[DS2PartNotifyGuard] FX int reference %p (kind %d, index %d) resolved to nothing on node %p (vftable +0x%zx, +0x50 %p), called from +0x%zx; answered 0 (#%llu). node: %016llx %016llx %016llx %016llx %016llx %016llx %016llx %016llx",
+                (void*)Ref, (int)Kind, (int)Index, (void*)Node,
+                NodeVftable >= s_base && NodeVftable < s_end ? (size_t)(NodeVftable - s_base) : (size_t)NodeVftable,
+                (void*)Table, Caller >= s_base && Caller < s_end ? (size_t)(Caller - s_base) : (size_t)Caller,
+                (unsigned long long)Count + 1,
+                (unsigned long long)Words[0], (unsigned long long)Words[1], (unsigned long long)Words[2], (unsigned long long)Words[3],
+                (unsigned long long)Words[4], (unsigned long long)Words[5], (unsigned long long)Words[6], (unsigned long long)Words[7]);
+        }
+        return 0;
+    }
+
     void __fastcall NotifyHook(uintptr_t Obj, uint32_t Arg, uint8_t Flag)
     {
         uintptr_t Link = Obj + kListHead;
@@ -345,6 +407,15 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
+    const uintptr_t FxIntRef = s_base + kFxIntRefOffset;
+    uint8_t FoundFx[sizeof(kFxIntRefBytes)] = {};
+    memcpy(FoundFx, (const void*)FxIntRef, sizeof(FoundFx));
+    if (memcmp(FoundFx, kFxIntRefBytes, sizeof(kFxIntRefBytes)) != 0)
+    {
+        Error("[DS2PartNotifyGuard] o prologo em +0x%zx nao e o esperado; nao aplicado.", (size_t)kFxIntRefOffset);
+        return false;
+    }
+
     // One transaction each, and both return values checked.
     //
     // All three went in one transaction at first, and the third silently did
@@ -356,9 +427,11 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
     s_original = (NotifyFn)Address;
     s_original_find = (FindFn)Find;
     s_original_find_twin = (FindFn)Twin;
+    s_original_fx_int_ref = (FxIntRefFn)FxIntRef;
     if (!Attach((PVOID*)&s_original, NotifyHook, kNotifyOffset) ||
         !Attach((PVOID*)&s_original_find, FindHook, kFindOffset) ||
-        !Attach((PVOID*)&s_original_find_twin, FindTwinHook, kFindTwinOffset))
+        !Attach((PVOID*)&s_original_find_twin, FindTwinHook, kFindTwinOffset) ||
+        !Attach((PVOID*)&s_original_fx_int_ref, FxIntRefHook, kFxIntRefOffset))
     {
         Uninstall();
         return false;
@@ -368,7 +441,7 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
     // bytes are written down either way, because on 18/09 this check passed at
     // install time and the live memory a minute later held the original
     // prologue again at one of the three.
-    const size_t Targets[] = { kNotifyOffset, kFindOffset, kFindTwinOffset };
+    const size_t Targets[] = { kNotifyOffset, kFindOffset, kFindTwinOffset, kFxIntRefOffset };
     bool Landed = true;
     for (const size_t At : Targets)
     {
@@ -397,6 +470,7 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
 
     Log("[DS2PartNotifyGuard] as tres listas passam a ser conferidas antes de andadas (+0x%zx, +0x%zx e +0x%zx).",
         (size_t)kNotifyOffset, (size_t)kFindOffset, (size_t)kFindTwinOffset);
+    Log("[DS2PartNotifyGuard] FX int references are checked before they are resolved (+0x%zx).", (size_t)kFxIntRefOffset);
 #endif
     return true;
 }
@@ -422,6 +496,11 @@ void DS2_PartNotifyGuardHook::Uninstall()
         {
             DetourDetach(&(PVOID&)s_original_find_twin, FindTwinHook);
             s_original_find_twin = nullptr;
+        }
+        if (s_original_fx_int_ref != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_fx_int_ref, FxIntRefHook);
+            s_original_fx_int_ref = nullptr;
         }
         DetourTransactionCommit();
         s_original = nullptr;
