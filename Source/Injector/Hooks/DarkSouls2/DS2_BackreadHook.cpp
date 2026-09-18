@@ -66,6 +66,27 @@ namespace
     // high half holds something else, on the world update, on the guest, after
     // a travel, in a different function each time.
     constexpr size_t kOwnerMasks[] = { 0x10, 0x20, 0x30, 0x40 };
+    // The streaming cap. In FUN_1403cc450's state 0, the only way out:
+    //
+    //   +0x3cc4f0  2b d8        sub  %eax,%ebx      ; owners - owners in state 0
+    //   +0x3cc4f2  83 fb 01     cmp  $0x1,%ebx      ; <- the cap
+    //   +0x3cc4fa  7f 1d        jg   refuse
+    //
+    // so at most two maps are ever loading, loaded or unloading, and a third
+    // forced owner sits in state 0 for good (docs/research/streaming-budget.md).
+    // The travel needs the session's map held for the whole session (see
+    // DS2_BonfireInSession_IsSessionMap), the map it stands on and the
+    // destination, and near Heide's first bonfire the game streams No-man's
+    // Wharf in by itself: four. Measured 18/09 with the byte poked to 3: Iron
+    // Keep, which never left state 0 with Majula held, loaded at once, and the
+    // map heap read 57% of its 13.5 MiB with two maps in and never more during
+    // the travel.
+    constexpr size_t kStreamCapOffset = 0x3cc4f0;
+    constexpr uint8_t kStreamCapExpected[] = { 0x2b, 0xd8, 0x83, 0xfb, 0x01, 0x48, 0x8b, 0x5c, 0x24, 0x30, 0x7f, 0x1d };
+    constexpr size_t kStreamCapByte = 4;
+    constexpr uint8_t kStreamCap = 0x03;
+    bool s_cap_raised = false;
+
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
@@ -265,6 +286,7 @@ namespace
     std::mutex s_added_mutex;
     Added s_added[0x40];
     constexpr ULONGLONG kLetGoMs = 700;
+    std::atomic<bool> s_session_map_held{ false };
 
     void RememberAdded(int32_t Index, const uint32_t Bits[4])
     {
@@ -283,6 +305,24 @@ namespace
     // start the clock. True the first time, so the caller says it once.
     bool BeginLetGo(uintptr_t Owner, uint32_t Map, const char* Why)
     {
+        // The game's own rule, kept: in vanilla the fog that rises when a
+        // phantom joins fences the session's area, so the map the session
+        // began in never unloads while the session lives, and everything the
+        // join binds - the enemy sync's records, the enemy generator table -
+        // counts on it (docs/research/phantom-map-border.md,
+        // object-table-lifecycle.md). Releasing it is what every guest crash
+        // of 17 and 18/09 came from. It stays forced; the raised cap leaves
+        // room for the travel around it.
+        if (DS2_BonfireInSession_IsSessionMap(Map))
+        {
+            if (!s_session_map_held.exchange(true))
+            {
+                Append(StringFormat("%s  mapa %08x %s, but it is the session's map; kept loaded for the session\n",
+                    Clock().c_str(), Map, Why));
+            }
+            return false;
+        }
+
         int32_t Index = -1;
         if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 0x3f)
         {
@@ -1003,6 +1043,25 @@ bool DS2_BackreadHook::Install(Injector& injector)
     }
 
     s_log_path = injector.GetDllPath() / "DS2_Backread.log";
+
+    // The cap goes up only if the whole compare is the one it was read from.
+    if (BytesMatch(s_base + kStreamCapOffset, kStreamCapExpected, sizeof(kStreamCapExpected)))
+    {
+        DWORD Previous = 0;
+        const uintptr_t At = s_base + kStreamCapOffset + kStreamCapByte;
+        if (VirtualProtect((void*)At, 1, PAGE_EXECUTE_READWRITE, &Previous))
+        {
+            *(uint8_t*)At = kStreamCap;
+            FlushInstructionCache(GetCurrentProcess(), (void*)At, 1);
+            DWORD Ignored = 0;
+            VirtualProtect((void*)At, 1, Previous, &Ignored);
+            s_cap_raised = true;
+        }
+    }
+    else
+    {
+        Error("[DS2_BackreadHook] the streaming cap is not the expected compare; left at two maps");
+    }
     s_request_path = injector.GetDllPath() / "DS2_Backread.req";
     s_original_update = (OwnerUpdate_p)(s_base + kOwnerUpdateOffset);
     s_original_streamer = (StreamerUpdate_p)(s_base + kStreamerUpdateOffset);
@@ -1023,6 +1082,8 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_thread = std::thread(Run);
 
     Append(StringFormat("%s  === ds2os backread: pronto ===\n", Clock().c_str()));
+    Append(StringFormat("%s  streaming cap: %s\n", Clock().c_str(),
+        s_cap_raised ? "raised to four maps" : "left at two maps"));
     Log("[DS2_BackreadHook] pronto; escreva load <mapa> em DS2_Backread.req");
 #endif
     return true;

@@ -2367,6 +2367,24 @@ namespace
 #endif
 }
 
+bool DS2_BonfireInSession_IsSessionMap(uint32_t Map)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // The enemy sync is bound (state 1 on a host, 2 on a guest) to the map the
+    // session began in; that binding is the session's map.
+    const uintptr_t Sync = NetSync();
+    uint32_t State = 0, Bound = 0;
+    if (Map == 0 || Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+        !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)))
+    {
+        return false;
+    }
+    return (State == 1 || State == 2) && Bound == Map;
+#else
+    return false;
+#endif
+}
+
 void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map)
 {
 #if defined(_WIN32) && defined(_M_X64)

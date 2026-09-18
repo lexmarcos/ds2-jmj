@@ -98,3 +98,8 @@ void DS2_BonfireInSession_IdleNetSync(const char* Why);
 /// packet would be written there. Drops them first.
 void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map);
 
+/// True while a session's enemy sync is bound to this map, which is the map the
+/// session began in. The backread never releases it: the game's own join
+/// bindings assume it never unloads while the session lives.
+bool DS2_BonfireInSession_IsSessionMap(uint32_t Map);
+
