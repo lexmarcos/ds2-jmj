@@ -1117,3 +1117,53 @@ seeing the guest's copy appear, so the trigger looks like the other player's
 copy arriving in the map the session began in. The object sync cannot be it on
 the host, whose count is 0. The games survived that leg and one died on the
 next. Not yet named: who writes `MapModelComponent+0xcc`.
+
+## 12. 18/09, evening — the session's map stays loaded, and the travel holds
+
+Six research passes over the binary, run in parallel (reports in
+`docs/research/`), converged on the rule the mod had been breaking. In vanilla
+the fog that rises when a phantom joins fences the session's area, so **the map
+the session began in never unloads while the session lives**, and everything
+the join binds counts on it: the enemy sync (`*(0x141616cf8+0x28)`, which
+earlier sections called the object sync; it is `NetEnemyManager`) and the
+per-map enemy generator table its records point into (`FUN_140419a70`; the
+0xa0-byte blocks are `EnemyGeneratorAreaChrStatus` entries). Every guest crash
+of 17 and 18/09 followed that map because the backread released it.
+
+Two changes, both in `DS2_BackreadHook`:
+
+- **The backread never releases the map the enemy sync is bound to**
+  (`DS2_BonfireInSession_IsSessionMap`). It stays forced for the session. The
+  enemy sync therefore never has to be dropped and keeps working.
+- **The streaming cap goes from two maps to four.** The limit is a single
+  compare in `FUN_1403cc450`'s state 0 (`cmp $0x1,%ebx` at `+0x3cc4f2`, on owners
+  minus owners in state 0); the byte is raised to 3 after the whole compare is
+  checked. Four is what a leg from Heide needs: the held session map, Heide, the
+  No-man's Wharf the game streams in by itself, and the destination. The map
+  heap (`MapSeamlessControl`, a fixed 13.5 MiB) read 57-60% throughout.
+
+Result, on the same session, the four bonfires asked for (Majula, Heide's
+first, Iron Keep's first, Brume Tower's first):
+
+| run | legs | clean | session up |
+| --- | --- | --- | --- |
+| first | 16 | 16 | 16 |
+| second, same session | 16 | 15 | 16 |
+
+**32 consecutive group travels with the session verified the whole way**, ten
+of them back into the map the session began in, several straight after Brume
+Tower.
+
+The one leg with a fault: a null write at `+0x1bee1c4` inside the owner cycle
+of No-man's Wharf (`r15 = 0x0a1e0000`) while four maps coexisted; the trap
+caught it, the game and the session carried on. The same address was seen on
+the host on 17/09 before the cap was touched, so it is not new, but four maps is
+where it lives. Not yet done: evicting the neighbour the game streams in before
+forcing the destination (streaming-budget.md proposes a detour on
+`FUN_1403dc930` zeroing `streamer+0x188[i]`), which would keep a leg at three.
+
+What the other reports offer if the held map ever proves too costly: a native
+host warp with bit 0x10 of the host controller's `+0x1b8` cleared, and a re-run
+of the join's world load through host state `0xa` (rejoin-in-place.md,
+warp-reasons.md), modelled on the arena duel, which already warps both players
+inside one live session (alternative-travel.md).

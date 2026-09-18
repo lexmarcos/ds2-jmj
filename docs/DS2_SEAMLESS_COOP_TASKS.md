@@ -1776,13 +1776,15 @@ writes each one into a block that has since become a `MapEntity`.
 `DS2_BonfireInSession_ForgetSyncedMap` now drops the records (count at `+0xc`)
 and closes the guest's rebuild gate (`+0x198`) as that map's release begins.
 
-- **Missing:** the cost. From the first time the guest leaves the map the session
-  began in, the host's object state (the kind-0x14 packets) no longer reaches
-  that guest for the rest of the session. What those 56 objects are, and what a
-  player would notice, is not measured.
-- **Missing:** the real fix, which is to rebind the sync to the map the group is
-  actually in after each travel. That needs the world's per-map object table
-  for the destination to be the one the rebuild reads, and it is not today.
+- **Superseded the same evening.** The backread now never releases the map the
+  session began in (`DS2_BonfireInSession_IsSessionMap`), with the streaming cap
+  raised from two maps to four, so the sync is never dropped and the host's enemy
+  state keeps reaching the guest. 32 consecutive group travels over the four
+  bonfires with the session up; see DS2_NATIVE_TRAVEL_PLAN.md, section 12. The
+  "objects" were the enemy generators of that map.
+- **Missing:** evicting the neighbour map the game streams in near Heide's first
+  bonfire before forcing the destination, so a leg never needs four maps
+  (docs/research/streaming-budget.md).
 
 ## M9 — spectator and party wipe
 

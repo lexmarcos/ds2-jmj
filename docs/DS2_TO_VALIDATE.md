@@ -45,6 +45,25 @@ plausibly where phantom limits, session length and matchmaking ranges
 live. If those turn out to be per-zone, the whole game is silently
 running on Heide's rules. Nobody has read that record.
 
+### Group travel with the session's map held (18/09)
+
+32 consecutive group travels held the session over Majula, Heide, Iron Keep and
+Brume Tower, but only those four maps and only on one save. Not checked:
+
+- **Other maps and bigger ones.** The map heap read 57-60% with the session's
+  map held plus one; a leg can need four maps, and a larger area (Drangleic
+  Castle, Shrine of Amana) may not fit. Read `H+0xd0` against `H+0x4f0`,
+  `H = *(*(base+0x1616cc0))`, on arrival.
+- **A legal session end after travelling.** The host's native unbind
+  (`FUN_140517e70`) walks the enemy sync's records; with the session's map held
+  they stay valid, but a session that began elsewhere and was re-formed has not
+  been ended after a travel.
+- **Four maps at once.** The only fault of the 32 legs, a null write at
+  `+0x1bee1c4` in No-man's Wharf's owner cycle, came with four maps in; the trap
+  caught it.
+- **The held map across a whole play session**: a session that begins in one
+  map and plays for hours keeps that map loaded the entire time.
+
 ## Likely fine, but unverified
 
 ### One pair across the internet
