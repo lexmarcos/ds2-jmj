@@ -73,7 +73,7 @@ namespace
 
         SYSTEMTIME Now;
         GetLocalTime(&Now);
-        char Text[4096];
+        char Text[8192];
         int Used = snprintf(Text, sizeof(Text),
             "%02u:%02u:%02u.%03u  excecao %08lx em +0x%llx (thread %lu), %s 0x%llx\n"
             "    rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n"
@@ -117,6 +117,91 @@ namespace
             }
         }
         Used += snprintf(Text + Used, sizeof(Text) - Used, "\n");
+
+        // Whose objects were in hand. A register that points at committed
+        // memory whose first eight bytes are an address inside the game is an
+        // object with a vftable, and the vftable's offset names the class in
+        // Ghidra without any guessing. This is what the crashes of 17/09 were
+        // missing: the faulting pointer said a block had been reused, and
+        // nothing said who was still holding it.
+        {
+            static const char* const Names[16] = { "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
+                "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15" };
+            const uintptr_t Values[16] = { (uintptr_t)Context->Rax, (uintptr_t)Context->Rbx,
+                (uintptr_t)Context->Rcx, (uintptr_t)Context->Rdx, (uintptr_t)Context->Rsi,
+                (uintptr_t)Context->Rdi, (uintptr_t)Context->Rbp, (uintptr_t)Context->Rsp,
+                (uintptr_t)Context->R8, (uintptr_t)Context->R9, (uintptr_t)Context->R10,
+                (uintptr_t)Context->R11, (uintptr_t)Context->R12, (uintptr_t)Context->R13,
+                (uintptr_t)Context->R14, (uintptr_t)Context->R15 };
+            int Objects = 0;
+            int Header = 0;
+            for (int i = 0; i < 16 && Used < (int)sizeof(Text) - 400; ++i)
+            {
+                const uintptr_t At = Values[i];
+                if (At == 0 || (At & 7) != 0 || At == (uintptr_t)Context->Rsp || At == (uintptr_t)Context->Rbp)
+                {
+                    continue;
+                }
+                MEMORY_BASIC_INFORMATION Region;
+                if (VirtualQuery((LPCVOID)At, &Region, sizeof(Region)) == 0 || Region.State != MEM_COMMIT ||
+                    (Region.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0)
+                {
+                    continue;
+                }
+                uintptr_t Vftable = 0;
+                __try
+                {
+                    Vftable = *(const uintptr_t*)At;
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER)
+                {
+                    continue;
+                }
+                if (!InGame(Vftable))
+                {
+                    continue;
+                }
+                if (Header == 0)
+                {
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, "    objetos na mao (tabela virtual):");
+                    Header = 1;
+                }
+                Used += snprintf(Text + Used, sizeof(Text) - Used, " %s=+0x%llx", Names[i],
+                    (unsigned long long)(Vftable - s_base));
+                // The first two get their first sixty-four bytes written down,
+                // which is where a stale pointer's neighbours are.
+                if (Objects < 2)
+                {
+                    unsigned char Bytes[64] = {};
+                    int Have = 0;
+                    __try
+                    {
+                        memcpy(Bytes, (const void*)At, sizeof(Bytes));
+                        Have = 1;
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        Have = 0;
+                    }
+                    if (Have != 0)
+                    {
+                        Used += snprintf(Text + Used, sizeof(Text) - Used, "\n      %s %p:", Names[i], (void*)At);
+                        for (int b = 0; b < 64 && Used < (int)sizeof(Text) - 8; ++b)
+                        {
+                            Used += snprintf(Text + Used, sizeof(Text) - Used, "%s%02x",
+                                (b % 8) == 0 ? " " : "", Bytes[b]);
+                        }
+                        Used += snprintf(Text + Used, sizeof(Text) - Used, "\n   ");
+                    }
+                }
+                ++Objects;
+            }
+            if (Header != 0)
+            {
+                Used += snprintf(Text + Used, sizeof(Text) - Used, "\n");
+            }
+        }
+
         Write(Text, (size_t)Used < sizeof(Text) ? (size_t)Used : sizeof(Text) - 1);
         return EXCEPTION_CONTINUE_SEARCH;
     }
