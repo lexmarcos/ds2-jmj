@@ -80,6 +80,19 @@ namespace
     constexpr size_t kHostTickOffset = 0x2bddb0;
     constexpr uint8_t kHostTickBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29, 0x74, 0x24, 0x20 };
     constexpr size_t kHostState = 0x150;
+    // FUN_1402bd0d0 ORs 0x10 into this word on a host death (case 0) or warp
+    // (case 4), and nothing but the constructor clears it. Two readers act on
+    // it: the watchdog FUN_1402be090, which this same dispatcher runs first
+    // every frame and which ends the session once the controller's clock is
+    // 300 s past +0x1b4, and the re-entry handshake FUN_1402bd720, which then
+    // refuses a guest with reason 8. Measured 18/09: a travel landing that the
+    // death hook cancelled (hp 0 -> 869 at 20:03:45) set it, and the host
+    // expelled the guest at 20:08:45, 300 s later to the second. In a seamless
+    // session a host death or travel is not the end of it, so the bit is
+    // cleared while the session is formed.
+    constexpr size_t kHostFlags = 0x1b8;
+    constexpr uint32_t kHostWarpedOrDied = 0x10;
+    constexpr uint32_t kHostFormed = 0x10;
 
     using HostTick_p = void(*)(void* Ctrl, float Delta);
     HostTick_p s_original_host_tick = nullptr;
@@ -152,6 +165,18 @@ namespace
             s_host_state = State;
             Append(StringFormat("  host: estado -> %u (0x%x) no quadro %llu\n",
                 State, State, (unsigned long long)s_host_ticks));
+        }
+
+        if (State == kHostFormed)
+        {
+            uint32_t* Flags = (uint32_t*)((uint8_t*)Ctrl + kHostFlags);
+            const uint32_t Before = *Flags;
+            if ((Before & kHostWarpedOrDied) != 0)
+            {
+                *Flags = Before & ~kHostWarpedOrDied;
+                Append(StringFormat("  host: flags +0x1b8 %08x -> %08x (death or warp bit cleared; the 300 s watchdog stays idle) at frame %llu\n",
+                    Before, *Flags, (unsigned long long)s_host_ticks));
+            }
         }
 
         ++s_host_ticks;
