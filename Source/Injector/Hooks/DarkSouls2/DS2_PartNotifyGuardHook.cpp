@@ -45,8 +45,22 @@ namespace
     constexpr size_t kFindHead = 0x18;
     constexpr size_t kFindNext = 0x10;
 
+    // FUN_1401729a0 is the twin of the one above, byte for byte the same shape
+    // on the same list. Measured 18/09: with FUN_14017b240 guarded its own site
+    // never came back and the death moved here, at +0x1729c6, with the node's
+    // vftable reading 00002817410ec488 - the low half a real address in the
+    // game's image and the top half somebody else's.
+    //
+    // The object in hand was a live MapEntity (its vftable is +0x10e7b68, and
+    // the class name sits in plain text right after it). So the map is not what
+    // went: one component of an entity that is still alive was freed and left
+    // linked in the entity's own list.
+    constexpr size_t kFindTwinOffset = 0x1729a0;
+    constexpr uint8_t kFindTwinBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9 };
+
     using FindFn = void*(__fastcall*)(uintptr_t);
     FindFn s_original_find = nullptr;
+    FindFn s_original_find_twin = nullptr;
 
     uintptr_t s_base = 0;
     uintptr_t s_end = 0;
@@ -133,6 +147,12 @@ namespace
     {
         Tidy(Obj + kFindHead, kFindNext, Obj, "busca de componente");
         return s_original_find(Obj);
+    }
+
+    void* __fastcall FindTwinHook(uintptr_t Obj)
+    {
+        Tidy(Obj + kFindHead, kFindNext, Obj, "busca de componente (gemea)");
+        return s_original_find_twin(Obj);
     }
 
     void __fastcall NotifyHook(uintptr_t Obj, uint32_t Arg, uint8_t Flag)
@@ -223,22 +243,34 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
+    const uintptr_t Twin = s_base + kFindTwinOffset;
+    uint8_t FoundTwin[sizeof(kFindTwinBytes)] = {};
+    memcpy(FoundTwin, (const void*)Twin, sizeof(FoundTwin));
+    if (memcmp(FoundTwin, kFindTwinBytes, sizeof(kFindTwinBytes)) != 0)
+    {
+        Error("[DS2PartNotifyGuard] o prologo em +0x%zx nao e o esperado; nao aplicado.", (size_t)kFindTwinOffset);
+        return false;
+    }
+
     s_original = (NotifyFn)Address;
     s_original_find = (FindFn)Find;
+    s_original_find_twin = (FindFn)Twin;
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
     DetourAttach(&(PVOID&)s_original, NotifyHook);
     DetourAttach(&(PVOID&)s_original_find, FindHook);
+    DetourAttach(&(PVOID&)s_original_find_twin, FindTwinHook);
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2PartNotifyGuard] nao consegui instalar os detours.");
         s_original = nullptr;
         s_original_find = nullptr;
+        s_original_find_twin = nullptr;
         return false;
     }
 
-    Log("[DS2PartNotifyGuard] as duas listas passam a ser conferidas antes de andadas (+0x%zx e +0x%zx).",
-        (size_t)kNotifyOffset, (size_t)kFindOffset);
+    Log("[DS2PartNotifyGuard] as tres listas passam a ser conferidas antes de andadas (+0x%zx, +0x%zx e +0x%zx).",
+        (size_t)kNotifyOffset, (size_t)kFindOffset, (size_t)kFindTwinOffset);
 #endif
     return true;
 }
@@ -255,6 +287,11 @@ void DS2_PartNotifyGuardHook::Uninstall()
         {
             DetourDetach(&(PVOID&)s_original_find, FindHook);
             s_original_find = nullptr;
+        }
+        if (s_original_find_twin != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_find_twin, FindTwinHook);
+            s_original_find_twin = nullptr;
         }
         DetourTransactionCommit();
         s_original = nullptr;
