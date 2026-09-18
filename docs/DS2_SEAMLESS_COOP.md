@@ -1,36 +1,38 @@
-# Co-op seamless: o warp, e o que ele já resolve
+# Seamless co-op: the warp, and what it already solves
 
-O objetivo: dois jogadores atravessando o jogo juntos de ponta a ponta, e uma
-morte — de qualquer um dos dois — mandando o jogador para a **última fogueira**
-em vez de desfazer tudo e mandá-lo de volta ao próprio mundo.
+The goal: two players crossing the game together from end to end, and a
+death — of either of the two — sending the player to the **last bonfire**
+instead of undoing everything and sending him back to his own world.
 
-Este documento começou em 12/09 como a lista do que se sabia; hoje ele registra
-o caminho inteiro do warp, porque foi ele que se abriu. Para a cadeia de fim de
-sessão, ver [DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md); para a
-revanche por placa vermelha, [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md).
+This document started on 12/09 as the list of what was known; today it
+records the whole path of the warp, because that is what opened up. For the
+session end chain, see [DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md);
+for the red sign rematch, [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md).
 
-## As três coisas que a morte de um fantasma faz
+## The three things a phantom's death does
 
-Confundi-las custou uma madrugada:
+Confusing them cost an all-nighter:
 
-1. **Encerrar as sessões.** Uma tabela em `0x1410c0050`, vinte entradas de 16
-   bytes indexadas por um papel lido de `objeto+0xe0`, e o byte `+1` de cada
-   entrada decide se aquele papel desfaz as sessões ao morrer. O fantasma é o
-   **índice 7**; o byte dele mora em `0x1410c00c1`.
-2. **Demolir a sessão.** `FUN_1402c3900`, o handler do estado 8 da máquina de
-   estados da sessão. Manda o `RequestNotifyLeaveSession` e põe o estado em 9.
-3. **Mandar o jogador para casa.** Um **warp** — e é este que dá o co-op.
+1. **Ending the sessions.** A table at `0x1410c0050`, twenty 16-byte entries
+   indexed by a role read from `objeto+0xe0`, and the `+1` byte of each entry
+   decides whether that role tears the sessions down on death. The phantom is
+   **index 7**; its byte lives at `0x1410c00c1`.
+2. **Demolishing the session.** `FUN_1402c3900`, the handler for state 8 of
+   the session state machine. It sends `RequestNotifyLeaveSession` and puts
+   the state at 9.
+3. **Sending the player home.** A **warp** — and this is the one that gives
+   co-op.
 
-Medido: zerar o byte da tabela para o índice 7 **não** impede o retorno. O
-fantasma vê "You have been vanquished. Returning to your world…" do mesmo
-jeito; muda só se as sessões são desfeitas junto. Suprimir a tabela deixaria o
-jogador indo para casa com a sessão pendurada — pior que o original. O warp é a
-peça.
+Measured: zeroing the table byte for index 7 does **not** stop the return.
+The phantom sees "You have been vanquished. Returning to your world…" all the
+same; the only thing that changes is whether the sessions are torn down with
+it. Suppressing the table would leave the player going home with the session
+left hanging — worse than the original. The warp is the piece.
 
-## Todo warp do jogo passa por uma função só
+## Every warp in the game goes through a single function
 
-`0x1401c2a80` (módulo `+0x1c2a80`), alcançada pelo slot virtual `+0x40` do
-contexto global do jogo, `*(0x1416148f0)`:
+`0x1401c2a80` (module `+0x1c2a80`), reached through virtual slot `+0x40` of
+the game's global context, `*(0x1416148f0)`:
 
 ```
 mov  rcx, [0x1416148f0]
@@ -40,9 +42,9 @@ mov  rax, [rcx]
 call [rax+0x40]
 ```
 
-Assinatura: `void Warp(void* Contexto, WarpRequest* Pedido, uint8_t Flag)`.
+Signature: `void Warp(void* Contexto, WarpRequest* Pedido, uint8_t Flag)`.
 
-A primeira coisa que ela faz é ler o **segundo dword do pedido**, em
+The first thing it does is read the **second dword of the request**, at
 `0x1401c2ab6`:
 
 ```
@@ -59,58 +61,61 @@ test al, al
 jne  recusa
 ```
 
-Depois disso ela copia os `0x38` bytes do pedido para `contexto+0x24c8` e liga
-bits em `contexto+0x24b1` e `+0x24b2`. O warp é **enfileirado**, não executado
-ali — o que explica por que um `bp` no fim da cadeia nunca mostrava o destino.
+After that it copies the request's `0x38` bytes to `contexto+0x24c8` and sets
+bits in `contexto+0x24b1` and `+0x24b2`. The warp is **queued**, not executed
+there — which explains why a `bp` at the end of the chain never showed the
+destination.
 
-## O pedido, 0x38 bytes
+## The request, 0x38 bytes
 
-O jogo tem um construtor para ele, `FUN_14044ed40(registro, saida)`, e foi ele
-que deu os nomes:
+The game has a constructor for it, `FUN_14044ed40(registro, saida)`, and that
+is what gave the names:
 
-| campo | quem escreve | o que é |
+| field | what writes it | what it is |
 | --- | --- | --- |
-| `+0x00` | `3`, `4` ou `2` conforme `registro+0x168` | família do destino |
-| `+0x04` | sempre `1` no construtor | **motivo** — é o que a entrada lê |
-| `+0x08` | `registro+0x164` | id do mapa (`0x0a1f0000` = Heide's Tower of Flame) |
-| `+0x0c` | fica `-1` da inicialização | — |
-| `+0x10` | fica `0` | — |
+| `+0x00` | `3`, `4` or `2` depending on `registro+0x168` | destination family |
+| `+0x04` | always `1` in the constructor | **reason** — this is what the entry point reads |
+| `+0x08` | `registro+0x164` | map id (`0x0a1f0000` = Heide's Tower of Flame) |
+| `+0x0c` | left at `-1` from initialisation | — |
+| `+0x10` | left at `0` | — |
 | `+0x14` | byte `3` | — |
-| `+0x18` | `registro+0x16c` | ponto de nascimento dentro do mapa |
-| `+0x1c`…`+0x34` | só o caminho de cópia | — |
+| `+0x18` | `registro+0x16c` | spawn point inside the map |
+| `+0x1c`…`+0x34` | only the copy path | — |
 
-Quando o construtor não reconhece o registro ele copia os `0x38` bytes inteiros
-do destino padrão, que vem de `FUN_14039a9a0`.
+When the constructor does not recognise the record it copies the whole `0x38`
+bytes of the default destination, which comes from `FUN_14039a9a0`.
 
-### A tabela de motivos, e a armadilha que ela esconde
+### The table of reasons, and the trap it hides
 
-O que está medido até agora, cada linha vinda de um pedido capturado em
-execução:
+What has been measured so far, each row coming from a request captured at
+runtime:
 
-| motivo | terceiro argumento | quem pede | o que é |
+| reason | third argument | who asks | what it is |
 | --- | --- | --- | --- |
-| `1` | `0` | `FUN_140190920` → `FUN_14044fde0` | morte comum: a última fogueira |
-| `4` | `0` | `FUN_1402c3900`, `0x1402c3bdb` | **volta forçada para o próprio mundo** |
-| `4` | `1` | `0x1402c2e45` | a entrada do convidado **no mundo do host** |
+| `1` | `0` | `FUN_140190920` → `FUN_14044fde0` | ordinary death: the last bonfire |
+| `4` | `0` | `FUN_1402c3900`, `0x1402c3bdb` | **forced return to your own world** |
+| `4` | `1` | `0x1402c2e45` | the guest's entry **into the host's world** |
 
-**O motivo 4 sozinho não quer dizer "para casa".** A primeira versão do hook
-trocou todo motivo 4 e quebrou a invocação: o convidado viu "Summoning
-canceled.", o host viu "Summoning failed. The sign has disappeared.", e a
-sessão nunca nasceu. As duas coisas passam pela mesma porta com o mesmo motivo.
+**Reason 4 on its own does not mean "home".** The first version of the hook
+swapped every reason 4 and broke summoning: the guest saw "Summoning
+canceled.", the host saw "Summoning failed. The sign has disappeared.", and
+the session was never born. Both things go through the same door with the
+same reason.
 
-Quem separa é o **terceiro argumento** — e não é palpite, é o que a própria
-entrada testa: motivo 4 só pula o portão de permissão quando o argumento é
-zero. O desmonte manda `xor r8d,r8d` (`0x1402c3bd8`); a entrada no mundo do
-host manda `mov r8b,1` (`0x1402c2e42`). O hook testa exatamente isso.
+What separates them is the **third argument** — and that is not a guess, it
+is what the entry point itself tests: reason 4 only skips the permission gate
+when the argument is zero. The teardown sends `xor r8d,r8d` (`0x1402c3bd8`);
+the entry into the host's world sends `mov r8b,1` (`0x1402c2e42`). The hook
+tests exactly that.
 
-Qualquer outro motivo precisa passar por `0x140248940`; nenhum outro foi visto
-ainda. O `DS2_Seamless.log` escreve uma linha por warp, com motivo, argumento e
-o endereço de retorno de quem pediu, e é por ele que essa tabela cresce.
+Any other reason has to go through `0x140248940`; no other has been seen yet.
+`DS2_Seamless.log` writes one line per warp, with the reason, the argument and
+the return address of whoever asked, and that is how this table grows.
 
-### Os dois pedidos, byte a byte
+### The two requests, byte by byte
 
-Morte comum (Samuel caiu na água em Heide's Tower of Flame), capturada com
-`bp 1c2a80 deref rdx 56`:
+An ordinary death (Samuel fell into the water in Heide's Tower of Flame),
+captured with `bp 1c2a80 deref rdx 56`:
 
     +0x00  03 00 00 00   família 3
     +0x04  01 00 00 00   motivo 1 - última fogueira
@@ -121,8 +126,8 @@ Morte comum (Samuel caiu na água em Heide's Tower of Flame), capturada com
     +0x18  a7 7b 00 00   ponto 0x7ba7
     +0x1c  48 6e 3d 41   lixo de pilha daqui para baixo
 
-Volta forçada de um convidado, capturada com `bp 2c3bdb deref rdx 32` numa
-morte de fantasma no mundo do host:
+A guest's forced return, captured with `bp 2c3bdb deref rdx 32` on a phantom
+death in the host's world:
 
     +0x00  03 00 00 00
     +0x04  04 00 00 00   motivo 4 - de volta ao próprio mundo
@@ -132,13 +137,14 @@ morte de fantasma no mundo do host:
     +0x14  03 7f 00 00
     +0x18  a7 7b 00 00
 
-Duas medições da mesma morte comum, de posições diferentes, mudaram só
-`+0x15..+0x17` e `+0x1c` — que é exatamente o que o construtor **não** escreve.
-Isso é a prova de que o resto do struct é lixo de pilha e não campo.
+Two measurements of the same ordinary death, from different positions,
+changed only `+0x15..+0x17` and `+0x1c` — which is exactly what the
+constructor does **not** write. That is the proof that the rest of the struct
+is stack garbage and not fields.
 
-## O registro de renascimento está pendurado no mesmo contexto
+## The respawn record hangs off the same context
 
-O que faz a substituição ser barata:
+What makes the substitution cheap:
 
 ```c
 void FUN_140190920(longlong param_1)
@@ -148,18 +154,18 @@ void FUN_140190920(longlong param_1)
 }
 ```
 
-`FUN_14044fde0` é "mande o jogador para onde ele descansou por último": monta o
-pedido pelo construtor e chama o warp. O único argumento é o registro de
-renascimento, e ele mora em `*(contexto + 0x70)` — o mesmo contexto que chega
-como primeiro argumento do warp. Ou seja, **de dentro do hook dá para pedir o
-renascimento do próprio jogo**, sem montar struct nenhum à mão.
+`FUN_14044fde0` is "send the player where he last rested": it builds the
+request through the constructor and calls the warp. Its only argument is the
+respawn record, and it lives at `*(contexto + 0x70)` — the same context that
+arrives as the warp's first argument. Which means **from inside the hook you
+can ask for the game's own respawn**, with no struct built by hand.
 
-## O hook
+## The hook
 
-`Source/Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.{h,cpp}`, ligado por
-`DS2SeamlessCoop` no `Injector.config` (`ds2os-dev up --seamless`, ou
-`game prepare --seamless`). Um detour só, em `+0x1c2a80`, com os bytes de
-`+0x1c2a80` e `+0x44fde0` conferidos antes de escrever qualquer coisa:
+`Source/Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.{h,cpp}`, turned on by
+`DS2SeamlessCoop` in `Injector.config` (`ds2os-dev up --seamless`, or
+`game prepare --seamless`). A single detour, at `+0x1c2a80`, with the bytes at
+`+0x1c2a80` and `+0x44fde0` checked before anything is written:
 
 ```
 se o pedido tem motivo 4 e o terceiro argumento é 0:
@@ -168,46 +174,49 @@ senão:
     passa adiante
 ```
 
-Há uma trava de reentrância porque o warp substituto passa pela mesma entrada.
-Escrever `0` em `DS2_Seamless.req` desliga a troca e deixa só o registro;
-qualquer outra coisa religa. O log fica em `DS2_Seamless.log`, ao lado da DLL,
-e sai uma linha por warp com motivo, mapa, ponto e o endereço de retorno de
-quem pediu — o `de=+0x...` é o que identifica o caminho, e o `cru=` traz os
-`0x38` bytes inteiros, porque metade deles ainda não tem nome e uma linha que
-só imprime a metade nomeada não responde pergunta que ninguém fez ainda.
+There is a reentrancy lock because the replacement warp goes through the same
+entry point. Writing `0` to `DS2_Seamless.req` turns the swap off and leaves
+only the logging; anything else turns it back on. The log sits in
+`DS2_Seamless.log`, next to the DLL, and one line comes out per warp with the
+reason, the map, the point and the return address of whoever asked — the
+`de=+0x...` is what identifies the path, and the `cru=` carries the whole
+`0x38` bytes, because half of them still have no name and a line that prints
+only the named half cannot answer a question nobody has asked yet.
 
-### Como ligar, e como jogar um co-op hoje
+### How to turn it on, and how to play a co-op today
 
 ```
 ds2os-dev up --auto-rematch --seamless
 ```
 
-`--seamless` liga este hook; `--auto-rematch` liga o
-[DS2_RematchHook](DS2_REMATCH_AFTER_DEATH.md), e os dois juntos são o laço que
-existe hoje:
+`--seamless` turns this hook on; `--auto-rematch` turns on the
+[DS2_RematchHook](DS2_REMATCH_AFTER_DEATH.md), and the two together are the
+loop that exists today:
 
-1. o convidado usa a **Small White Sign Soapstone** ou a
-   **White Sign Soapstone** (inventário → categoria de consumíveis → 7 para
-   baixo, 2 para a direita → Use; funciona hollow);
-2. o host invoca **sozinho**, sem apertar nada, assim que a placa chega — é o
-   hook da revanche, que não olha o tipo da placa;
-3. jogam juntos;
-4. quem morre vai para a última fogueira e a sessão acaba;
-5. o convidado põe a placa de novo, e o passo 2 se repete.
+1. the guest uses the **Small White Sign Soapstone** or the
+   **White Sign Soapstone** (inventory → consumables category → 7 down,
+   2 right → Use; it works while hollow);
+2. the host summons **on its own**, with nothing pressed, as soon as the sign
+   arrives — that is the rematch hook, which does not look at the sign's
+   type;
+3. they play together;
+4. whoever dies goes to the last bonfire and the session ends;
+5. the guest puts the sign down again, and step 2 repeats.
 
-O passo 5 é o único que ainda precisa de mão, e é o próximo pedaço óbvio.
+Step 5 is the only one that still needs a hand, and it is the next obvious
+piece.
 
-### Onde começa o passo 5
+### Where step 5 begins
 
-O caminho da placa já está localizado, por breakpoint numa colocação de placa
-branca de verdade. `FindImmediate.java 0x394` (o id de `RequestCreateSign`) dá
-cinco candidatos; colocar a placa acendeu **dois**:
+The sign's path is already located, by a breakpoint on a real white sign
+placement. `FindImmediate.java 0x394` (the id of `RequestCreateSign`) gives
+five candidates; placing the sign lit **two**:
 
     alcancado +0x6a1de0 de=+0x29ec4a ...
     alcancado +0x6a1170 de=+0x284f52 ...
 
-e o servidor registrou `Sign 1000 created: type 1` logo depois. O interessante
-é o chamador do primeiro:
+and the server logged `Sign 1000 created: type 1` right after. The
+interesting part is the caller of the first one:
 
 ```c
 void FUN_14029ec00(longlong trabalho, longlong *dono, undefined8 p3)
@@ -219,36 +228,39 @@ void FUN_14029ec00(longlong trabalho, longlong *dono, undefined8 p3)
 }
 ```
 
-É o mesmo desenho Manager / Interface / Job do resto do subsistema
-([DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md)): o **job** em
-`param_1` já carrega tudo que a placa precisa, e quem o monta está acima, em
-`+0x286239` na pilha capturada. Repor a placa sozinho é achar esse construtor e
-chamá-lo — o mesmo movimento que o `DS2_RematchHook` já faz do lado do host.
+It is the same Manager / Interface / Job design as the rest of the subsystem
+([DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md)): the **job** in
+`param_1` already carries everything the sign needs, and what builds it is
+further up, at `+0x286239` in the captured stack. Putting the sign back down
+by itself means finding that constructor and calling it — the same move the
+`DS2_RematchHook` already makes on the host's side.
 
-## O resultado que vira o enunciado do avesso
+## The result that turns the brief inside out
 
-Com o hook instalado e o redirecionamento ligado, um fantasma morreu no mundo
-do host. O log do convidado, de cima a baixo:
+With the hook installed and the redirection turned on, a phantom died in the
+host's world. The guest's log, top to bottom:
 
     warp motivo=4 forca=1 tipo=0 mapa=0a1f0000 ponto=c26abe77 de=+0x2c2e48   <- entrada, passou
     warp motivo=4 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x2c3bde   <- volta forçada
     co-op: em vez de voltar para o proprio mundo, ultima fogueira
     (reentrada) motivo=1 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x44fe22
 
-Funcionou: só a volta forçada foi trocada, a entrada passou intacta e a sessão
-nasceu (`RequestNotifyJoinGuestPlayer` seguido de `RequestNotifyJoinSession`).
-Mas **os dois pedidos apontam para o mesmo lugar** — `tipo=3`, mesmo mapa,
-mesmo ponto `0x7ba7`. E `0x7ba7` é o ponto da última fogueira do convidado:
-está medido à parte, numa morte comum dele no próprio mundo, que produziu
+It worked: only the forced return was swapped, the entry went through intact
+and the session was born (`RequestNotifyJoinGuestPlayer` followed by
+`RequestNotifyJoinSession`). But **the two requests point to the same place**
+— `tipo=3`, same map, same point `0x7ba7`. And `0x7ba7` is the point of the
+guest's last bonfire: that is measured separately, on an ordinary death of
+his in his own world, which produced
 `motivo=1 tipo=3 mapa=0a1f0000 ponto=00007ba7`.
 
-Ou seja: para um **invasor de placa vermelha**, o Dark Souls II já manda para a
-última fogueira quem morre. O enunciado "em vez de voltar para o mundo, volta
-para a última fogueira" já é o comportamento de fábrica nesse caso — e por um
-tempo isso pareceu ser o fim da história. Não é: **depende de quem morreu.**
+In other words: for a **red sign invader**, Dark Souls II already sends
+whoever dies to the last bonfire. The brief "instead of going back to the
+world, go back to the last bonfire" is already the stock behaviour in that
+case — and for a while that looked like the end of the story. It is not:
+**it depends on who died.**
 
-O código confirma sem depender da medição. `FUN_1402c3900` monta **dois**
-destinos e escolhe um:
+The code confirms it without depending on the measurement. `FUN_1402c3900`
+builds **two** destinations and picks one:
 
 ```c
 cVar3 = FUN_1402d47a0(sessao+0xd8 /* papel */, sessao+0x1cc /* por que acabou */);
@@ -263,11 +275,11 @@ if (cVar3 == 1) {                   // forma fogueira
 }
 ```
 
-Os dois retratos são tirados **na entrada**, no handler do estado 2: o registro
-de renascimento (`*(contexto+0xe)` → `+0x164/+0x168/+0x16c`) e a posição do
-jogador no próprio mundo.
+Both snapshots are taken **on entry**, in the state 2 handler: the respawn
+record (`*(contexto+0xe)` → `+0x164/+0x168/+0x16c`) and the player's position
+in his own world.
 
-E quem decide é uma **linha de param**, não código:
+And what decides is a **param row**, not code:
 
 ```c
 undefined1 FUN_1402d47a0(papel, porQueAcabou)
@@ -283,90 +295,93 @@ undefined1 FUN_1402d47a0(papel, porQueAcabou)
 }
 ```
 
-Três bytes por papel — `+0x2c`, `+0x2d`, `+0x2e` — dizem, para cada motivo de
-fim de sessão, se o jogador volta para a fogueira ou para onde estava. É um
-interruptor de dados, e mexer nele não precisa de detour nenhum.
+Three bytes per role — `+0x2c`, `+0x2d`, `+0x2e` — say, for each session end
+reason, whether the player goes back to the bonfire or to where he was. It is
+a data switch, and touching it needs no detour at all.
 
-### O co-op escolhe a outra forma, e aí o hook faz diferença
+### Co-op picks the other form, and there the hook makes a difference
 
-A mesma medição, feita de novo com um **fantasma branco de co-op** — placa
-branca, `Sign ... type 1`, invocada sozinha pela revanche — dá o contrário.
+The same measurement, done again with a **white co-op phantom** — white sign,
+`Sign ... type 1`, summoned on its own by the rematch — gives the opposite.
 
-Com o redirecionamento **desligado**:
+With the redirection **off**:
 
     warp motivo=4 forca=0 tipo=0 mapa=0a1f0000 ponto=40c5efa4 de=+0x2c3bde
     cru=00000000 04000000 00001f0a ffffffff 00000000 03000000
         a4efc540 002294c1 9a0d5143 0000803f ...
 
-`tipo=0` é a **forma posição**, e os três floats são `6.1855, -18.516, 209.05`
-— exatamente onde o convidado estava no próprio mundo quando foi invocado, o
-mesmo que o servidor tinha registrado (`position 6.2 -18.5 209.1`).
+`tipo=0` is the **position form**, and the three floats are
+`6.1855, -18.516, 209.05` — exactly where the guest was in his own world when
+he was summoned, the same the server had logged (`position 6.2 -18.5 209.1`).
 
-Com o redirecionamento **ligado**, mesma morte:
+With the redirection **on**, the same death:
 
     warp motivo=4 forca=0 tipo=0 mapa=0a1f0000 ponto=40c5efa4 de=+0x2c3bde
     co-op: em vez de voltar para o proprio mundo, ultima fogueira
     (reentrada) motivo=1 forca=0 tipo=3 mapa=0a1f0000 ponto=00007ba7 de=+0x44fe22
 
-A forma posição virou a forma fogueira. **Para o co-op, que é o caso do
-enunciado, o hook muda o destino de verdade.** Por isso ele fica ligado; para
-o invasor de vermelho ele continua sendo um não-operação, o que é correto.
+The position form became the bonfire form. **For co-op, which is the case in
+the brief, the hook really does change the destination.** That is why it
+stays on; for the red invader it remains a no-op, which is correct.
 
-Resumo do que os três bytes de param decidem, medido:
+A summary of what the three param bytes decide, measured:
 
-| quem morre | forma escolhida pelo jogo | o hook muda? |
+| who dies | form the game picks | does the hook change it? |
 | --- | --- | --- |
-| invasor de placa vermelha | fogueira (`tipo 3`, ponto do registro) | não, já era |
-| fantasma branco de co-op | posição (`tipo 0`, onde ele estava) | **sim** |
+| red sign invader | bonfire (`tipo 3`, point from the record) | no, it already was |
+| white co-op phantom | position (`tipo 0`, where he was) | **yes** |
 
-### O host que morre leva o convidado pelo mesmo caminho
+### A host who dies takes the guest down the same path
 
-A terceira medição, a que faltava: o **host** morreu com o fantasma de co-op
-dentro. Os dois logs, lado a lado:
+The third measurement, the one that was missing: the **host** died with the
+co-op phantom inside. The two logs, side by side:
 
     host     warp motivo=1 forca=0 tipo=3 ponto=00007ba7 de=+0x44fe22
     convidado warp motivo=4 forca=0 tipo=0 ponto=40c5efa4 de=+0x2c3bde
               co-op: em vez de voltar para o proprio mundo, ultima fogueira
               (reentrada) motivo=1 forca=0 tipo=3 ponto=00007ba7 de=+0x44fe22
 
-O host faz uma morte comum e vai para a própria fogueira — o hook nem encosta,
-porque o motivo é 1. E o convidado passa **exatamente pelo mesmo caminho** de
-quando é ele quem morre: mesma função, mesmo motivo, mesma forma posição, mesma
-troca. Ou seja, um hook só cobre os dois casos do enunciado, "se o phantom ou o
-host morrer", sem nenhum código específico para cada um.
+The host has an ordinary death and goes to his own bonfire — the hook does
+not even touch it, because the reason is 1. And the guest goes down
+**exactly the same path** as when it is he who dies: same function, same
+reason, same position form, same swap. Which means one hook covers both cases
+in the brief, "if the phantom or the host dies", with no code specific to
+either.
 
-**Mas o que uma morte custa a um co-op continua não sendo o lugar de chegada.
-É a sessão** — e essa ainda acaba.
+**But what a death costs a co-op is still not the place you arrive at. It is
+the session** — and that still ends.
 
-## O que isto **não** faz
+## What this does **not** do
 
-Ser honesto aqui importa mais que a feature:
+Being honest here matters more than the feature:
 
-- **A sessão continua acabando.** O `RequestNotifyLeaveSession` sai antes do
-  warp, e a demolição em `FUN_1402c3900` não é tocada.
-- Para um invasor de vermelho **o destino não muda**: o jogo já escolhe a
-  fogueira sozinho. Para o fantasma de co-op muda, e é o caso do enunciado.
-- Portanto isto ainda não é o co-op seamless do enunciado. Para "zerar o jogo
-  de ponta a ponta juntos" faltam duas coisas, e só uma delas é código nosso:
-  1. a sessão sobreviver a uma morte, o que o jogo nunca faz — um fantasma
-     nunca carrega área nenhuma dentro do mundo do host;
-  2. ou, aceitando que ela acabe, a dupla se reencontrar sozinha — que é
-     exatamente o que a revanche por placa vermelha já faz.
-- Com dois jogadores em uma máquina não dá para testar três; ver
+- **The session still ends.** `RequestNotifyLeaveSession` goes out before the
+  warp, and the demolition in `FUN_1402c3900` is not touched.
+- For a red invader **the destination does not change**: the game already
+  picks the bonfire on its own. For the co-op phantom it does change, and
+  that is the case in the brief.
+- So this is still not the seamless co-op in the brief. To "finish the game
+  end to end together" two things are missing, and only one of them is our
+  code:
+  1. the session surviving a death, which the game never does — a phantom
+     never loads any area inside the host's world;
+  2. or, accepting that it ends, the pair finding each other again on their
+     own — which is exactly what the red sign rematch already does.
+- With two players on one machine you cannot test three; see
   [DS2_TO_VALIDATE.md](DS2_TO_VALIDATE.md).
 
-## A sessão é uma máquina de estados, e o warp é o que ela usa para mover gente
+## The session is a state machine, and the warp is what it uses to move people
 
-O objeto da sessão guarda o estado em `objeto+0xf8`, e cada estado tem o seu
-handler. Dois interessam:
+The session object keeps its state at `objeto+0xf8`, and each state has its
+own handler. Two matter:
 
-| estado | handler | o que faz |
+| state | handler | what it does |
 | --- | --- | --- |
-| `2` | `FUN_1402c2a80` | leva o convidado **para dentro** do mundo do host |
-| `8` | `FUN_1402c3900` | desmonta a sessão e manda o convidado para casa |
+| `2` | `FUN_1402c2a80` | takes the guest **into** the host's world |
+| `8` | `FUN_1402c3900` | tears the session down and sends the guest home |
 
-O handler do estado 2 monta o pedido assim — e este é o molde de "ponha o
-jogador **aqui**, neste mapa":
+The state 2 handler builds the request like this — and this is the template
+for "put the player **here**, on this map":
 
     +0x00  0            tipo 0
     +0x04  4            motivo
@@ -376,15 +391,17 @@ jogador **aqui**, neste mapa":
     +0x24  1.0f
     +0x28  ...          orientação, normalizada ali mesmo
 
-e chama o warp com o terceiro argumento **1**. O retorno importa: se o warp
-recusa, o handler joga a máquina para o estado `0x13` (`0x1402c2ee6`). Ou seja
-**o warp devolve um byte**, e um detour declarado `void` entrega ao chamador o
-que sobrou em `al` — foi um bug real deste hook, corrigido.
+and calls the warp with third argument **1**. The return value matters: if
+the warp refuses, the handler throws the machine to state `0x13`
+(`0x1402c2ee6`). Which means **the warp returns a byte**, and a detour
+declared `void` hands the caller whatever was left in `al` — that was a real
+bug in this hook, since fixed.
 
-### O estado 7 só sai por um campo
+### State 7 only leaves through one field
 
-E o desmonte não começa sozinho. O handler do estado 7 — `FUN_1402c3830`, o
-estado em que a sessão fica enquanto se joga — tem uma linha só que interessa:
+And the teardown does not start on its own. The state 7 handler —
+`FUN_1402c3830`, the state the session sits in while you play — has just one
+line that matters:
 
 ```c
 if (*(int *)(sessao + 0x1cc) != 0) {
@@ -392,81 +409,82 @@ if (*(int *)(sessao + 0x1cc) != 0) {
 }
 ```
 
-`+0x1cc` é o **motivo do fim**, e quem escreve nele é `FUN_1402c2f20`, o slot
-**`+0xa0`** da sessão — "encerre, e este é o motivo". (Este parágrafo dizia
-`+0x30` até 13/09; o slot `+0x30` é `FUN_1402c2820`, e a chamada medida em
-`de=+0x2c9246` é `call *0xa0(%rax)`. O hook sempre funcionou porque detoura a
-função, não o slot.) Ele confere um virtual
-`+0xa8` antes, guarda `FUN_1402d4750(papel, motivo)` em `+0x1c8` e avisa o
-resto do jogo.
+`+0x1cc` is the **reason for the end**, and what writes it is
+`FUN_1402c2f20`, the session's **`+0xa0`** slot — "end it, and this is the
+reason". (This paragraph said `+0x30` until 13/09; slot `+0x30` is
+`FUN_1402c2820`, and the call measured at `de=+0x2c9246` is
+`call *0xa0(%rax)`. The hook always worked because it detours the function,
+not the slot.) It checks a `+0xa8` virtual first, stores
+`FUN_1402d4750(papel, motivo)` at `+0x1c8` and tells the rest of the game.
 
-Ou seja: **manter `+0x1cc` em zero mantém a sessão no estado 7**, e recusar
-aquela função é suficiente para isso — não é palpite, é o único caminho do 7
-para o 8. É nisso que o `DS2_SeamlessSessionHook` se apoia.
+In other words: **keeping `+0x1cc` at zero keeps the session in state 7**,
+and refusing that function is enough for it — that is not a guess, it is the
+only path from 7 to 8. That is what `DS2_SeamlessSessionHook` rests on.
 
-Isto é também o desenho do próximo passo. Se numa morte de convidado a máquina
-fosse levada de volta ao estado 2 com um destino novo, em vez de ao estado 8, o
-convidado renasceria **dentro do mundo do host**. Não está testado, e há contas
-que o jogo pode ter a acertar (o host precisa concordar, o corpo do fantasma
-precisa sumir, a bloodstain fica em algum lugar). Mas é a primeira hipótese com
-endereço.
+This is also the design of the next step. If on a guest's death the machine
+were taken back to state 2 with a new destination, instead of to state 8, the
+guest would respawn **inside the host's world**. It is not tested, and there
+are bills the game may have to settle (the host has to agree, the phantom's
+body has to disappear, the bloodstain ends up somewhere). But it is the first
+hypothesis with an address.
 
-## Os sítios que chamam o warp não saem do Ghidra
+## The sites that call the warp do not come out of Ghidra
 
-`Xrefs.java` em `0x1416148f0` devolve 40 leituras e **nenhuma** delas é uma das
-três da tabela acima. A lista não é uma amostra ruim, é incompleta: os sítios
-conhecidos (`0x1402c3bca`, `0x1402c2e2f`, `0x14044fe0d`) simplesmente não
-aparecem. É a mesma parede que o grafo estático levantou nos envios de invasão,
-e vale a mesma conclusão: aqui o inventário honesto é o log em execução, com o
-`de=+0x...` de cada warp, e não a análise.
+`Xrefs.java` on `0x1416148f0` returns 40 reads and **none** of them is one of
+the three in the table above. The list is not a bad sample, it is incomplete:
+the known sites (`0x1402c3bca`, `0x1402c2e2f`, `0x14044fe0d`) simply do not
+appear. It is the same wall the static graph put up on the invasion sends,
+and the same conclusion holds: here the honest inventory is the runtime log,
+with each warp's `de=+0x...`, and not the analysis.
 
-## A sessão pode sobreviver a uma morte
+## The session can survive a death
 
-Medido em 12/09, e é o resultado que muda o resto do plano. O caminho inteiro
-do desmonte pende de um pedido só, `FUN_1402c2f20`, e recusá-lo **do lado de
-quem morreu** basta:
+Measured on 12/09, and it is the result that changes the rest of the plan.
+The whole teardown path hangs off a single request, `FUN_1402c2f20`, and
+refusing it **on the side of whoever died** is enough:
 
-- o estado nunca sai do 7, porque `+0x1cc` nunca fica diferente de zero;
-- nenhum warp é emitido — o log de warp do convidado fica vazio;
-- o host não participa: ele não pede fim de sessão nenhum quando o convidado
-  morre, então não é preciso tocar no cliente dele;
-- os dois HUDs continuam listando o outro jogador.
+- the state never leaves 7, because `+0x1cc` never becomes anything but zero;
+- no warp is issued — the guest's warp log stays empty;
+- the host does not take part: it asks for no session end at all when the
+  guest dies, so there is no need to touch its client;
+- both HUDs keep listing the other player.
 
-O convidado fica **morto no lugar onde caiu**. Recusar o fim impede o
-desmonte, não faz renascer — essa é a peça seguinte.
+The guest stays **dead where he fell**. Refusing the end prevents the
+teardown, it does not make him respawn — that is the next piece.
 
-## O que ainda não se sabe
+## What is still not known
 
-- Que motivos existem além de 1 e 4, e o que o portão em `0x140248940` cobra.
-- O que significam `+0x00` (família 3/4/2) e `+0x14`.
-- Se a fogueira de um convidado é alcançável a partir do mundo do host — isto
-  é, se o mapa e o ponto que o registro guarda ainda são os dele enquanto ele
-  é fantasma. É a primeira coisa que o log responde.
-- Se o host que morre com fantasma dentro emite motivo 4 para alguém, e por
-  qual caminho.
+- What reasons exist besides 1 and 4, and what the gate at `0x140248940`
+  charges.
+- What `+0x00` (family 3/4/2) and `+0x14` mean.
+- Whether a guest's bonfire is reachable from the host's world — that is,
+  whether the map and the point the record holds are still his while he is a
+  phantom. It is the first thing the log answers.
+- Whether a host who dies with a phantom inside issues reason 4 to anyone,
+  and by which path.
 
-## Cinco tentativas de fazer o convidado renascer dentro da sessão
+## Five attempts to make the guest respawn inside the session
 
-Recusar o fim da sessão manteve o convidado dentro dela — morto. Fazê-lo
-renascer **no mundo do host** levou cinco medições, e as quatro primeiras
-falharam do mesmo jeito por baixo.
+Refusing the session end kept the guest inside it — dead. Making him respawn
+**in the host's world** took five measurements, and the first four failed the
+same way underneath.
 
-| # | o que foi feito | o que aconteceu |
+| # | what was done | what happened |
 | --- | --- | --- |
-| 1 | warp motivo 4, flag 1, portão como estava | recusado pelo portão |
-| 2 | warp motivo 4, flag 0 | aceito, nenhum pedido de fim, convidado vivo — **mandado para casa**, mapa e posição ignorados |
-| 3 | flag 1 na morte do **host**, portão em 811 | aceito, e o **host travou** |
-| 4 | flag 1 na morte do convidado, portão erguido à mão | aceito, convidado vivo e de pé, sessão em 7 dos dois lados, host ainda listando ele — **no próprio mundo** |
-| 5 | estado da sessão devolvido a 1 | nenhum warp, nenhum fim de sessão, convidado morto na água; a máquina andou sozinha até o **estado 2** e parou |
+| 1 | warp reason 4, flag 1, gate as it was | refused by the gate |
+| 2 | warp reason 4, flag 0 | accepted, no end request, guest alive — **sent home**, map and position ignored |
+| 3 | flag 1 on the **host's** death, gate at 811 | accepted, and the **host froze** |
+| 4 | flag 1 on the guest's death, gate raised by hand | accepted, guest alive and on his feet, session at 7 on both sides, host still listing him — **in his own world** |
+| 5 | session state put back to 1 | no warp, no session end, guest dead in the water; the machine walked on its own to **state 2** and stopped |
 
-A quinta é a que explica as outras. Com `bp 2c3630 deref rcx+f8 8` o
-despachante mostrou `[rcx+f8]=02`: o handler do estado 1 rodou, viu o elo com
-o par de pé, escreveu 2 e saiu. E o **estado 2 não está no switch do
-despachante** — nem o 3. Eles só rodam quando chega uma mensagem.
+The fifth is the one that explains the others. With `bp 2c3630 deref rcx+f8 8`
+the dispatcher showed `[rcx+f8]=02`: the state 1 handler ran, saw the link to
+the peer standing, wrote 2 and left. And **state 2 is not in the dispatcher's
+switch** — nor is 3. They only run when a message arrives.
 
-### O handler do estado 2 responde as quatro primeiras de uma vez
+### The state 2 handler answers the first four at once
 
-`FUN_1402c2a80`, o slot `+0x28` da sessão. Decompilado, ele:
+`FUN_1402c2a80`, the session's `+0x28` slot. Decompiled, it:
 
 ```c
 if (sessao[0x1f] != 2)                    { sessao[0x1f] = 0xb; ... return; }
@@ -491,75 +509,76 @@ sessao[0x1f] = 3;
 sessao+0x1c9 = param_2[8];
 ```
 
-Três conclusões, e cada uma mata uma tentativa:
+Three conclusions, and each one kills an attempt:
 
-- **O warp nunca foi a metade que faltava.** O handler monta exatamente o
-  mesmo pedido que as tentativas 1–4 montavam à mão, e chama o mesmo slot com
-  a mesma flag 1 e o mesmo portão. Quem decide em qual mundo o jogador cai é o
-  que vem **em volta**: `FUN_1402bbf20`, a mensagem ao par, o estado 3.
-- **`sessao+0x1a4` não é a posição do host.** É escrita *por este handler*, a
-  partir do objeto do jogador, como registro de onde o convidado estava antes
-  de ser invocado. A tentativa 4 entregou esse registro ao warp como destino —
-  e o convidado voltou para o próprio mundo, exatamente como medido.
-- **O destino não está na sessão.** Ele chega em `param_2`, do host, pela
-  rede. Só três campos ficam guardados depois: `[0]` em `+0x19c`, `[7]` em
-  `+0x198`, `[8]` em `+0x1c9`.
+- **The warp was never the missing half.** The handler builds exactly the same
+  request that attempts 1–4 built by hand, and calls the same slot with the
+  same flag 1 and the same gate. What decides which world the player lands in
+  is what comes **around** it: `FUN_1402bbf20`, the message to the peer,
+  state 3.
+- **`sessao+0x1a4` is not the host's position.** It is written *by this
+  handler*, from the player object, as a record of where the guest was before
+  being summoned. Attempt 4 handed that record to the warp as the destination
+  — and the guest went back to his own world, exactly as measured.
+- **The destination is not in the session.** It arrives in `param_2`, from the
+  host, over the network. Only three fields are kept afterwards: `[0]` in
+  `+0x19c`, `[7]` in `+0x198`, `[8]` in `+0x1c9`.
 
-### O payload, campo a campo
+### The payload, field by field
 
-| campo | uso |
+| field | use |
 | --- | --- |
-| `[0]` | mapa; também copiado para `+0x19c` |
-| `[1] [2] [3]` | o destino entregue ao warp |
-| `[4]` | nunca lido |
-| `[5]` | giro; vira o quaternion por cos/sin |
-| `[6]` | lido como short, vai para `FUN_14051c6a0` |
-| `[7]` | também copiado para `+0x198` |
-| `[8]` | lido como byte, também copiado para `+0x1c9` |
+| `[0]` | map; also copied to `+0x19c` |
+| `[1] [2] [3]` | the destination handed to the warp |
+| `[4]` | never read |
+| `[5]` | rotation; becomes the quaternion via cos/sin |
+| `[6]` | read as a short, goes to `FUN_14051c6a0` |
+| `[7]` | also copied to `+0x198` |
+| `[8]` | read as a byte, also copied to `+0x1c9` |
 
-### A sexta tentativa: repetir o convite
+### The sixth attempt: replay the invitation
 
-Se o que falta chega do host e nada mais, então não há o que sintetizar: o
-convite é **copiado na passagem** do join de verdade e repetido na morte. O
-destino repetido é o ponto de invocação — um lugar aonde o host andou de
-propósito, garantia que nenhuma posição inventada teria. Onde o convidado
-morreu não serve: ele pode ter morrido na água, e foi o que aconteceu no teste
-da tentativa 5.
+If what is missing comes from the host and nothing else, then there is nothing
+to synthesise: the invitation is **copied in passing** from the real join and
+replayed on death. The replayed destination is the summon point — a place the
+host walked to on purpose, a guarantee no invented position would have. Where
+the guest died is no good: he may have died in the water, and that is what
+happened in the attempt 5 test.
 
-Duas armadilhas que o código evita porque decompilar as mostrou antes:
+Two traps the code avoids because decompiling showed them first:
 
-- o byte em `*(sessao+0x108) +8` é o primeiro teste do handler, e se não for
-  zero ele **não chega** — vai direto para `EndSession(0x13)`, levando a
-  encenação junto e sem dizer nada. É lido num convite de verdade e conferido
-  antes de qualquer repetição;
-- o bloco `+0x1a0..+0x1c8` é refeito a partir do que é verdade **agora**, e um
-  desses valores é o portão, que vale 0 na morte do convidado. Repetir sem
-  cuidado trocaria o registro do convite original — de onde sai o caminho de
-  volta para casa — por lixo. Ele é salvo e devolvido.
+- the byte at `*(sessao+0x108) +8` is the handler's first test, and if it is
+  not zero he **does not arrive** — it goes straight to `EndSession(0x13)`,
+  taking the staging with it and saying nothing. It is read on a real
+  invitation and checked before any replay;
+- the `+0x1a0..+0x1c8` block is rebuilt from what is true **now**, and one of
+  those values is the gate, which is 0 on the guest's death. Replaying
+  carelessly would swap the original invitation's record — where the way back
+  home comes from — for garbage. It is saved and put back.
 
-O que sobra para medir é uma coisa só: **o estado 3 também não está no switch**,
-então a chegada manda a mensagem ao par e espera resposta. Se um host responde
-a um convidado que ele já conta como dentro, ninguém sabe. O rastro de estado
-depois da chegada responde isso num teste só — `3→5→6→7` é o join fechando,
-`3` parado é o host ignorando, e `3→4` seguido de `0xf` é o join estourando o
-temporizador do case 4.
+Only one thing is left to measure: **state 3 is not in the switch either**, so
+the arrival sends the message to the peer and waits for an answer. Whether a
+host answers a guest it already counts as inside, nobody knows. The state
+trail after the arrival answers that in a single test — `3→5→6→7` is the join
+closing, `3` stuck is the host ignoring, and `3→4` followed by `0xf` is the
+join blowing the case 4 timer.
 
-### A guarda da chegada
+### The arrival guard
 
-A sexta tentativa não chegou a acontecer, e o motivo é uma linha que só
-apareceu porque o handler foi decompilado antes de ser chamado:
+The sixth attempt never happened, and the reason is a line that only turned up
+because the handler was decompiled before being called:
 
 ```c
 if (*(char*)(*(sessao+0x108) + 8) != 0) { EndSession(0x13); return; }
 ```
 
-É o **primeiro** teste de `FUN_1402c2a80`, antes de qualquer outra coisa — e o
-mesmo teste abre `FUN_1402c37a0`, o estado 0, que é onde um join começa. Ou
-seja não é "esta chegada não pode": é **"você não está em condição de entrar em
-lugar nenhum"**.
+It is the **first** test in `FUN_1402c2a80`, before anything else — and the
+same test opens `FUN_1402c37a0`, state 0, which is where a join begins. So it
+is not "this arrival is not allowed": it is **"you are in no condition to
+enter anywhere"**.
 
-Medido com a encenação inteira de pé — convite, invocação, sessão viva,
-convidado morto de propósito na água:
+Measured with the whole staging standing — invitation, summon, live session,
+guest killed on purpose in the water:
 
 ```
 chegada: mapa=0a1f0000 destino=6.09,-18.50,209.16 giro=2.548 [6]=0101 [7]=1 [8]=01
@@ -568,29 +587,30 @@ morte de fantasma: motivo=2 papel=1 -> reentrando pelo estado 1
 guarda da chegada = 01; a chegada seria recusada. Nao repetindo.
 ```
 
-O destino copiado bate com onde os dois estavam (6.19, −18.52, 209.05), e bate
-também com o warp que o próprio jogo emitiu no join — `ponto=40c30000` é
-6.09375, o mesmo X. O formato do payload está certo.
+The copied destination matches where the two of them were (6.19, −18.52,
+209.05), and it also matches the warp the game itself emitted on the join —
+`ponto=40c30000` is 6.09375, the same X. The payload format is right.
 
-**A guarda vale 0 num convite de verdade e 1 no instante da morte.** E não
-abre sozinha: lida ao vivo minutos depois, pelo endereço que o próprio
-despachante entrega (`bp 2c3630 deref rcx+108`), continuava em `01`, com a
-sessão parada no estado 2. Repetir a chegada ali teria caído direto em
-`EndSession(0x13)`, levando a encenação junto e sem dizer por quê — foi a
-verificação que sobrou com o achado em vez de com nada.
+**The guard is 0 on a real invitation and 1 at the moment of death.** And it
+does not open on its own: read live minutes later, at the address the
+dispatcher itself hands over (`bp 2c3630 deref rcx+108`), it was still `01`,
+with the session stuck at state 2. Replaying the arrival there would have
+fallen straight into `EndSession(0x13)`, taking the staging with it and saying
+nothing about why — it was the check that ended up with the finding instead of
+with nothing.
 
-Isso mata a sexta tentativa na forma em que ela foi pensada, e aponta a
-sétima: em vez de segurar o convidado morto no lugar onde caiu, **deixar a
-morte correr como o jogo a escreveu** — ele levanta na própria fogueira, vivo —
-e só então puxá-lo de volta. A sessão sobrevive à viagem porque o desmonte é
-recusado à parte, que é a única coisa já provada deste caminho todo: o estado
-7 continua lá quando ele se levanta.
+That kills the sixth attempt in the form it was conceived, and points at the
+seventh: instead of holding the dead guest where he fell, **let the death run
+as the game wrote it** — he gets up at his own bonfire, alive — and only then
+pull him back. The session survives the trip because the teardown is refused
+separately, which is the one thing already proved about this whole path: state
+7 is still there when he gets up.
 
-### A sétima tentativa, e por que ela fecha a porta
+### The seventh attempt, and why it closes the door
 
-Medida em 12/09 com a encenação completa — marca 1000, invocação confirmada
-(`RequestNotifyJoinGuestPlayer` + `RequestNotifyJoinSession`), convite copiado
-(`destino=6.19,-18.50,209.03`), convidado morto de propósito na água:
+Measured on 12/09 with the full staging — sign 1000, summon confirmed
+(`RequestNotifyJoinGuestPlayer` + `RequestNotifyJoinSession`), invitation
+copied (`destino=6.19,-18.50,209.03`), guest killed on purpose in the water:
 
 ```
 morte de fantasma: motivo=2 papel=1 -> morte normal, e depois puxar de volta
@@ -600,46 +620,49 @@ esperando: estado=7 guarda=01 apos 1200 quadros
 desisti de puxar de volta: estado=7 guarda=01
 ```
 
-A sessão **sobreviveu** — estado 7 o tempo todo, como o M1 promete. Mas o
-convidado **nunca levantou**: ficou morto embaixo d'água, com a barra do host
-ainda no HUD, e a guarda da chegada em `01` por 7200 quadros seguidos.
+The session **survived** — state 7 the whole time, as M1 promises. But the
+guest **never got up**: he stayed dead underwater, with the host's bar still
+on the HUD, and the arrival guard at `01` for 7200 frames straight.
 
-É esta a conclusão que fecha o assunto: **o renascimento é rio abaixo do
-desmonte.** Deixar a morte correr não basta, porque a morte de um fantasma não
-o levanta — quem o levanta é o desmonte da sessão, que o M1 recusa de
-propósito. As duas coisas que o M2 precisa, manter a sessão e pôr o jogador de
-pé, estão ligadas ao mesmo pedido, e ele é **um só e não se repete**.
+This is the conclusion that settles the matter: **the respawn is downstream of
+the teardown.** Letting the death run is not enough, because a phantom's death
+does not get him up — what gets him up is the session teardown, which M1
+refuses on purpose. The two things M2 needs, keeping the session and putting
+the player on his feet, are tied to the same request, and it is **a single one
+and is not repeated**.
 
-O que sobra, e é o desenho da oitava tentativa: **levantar o jogador nós
-mesmos**. `FUN_14044fde0(*(ctx+0x70))` é o "mande-o para a última fogueira" que
-o `DS2_SeamlessCoopHook` já sabe chamar. Com a sessão segura no estado 7 e o
-jogador de pé por conta própria, a guarda tem a chance de abrir — e aí a
-repetição do convite, que já está construída e testada até a porta, roda.
+What is left, and it is the design of the eighth attempt: **get the player up
+ourselves**. `FUN_14044fde0(*(ctx+0x70))` is the "send him to the last
+bonfire" that `DS2_SeamlessCoopHook` already knows how to call. With the
+session held at state 7 and the player on his feet on his own, the guard has a
+chance to open — and then the invitation replay, which is already built and
+tested up to the door, runs.
 
-### Destravar uma sessão sem matar o cliente
+### Unsticking a session without killing the client
 
-O pedido de fim é **um só**: recusado uma vez, nunca mais é feito. Liberar o
-bloqueio depois não adianta, e o convidado fica preso entre estados. Matar o
-cliente resolve e **custa caro** (ver o CLAUDE.md sobre desconexões ilegais).
+The end request is **a single one**: refused once, it is never made again.
+Lifting the block afterwards does not help, and the guest is stuck between
+states. Killing the client fixes it and **costs dearly** (see CLAUDE.md on
+illegal disconnects).
 
-O jeito barato usa o próprio modelo já mapeado — o estado 7 sai quando
-`sessao+0x1cc` deixa de ser zero:
+The cheap way uses the model already mapped — state 7 leaves when
+`sessao+0x1cc` stops being zero:
 
 ```
 bp 2c3630 deref rcx+f8 8          # o despachante entrega o ponteiro da sessão
 pokeabs fim <sessao+0x1cc> 02000000 00000000
 ```
 
-Medido: o convidado foi do fundo d'água para a própria fogueira, vivo, em
-segundos. É a confirmação de ponta a ponta de que `+0x1cc` é o gatilho único
-do 7 para o 8.
+Measured: the guest went from the bottom of the water to his own bonfire,
+alive, in seconds. It is the end-to-end confirmation that `+0x1cc` is the
+single trigger from 7 to 8.
 
-### A oitava: a guarda abre quando o jogador levanta
+### The eighth: the guard opens when the player gets up
 
-A sétima mostrou que ninguém levanta um fantasma cuja sessão não desmonta. A
-oitava levanta ele — `FUN_14044fde0(*(ctx+0x70))`, noventa quadros depois da
-morte, para não correr por cima do que a morte ainda tem a fazer. Medida em
-12/09, com a encenação completa:
+The seventh showed that nobody gets up a phantom whose session does not tear
+down. The eighth gets him up — `FUN_14044fde0(*(ctx+0x70))`, ninety frames
+after the death, so as not to run over what the death still has to do.
+Measured on 12/09, with the full staging:
 
 ```
 morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
@@ -651,69 +674,72 @@ estado 2; repetindo o convite do host: mapa=0a1f0000 destino=6.09,-18.50,209.16
 depois da chegada: estado=11
 ```
 
-Linha por linha, tudo o que as sete tentativas anteriores tentaram adivinhar:
+Line by line, everything the seven previous attempts tried to guess:
 
-- **o warp de renascimento é aceito** mesmo com a sessão de pé no estado 7;
-- **a guarda da chegada abre** — de `01` para `00` — assim que o jogador está
-  de pé. Ela não é "esta chegada não pode", é "você não está em condição", e a
-  condição é estar vivo em algum lugar;
-- a sessão volta ao estado 1, anda sozinha até o 2, e a repetição do convite
-  **roda**;
-- o tratador da chegada entra, e sai pelo **0xb**.
+- **the respawn warp is accepted** even with the session standing at state 7;
+- **the arrival guard opens** — from `01` to `00` — as soon as the player is
+  on his feet. It is not "this arrival is not allowed", it is "you are in no
+  condition", and the condition is being alive somewhere;
+- the session goes back to state 1, walks on its own to 2, and the invitation
+  replay **runs**;
+- the arrival handler goes in, and comes out through **0xb**.
 
-### O que o 0xb quer dizer
+### What 0xb means
 
-É a saída "não pode" de `FUN_1402c6570`, que faz duas perguntas:
+It is the "not allowed" exit from `FUN_1402c6570`, which asks two questions:
 
 ```c
 FUN_14014ed40(modo, papel)   // uma tabela em 0x141568810, índice papel + modo*0x14
 FUN_1402ca190()              // entre outras coisas: *(ctx+0x70 + 0x1b0) == 0
 ```
 
-O segundo é o suspeito. Se `+0x1b0` quer dizer "este jogador ainda está se
-assentando", levantá-lo à mão é exatamente o que o deixaria aceso — e a
-repetição foi emitida no primeiro quadro em que a guarda abriu, que é o pior
-momento possível para perguntar.
+The second is the suspect. If `+0x1b0` means "this player is still settling",
+getting him up by hand is exactly what would leave it lit — and the replay was
+issued on the first frame the guard opened, which is the worst possible moment
+to ask.
 
-É uma pergunta pura e barata, então a repetição passou a **esperar a resposta
-ser sim** em vez de gastar a única tentativa descobrindo. O log diz de que a
-resposta foi feita a cada vez que ela muda.
+It is a pure, cheap question, so the replay now **waits for the answer to be
+yes** instead of spending the single attempt finding out. The log says what
+the answer was every time it changes.
 
-O convidado terminou vivo na própria fogueira, fora da sessão, sem travar
-nada — a falha mais limpa que este caminho já teve, e a primeira em que o
-jogo recusou por um motivo que tem nome.
+The guest ended up alive at his own bonfire, out of the session, with nothing
+locked up — the cleanest failure this path has had, and the first in which the
+game refused for a reason that has a name.
 
-### O custo de cada tentativa
+### What each attempt costs
 
-Medido em 12/09, e é um limite prático do caminho todo: **o experimento corta
-o convidado.** Chico colocou a marca 1001 sem problema às 19:26, o teste da
-oitava rodou às 19:31, e às 19:40 ele não colocava mais marca nenhuma e tinha
-parado até de pedir a lista delas ao servidor. Nada mais aconteceu no meio.
+Measured on 12/09, and it is a practical limit on the whole path: **the
+experiment cuts the guest off.** Chico placed sign 1001 without trouble at
+19:26, the eighth attempt's test ran at 19:31, and by 19:40 he could not place
+a sign at all and had even stopped asking the server for the list of them.
+Nothing else happened in between.
 
-Do lado do jogo é justo — um convidado que recusa o desmonte e depois sai *é*
-uma desconexão ilegal, e o jogo conta. O aviso aparece uma vez, só na tela do
-cliente, e nada disso chega a log nenhum:
+From the game's side that is fair — a guest who refuses the teardown and then
+leaves *is* an illegal disconnect, and the game counts it. The warning appears
+once, only on the client's screen, and none of it reaches any log:
 
 > Due to repeated illegal multiplayer disconnects, your connection to other
 > worlds was lost. Only a Bone of Order can restore your connection.
 
-Um jogador cortado não coloca marca, não usa orbe e **não invoca** — então
-inverter os papéis não contorna. A cura pelo item não escala: existem poucos
-Bones of Order numa jogatina e os dois personagens gastaram os seus.
+A cut-off player cannot place a sign, cannot use the orb and **cannot
+summon** — so swapping the roles is no way around it. The item cure does not
+scale: there are few Bones of Order in a playthrough and both characters spent
+theirs.
 
-A cura que escala é o save. O servidor privado guarda o seu
-(`EnableSeperateSaveFiles`), um arquivo por conta:
+The cure that scales is the save. The private server keeps its own
+(`EnableSeperateSaveFiles`), one file per account:
 
 ```
 <prefixo>/drive_c/users/steamuser/AppData/Roaming/DarkSoulsII/<steamid>/DS2SOFS0000.ds3os
 ```
 
-Copiar antes do teste e devolver depois leva segundos e torna o corte
-irrelevante. Com o jogo parado — um cliente vivo reescreve o arquivo na saída.
+Copying before the test and putting it back afterwards takes seconds and makes
+the cut-off irrelevant. With the game stopped — a live client rewrites the
+file on the way out.
 
-### O predicado era transitório, e a chegada funciona
+### The predicate was transient, and the arrival works
 
-Com a repetição travada até `FUN_1402c6570` responder sim, medido em 12/09:
+With the replay held until `FUN_1402c6570` answers yes, measured on 12/09:
 
 ```
 morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
@@ -728,42 +754,44 @@ depois da chegada: estado=3
 warp motivo=4 forca=1 tipo=0 mapa=0a1f0000 ponto=40c50000 de=+0x2c2e48 / warp aceito=1
 ```
 
-**O predicado era transitório**: não no quadro zero, sim 96 quadros depois — e
-`assentando` valia 0 nas duas leituras, então quem recusava era uma das outras
-metades de `FUN_1402ca190`, provavelmente o par de virtuais `+0x48`/`+0x50`
-que perguntam se o jogo está carregando. A oitava tentativa tinha disparado a
-repetição no primeiro quadro possível, que era o único errado.
+**The predicate was transient**: no on frame zero, yes 96 frames later — and
+`assentando` was 0 in both readings, so what was refusing was one of the other
+halves of `FUN_1402ca190`, probably the pair of virtuals `+0x48`/`+0x50` that
+ask whether the game is loading. The eighth attempt had fired the replay on
+the first possible frame, which was the only wrong one.
 
-Com a espera, **o tratador da chegada sai pelo estado 3**, que é o ramo de
-sucesso — não mais pelo 0xb — e emite o seu warp, que é aceito. Do lado do
-convidado a reentrada está resolvida: ele sai da morte, levanta, refaz o join
-e chega.
+With the wait, **the arrival handler comes out through state 3**, which is the
+success branch — no longer through 0xb — and emits its warp, which is
+accepted. On the guest's side the re-entry is solved: he comes out of the
+death, gets up, redoes the join and arrives.
 
-### O que falta é o host
+### What is missing is the host
 
-E ali para. O estado 3 é onde o convidado espera a resposta do par, e ela não
-vem: pouco depois nenhum dos dois clientes tem mais objeto de sessão —
-`bp 2c3630` não dispara em nenhum. O convidado terminou vivo no próprio mundo,
-o host sozinho.
+And there it stops. State 3 is where the guest waits for the peer's answer,
+and it does not come: shortly afterwards neither client has a session object
+any more — `bp 2c3630` fires on neither. The guest ended up alive in his own
+world, the host alone.
 
-O host **não pede fim de sessão nenhuma vez** — o log dele fica vazio, o que
-confirma de novo que ele não participa da morte do convidado. Então a sessão
-do host não morreu por um pedido: ela se desfez porque o elo com o par caiu, e
-o que derruba o elo é justamente devolver a máquina do convidado ao estado 1.
+The host **never asks for a session end** — its log stays empty, which
+confirms again that it takes no part in the guest's death. So the host's
+session did not die from a request: it fell apart because the link to the peer
+dropped, and what drops the link is precisely putting the guest's machine back
+to state 1.
 
-Duas direções a partir daqui, e a segunda parece mais barata que a primeira:
+Two directions from here, and the second looks cheaper than the first:
 
-1. **Segurar o host.** Descobrir o que no host solta o slot do convidado
-   quando o elo pisca, e segurá-lo pelos poucos segundos da reentrada.
-2. **Reinvocar em vez de reentrar.** `DS2_RematchHook` já faz exatamente isso
-   para marcas vermelhas depois de um duelo — o host reinvoca o mesmo jogador
-   sozinho. Aplicá-lo à marca branca depois de uma morte de co-op reaproveita
-   código provado e entrega o que o desenho pede ("morreu, renasce e continua
-   na sessão") ao custo de um carregamento.
+1. **Hold the host.** Find out what in the host releases the guest's slot when
+   the link blinks, and hold it for the few seconds of the re-entry.
+2. **Re-summon instead of re-entering.** `DS2_RematchHook` already does
+   exactly that for red signs after a duel — the host re-summons the same
+   player by itself. Applying it to the white sign after a co-op death reuses
+   proven code and delivers what the design asks for ("died, respawns and
+   stays in the session") at the cost of one load.
 
-### A nona: sem o handshake, a máquina anda
+### The ninth: without the handshake, the machine moves
 
-Ir direto ao estado 2, sem devolver a sessão ao 1, muda o resultado:
+Going straight to state 2, without putting the session back to 1, changes the
+result:
 
 ```
 morte de fantasma: motivo=2 papel=1 -> morte normal, e depois levantar e puxar de volta
@@ -776,35 +804,37 @@ depois da chegada: estado=3
 estado -> 4
 ```
 
-e, lido ao vivo um minuto depois, `[sessao+0xf8] = 6`. Antes ela parava no 3;
-agora percorre **3 → 4 → 6**, e o convidado volta a ser desenhado como
-fantasma branco. Nem o 3 nem o 4 estão no switch do despachante, então cada
-passo veio de uma mensagem: alguma coisa do outro lado está respondendo.
+and, read live a minute later, `[sessao+0xf8] = 6`. Before it stopped at 3;
+now it runs **3 → 4 → 6**, and the guest is drawn as a white phantom again.
+Neither 3 nor 4 is in the dispatcher's switch, so each step came from a
+message: something on the other side is answering.
 
-Também apareceu, na primeira rodada desta variante, um segundo pedido de fim
-que não vinha ao caso: `motivo=3` saindo de `+0x2c385c`, dentro do tratador do
-estado 7, na janela entre a morte e a reentrada. Bloqueá-lo (`block 3`) é uma
-linha no arquivo de pedido e tirou esse ruído do caminho.
+There also turned up, on the first round of this variant, a second end request
+that was beside the point: `motivo=3` coming out of `+0x2c385c`, inside the
+state 7 handler, in the window between the death and the re-entry. Blocking it
+(`block 3`) is one line in the request file and took that noise out of the
+way.
 
-### O host não usa esta máquina
+### The host does not use this machine
 
-E mesmo assim a sessão acaba, porque o host some. O que se sabe dele:
+And even so the session ends, because the host disappears. What is known about
+it:
 
-- ele **nunca** pede fim de sessão — o log do `DS2_SeamlessSessionHook` do
-  host fica vazio a sessão inteira;
-- `bp 2c3630` **não dispara** no host depois da morte do convidado, e o
-  despachante é por frame: se ele não roda, não há objeto de sessão para
-  rodar.
+- it **never** asks for a session end — the host's `DS2_SeamlessSessionHook`
+  log stays empty for the whole session;
+- `bp 2c3630` **does not fire** on the host after the guest's death, and the
+  dispatcher is per frame: if it does not run, there is no session object to
+  run on.
 
-Ou seja o host não é a outra ponta desta mesma máquina de estados — ou o
-objeto dele é destruído por um caminho que não passa por `FUN_1402c2f20`. Essa
-é a próxima coisa a medir, e a medição é barata: armar `bp 2c3630` no host
-**enquanto a sessão está viva** responde de uma vez se ele tem um objeto
-destes e em que estado ele fica.
+So the host is not the other end of this same state machine — or its object is
+destroyed by a path that does not go through `FUN_1402c2f20`. That is the next
+thing to measure, and the measurement is cheap: arming `bp 2c3630` on the host
+**while the session is live** answers at once whether it has one of these
+objects and what state it sits in.
 
-### O host tem a sua própria máquina, e ela tem nome
+### The host has its own machine, and it has a name
 
-O binário carrega RTTI, e as classes se leem sozinhas:
+The binary carries RTTI, and the classes read themselves:
 
 ```
 NetMultiplayCtrl
@@ -812,135 +842,137 @@ NetMultiplayCtrl
 └── NetAcceptMultiplayCtrl   → NetSummonAcceptMultiplayCtrl  (o host)
 ```
 
-Tudo o que este documento chama de "a sessão" até aqui é a primeira: a vtable
-em `0x1410d7bd8`, o estado em `+0xf8`, o despachante `FUN_1402c3630`,
-`FUN_1402c2f20` para encerrar. É a máquina de **entrar no mundo de alguém**.
+Everything this document has called "the session" up to here is the first one:
+the vtable at `0x1410d7bd8`, the state at `+0xf8`, the dispatcher
+`FUN_1402c3630`, `FUN_1402c2f20` to end it. It is the machine for **entering
+someone's world**.
 
-O host usa a outra, e ela é diferente em tudo o que importa:
+The host uses the other one, and it differs in everything that matters:
 
-| | convidado | host |
+| | guest | host |
 | --- | --- | --- |
-| classe | `NetSummonJoinMultiplayCtrl` | `NetSummonAcceptMultiplayCtrl` |
+| class | `NetSummonJoinMultiplayCtrl` | `NetSummonAcceptMultiplayCtrl` |
 | vftable | `0x1410d7bd8` | `0x1410d7998` |
-| estado | `+0xf8` | `+0x150` |
-| despachante por frame | `FUN_1402c3630` | `FUN_1402bddb0` |
-| casos no switch | 0,1,4,5,6,7,8,10,0xb | 2,4,5,7,8,10,0xd,0xf,0x10,0x11,0x12 |
+| state | `+0xf8` | `+0x150` |
+| per-frame dispatcher | `FUN_1402c3630` | `FUN_1402bddb0` |
+| cases in the switch | 0,1,4,5,6,7,8,10,0xb | 2,4,5,7,8,10,0xd,0xf,0x10,0x11,0x12 |
 
-Isso explica de uma vez duas coisas que vinham sendo lidas como fato sobre o
-jogo e eram fato sobre a instrumentação:
+That explains at once two things that had been read as fact about the game and
+were facts about the instrumentation:
 
-- **"o host nunca pede fim de sessão"** — o `DS2_SeamlessSessionHook` observa
-  `FUN_1402c2f20`, que é da classe do convidado. O host nunca ia aparecer ali.
-- **"o host não tem objeto de sessão depois da morte"** — `bp 2c3630` é o
-  despachante do convidado. O host nunca ia disparar ali tampouco.
+- **"the host never asks for a session end"** — `DS2_SeamlessSessionHook`
+  watches `FUN_1402c2f20`, which belongs to the guest's class. The host was
+  never going to show up there.
+- **"the host has no session object after the death"** — `bp 2c3630` is the
+  guest's dispatcher. The host was never going to fire there either.
 
-A medição que interessa agora é direta: `bp 2bddb0 deref rcx+150 8` no host,
-com a sessão viva, e ver o que o estado dele faz quando o convidado morre.
+The measurement that matters now is direct: `bp 2bddb0 deref rcx+150 8` on the
+host, with the session live, and see what its state does when the guest dies.
 
-### O host sobrevive à morte do convidado
+### The host survives the guest's death
 
-Com a classe certa em mãos, a medição é direta. O controlador do host não
-precisa de breakpoint: basta varrer a memória viva pela vtable dele.
+With the right class in hand, the measurement is direct. The host's controller
+needs no breakpoint: sweeping live memory for its vtable is enough.
 
 ```
 scan host 1410d7998 8 6      # NetSummonAcceptMultiplayCtrl::vftable
 ```
 
-Com a sessão de pé isso devolve um objeto no heap — `0x7ffffe5bf120` numa
-rodada — e `+0x150` nele vale **0x10**. Quarenta segundos depois da morte do
-convidado, ainda **0x10**: o host não larga na hora. Minutos depois o objeto
-já não aparece na varredura, então ele larga em algum momento, mas não no que
-se supunha.
+With the session standing that returns an object on the heap —
+`0x7ffffe5bf120` in one round — and `+0x150` in it is **0x10**. Forty seconds
+after the guest's death, still **0x10**: the host does not let go right away.
+Minutes later the object no longer shows up in the sweep, so it does let go at
+some point, but not at the one assumed.
 
-Isso derruba a conclusão da seção anterior. O host não some quando o
-convidado morre; ele fica exatamente onde estava.
+That knocks down the previous section's conclusion. The host does not
+disappear when the guest dies; it stays exactly where it was.
 
-E do lado do convidado, com a nona variante, a máquina **completa o join**:
-lida ao vivo depois da reentrada, `[sessao+0xf8] = 7` num objeto de sessão
-novo, e o personagem é desenhado como fantasma branco. Ou seja os dois lados
-acham que estão numa sessão — e mesmo assim nenhum vê o outro, porque o
-convidado está no próprio mundo.
+And on the guest's side, with the ninth variant, the machine **completes the
+join**: read live after the re-entry, `[sessao+0xf8] = 7` in a new session
+object, and the character is drawn as a white phantom. So both sides think
+they are in a session — and even so neither sees the other, because the guest
+is in his own world.
 
-O que falta, então, não é manter o host vivo nem completar a máquina do
-convidado: as duas coisas já acontecem. É **fazer o host voltar a colocar o
-fantasma no mundo dele**. No join original isso vem de uma mensagem que o
-host recebe; a reentrada nunca a manda.
+What is missing, then, is not keeping the host alive or completing the guest's
+machine: both already happen. It is **making the host put the phantom back in
+its world**. In the original join that comes from a message the host receives;
+the re-entry never sends it.
 
-### A linha do tempo do host, finalmente
+### The host's timeline, finally
 
-Com `FUN_1402bddb0` detourado, o host conta a própria história. Um join
-normal, por quadro:
+With `FUN_1402bddb0` detoured, the host tells its own story. A normal join,
+frame by frame:
 
 ```
 host: estado -> 4 -> 5 -> 7 -> 8 -> 10(0xa) -> 11(0xb) -> 13(0xd) -> 14(0xe) -> 15(0xf) -> 16(0x10)
 ```
 
-`0x10` é jogar. E na morte do convidado, com a nona variante rodando: **nada**.
-Nem uma transição. O host fica em `0x10` do princípio ao fim, sem jamais
-saber que o convidado saiu, muito menos que voltou.
+`0x10` is playing. And on the guest's death, with the ninth variant running:
+**nothing**. Not one transition. The host stays at `0x10` from start to
+finish, never knowing the guest left, let alone that he came back.
 
-Mas o servidor sabe:
+But the server knows:
 
 ```
 22:06:41  3:Chico   RequestNotifyDeath
 22:07:04  1:Samuel  RequestNotifyLeaveGuestPlayer
 ```
 
-Vinte e três segundos depois da morte — e *depois* de a reentrada do
-convidado ter completado, que leva uns oito. Não é reação à morte: é
-**temporizador**. O host passou vinte segundos sem receber nada do convidado
-e o descartou.
+Twenty-three seconds after the death — and *after* the guest's re-entry had
+completed, which takes about eight. It is not a reaction to the death: it is a
+**timer**. The host went twenty seconds without receiving anything from the
+guest and dropped him.
 
-O que diz onde o problema realmente está. Não é a máquina de estados de
-nenhum dos dois: as duas ficam de pé, uma em `0x10` e a outra chegando ao 7.
-É o **fluxo entre eles**. A nona variante preserva o objeto do elo mas não
-faz o convidado voltar a falar por ele, e o silêncio é o que o host cronometra.
+Which says where the problem really is. It is not either one's state machine:
+both stay standing, one at `0x10` and the other reaching 7. It is the **flow
+between them**. The ninth variant preserves the link object but does not make
+the guest talk over it again, and the silence is what the host times.
 
-### A revanche serve para marca branca
+### The rematch works for a white sign
 
-`DS2_RematchHook` foi escrito para duelos: ele guarda o ponteiro do manager
-quando o jogador invoca, e reinvoca sozinha qualquer placa que chegue depois
-ao cache do host. Nunca tinha disparado para uma marca branca, e o hook só
-falava quando agia — então não dava para saber se ele não era chamado ou se
-era chamado e desistia.
+`DS2_RematchHook` was written for duels: it keeps the manager pointer when the
+player summons, and by itself re-summons any sign that later reaches the
+host's cache. It had never fired for a white sign, and the hook only spoke
+when it acted — so there was no way to tell whether it was not being called or
+was being called and giving up.
 
-Com uma linha a mais, registrando toda placa que entra:
+With one more line, logging every sign that comes in:
 
 ```
 placa recebida: tipo=1 alca=80000011 armado=1
 revanche pedida, mas ninguem invocou ainda: sem o manager nao da
 ```
 
-`tipo=1` é a marca branca. Ele **é** chamado, a alça é válida e ele está
-armado: o que faltava era só o manager, que só chega quando o jogador invoca
-uma vez por sessão de jogo.
+`tipo=1` is the white sign. It **is** called, the handle is valid and it is
+armed: all that was missing was the manager, which only arrives when the
+player summons once per game session.
 
-Isso torna viável o caminho que a nona tentativa não alcança. Em vez de
-costurar o convidado de volta a uma sessão cujo fluxo peer já morreu — que é
-o que o host cronometra e derruba — o convidado volta para casa pela morte
-normal, põe uma marca, e o host a invoca sozinho. É uma sessão nova de
-verdade, com elo novo, ao custo de um carregamento.
+That makes viable the path the ninth attempt does not reach. Instead of
+stitching the guest back into a session whose peer flow is already dead —
+which is what the host times and drops — the guest goes home through the
+normal death, places a sign, and the host summons it by itself. It is a
+genuinely new session, with a new link, at the cost of one load.
 
-O que falta para fechar: semear o manager (uma invocação manual por sessão de
-jogo, ou achar de onde mais o ponteiro sai) e pôr a marca sozinho do lado do
-convidado.
+What is left to close it: seed the manager (one manual summon per game
+session, or find where else the pointer comes from) and place the sign by
+itself on the guest's side.
 
-### Duas armadilhas de encenação que custaram ciclos
+### Two staging traps that cost cycles
 
-**`up` reescreve o `Injector.config`.** Ligar `--auto-rematch` no
-`game prepare` e depois rodar `up --seamless` desliga de volta, e o log do
-hook continua mostrando as linhas do boot anterior — o que se lê exatamente
-como um hook vivo. Confira o **mtime** do log antes de acreditar nele.
+**`up` rewrites `Injector.config`.** Turning `--auto-rematch` on in
+`game prepare` and then running `up --seamless` turns it back off, and the
+hook's log keeps showing the previous boot's lines — which reads exactly like
+a live hook. Check the log's **mtime** before believing it.
 
-**A fogueira de Heide fica numa laje estreita sobre a água.** Qualquer `dpad`
-que erre o menu e chegue ao mundo empurra o personagem para o mar, e o teste
-morre junto. Toda navegação de menu tem que confirmar por captura que o menu
-abriu antes do próximo direcional.
+**Heide's bonfire sits on a narrow slab over the water.** Any `dpad` that
+misses the menu and reaches the world pushes the character into the sea, and
+the test dies with him. Every menu walk has to confirm by screenshot that the
+menu opened before the next direction.
 
-### Reinvocação automática, ponta a ponta
+### Automatic re-summon, end to end
 
-Medido em 12/09, 22:46, sem nenhuma intervenção humana entre a marca e a
-sessão:
+Measured on 12/09, 22:46, with no human intervention between the sign and the
+session:
 
 ```
 22:45:05  3:Chico   Sign 1016 created: type 1
@@ -953,33 +985,36 @@ sessão:
           (host)    estado -> 0xb -> 0xd -> 0xe -> 0xf -> 0x10
 ```
 
-E nas telas: o nome e a barra do Samuel no HUD do Chico, o Samuel visível ao
-lado dele, o Chico desenhado como fantasma branco. Sessão de verdade, elo
-novo, os dois se vendo.
+And on the screens: Samuel's name and bar on Chico's HUD, Samuel visible
+beside him, Chico drawn as a white phantom. A real session, a new link, the
+two of them seeing each other.
 
-**Isto é um contorno, não o M2** (corrigido em 13/09: o critério do M2 é
-morrer e continuar na *mesma* sessão, sem marca e sem reinvocação — ver a lista
-de tarefas). O que o parágrafo abaixo dizia em 12/09: não costurar o convidado de volta a uma
-sessão cujo fluxo peer já morreu — o host cronometra esse silêncio e derruba,
-medido — e sim deixar a morte correr, o convidado voltar para casa, pôr uma
-marca, e o host reinvocá-lo sozinho. Custa um carregamento e entrega o que o
-desenho pede: morreu, renasce, e continua com o amigo.
+**This is a workaround, not M2** (corrected on 13/09: M2's criterion is dying
+and staying in the *same* session, with no sign and no re-summon — see the
+task list). What the paragraph below said on 12/09: not to stitch the guest
+back into a session whose peer flow is already dead — the host times that
+silence and drops him, measured — but to let the death run, the guest go home,
+place a sign, and the host re-summon him by itself. It costs one load and
+delivers what the design asks for: died, respawns, and carries on with his
+friend.
 
-Falta uma peça, e é pequena perto do resto: **o convidado pôr a marca
-sozinho**. Hoje é um X manual. O resto da cadeia já é automático.
+One piece is missing, and it is small next to the rest: **the guest placing
+the sign by itself**. Today it is a manual X. The rest of the chain is already
+automatic.
 
-Duas arestas conhecidas:
+Two known rough edges:
 
-- o manager só existe depois de uma invocação manual por sessão de jogo, que
-  é de onde `DS2_RematchHook` tira o ponteiro. Vale procurar outra origem;
-- o hook tenta **toda** placa que chega, inclusive marcas velhas ainda no
-  cache do cliente, e cada uma dessas rende um "Summoning failed. The sign has
-  disappeared." na tela do host. Filtrar por dono resolveria.
+- the manager only exists after one manual summon per game session, which is
+  where `DS2_RematchHook` takes the pointer from. It is worth looking for
+  another source;
+- the hook tries **every** sign that arrives, including old signs still in the
+  client's cache, and each of those earns a "Summoning failed. The sign has
+  disappeared." on the host's screen. Filtering by owner would fix it.
 
-### A peça que falta, e onde ela está
+### The missing piece, and where it is
 
-Para o M2 ficar sem mão humana, o convidado precisa pôr a marca sozinho ao
-voltar para casa. O RTTI já entrega a vizinhança:
+For M2 to be hands-free, the guest needs to place the sign by itself on
+getting home. The RTTI already hands over the neighbourhood:
 
 ```
 ISummonSignSetCtrl / SummonSignSetCtrl   vftable 0x1410cb698
@@ -989,110 +1024,117 @@ AbstractNetSvrMySignManager              vftable 0x1410d3518
 Frpg2RequestMessage::RequestCreateSign   vftable 0x141113378
 ```
 
-O construtor da mensagem (`FUN_1406a0b10`, via a fábrica `FUN_140caa440`) não
-serve de gancho: é alocação de protobuf, longe de quem decide pôr a marca.
+The message constructor (`FUN_1406a0b10`, via the `FUN_140caa440` factory) is
+no good as a hook point: it is protobuf allocation, far from whoever decides
+to place the sign.
 
-**O jeito curto é medir, não ler.** Uma varredura de breakpoints sobre
-`0x140212cd0`–`0x140213c80` com o convidado apertando X diz em uma passada
-qual método é a colocação. É a mesma técnica que achou o warp, e aqui a faixa
-é de trinta funções em vez de trezentas.
+**The short way is to measure, not to read.** A breakpoint sweep over
+`0x140212cd0`–`0x140213c80` with the guest pressing X says in one pass which
+method is the placement. It is the same technique that found the warp, and
+here the range is thirty functions instead of three hundred.
 
-Vale lembrar que a alternativa honesta existe e já funciona: **um X do
-jogador**. Morreu, voltou para casa, apertou X, o host o traz de volta
-sozinho. Não é "seamless" do jeito do enunciado, mas é um botão por morte e
-não depende de mais nada.
+It is worth remembering that the honest alternative exists and already works:
+**an X from the player**. Died, got home, pressed X, and the host brings him
+back by itself. It is not "seamless" the way the brief means it, but it is one
+button per death and depends on nothing else.
 
 
-## O parecer de 13/09: como o jogo renasce, e por que o warp tira o fantasma
+## 13/09 assessment: how the game respawns, and why the warp takes the phantom
 
-Pedido ao Fable com o registro inteiro deste documento. Marcado abaixo o que foi
-**reconferido no binário** depois; o resto é leitura dele, com os endereços para
-quem for conferir.
+Asked of Fable with this document's entire record. Marked below is what was
+**re-checked in the binary** afterwards; the rest is his reading, with the
+addresses for whoever wants to check.
 
-### O respawn comum não usa coordenadas
+### The ordinary respawn does not use coordinates
 
-- **[reconferido]** O registro da última fogueira é `*(ctx+0x70)`: `+0x164` mapa,
-  `+0x168` tipo, `+0x16c` id. `FUN_14044ed40` monta o pedido a partir dele —
-  tipo 0 do registro vira pedido tipo 3, tipo 2 vira "player start" do mapa, e
-  qualquer outro vira um destino padrão (`FUN_14039a9a0`).
-- Quem grava o registro: acender/interagir (`FUN_1401caf50`) e sentar
-  (`FUN_1401cb950`) — só se quem interagiu é o jogador local; viagem pelo menu
-  (`FUN_14017fdb0`); e dois outros chamadores não lidos (`FUN_140040060`,
-  `FUN_140461f20`). O registro é recriado a cada carga.
-- O id (`0x7ba7` na medição) é de um **objeto de mapa**, e só é resolvido
-  **depois** da recarga: `FUN_1401c3c60` procura o objeto na lista
-  `*(ctx+0x70)+0x58` e **[reconferido]** `FUN_1401cb1b0` põe o jogador em
-  `translação − 1,1 × eixo Z` da matriz do objeto (`DAT_1410bf020 = 1.1f`),
-  virado como ela.
+- **[re-checked]** The last bonfire's record is `*(ctx+0x70)`: `+0x164` map,
+  `+0x168` type, `+0x16c` id. `FUN_14044ed40` builds the request from it —
+  record type 0 becomes request type 3, type 2 becomes the map's "player
+  start", and anything else becomes a default destination (`FUN_14039a9a0`).
+- What writes the record: lighting or interacting (`FUN_1401caf50`) and
+  sitting (`FUN_1401cb950`) — only if whoever interacted is the local player;
+  travel through the menu (`FUN_14017fdb0`); and two other callers that were
+  not read (`FUN_140040060`, `FUN_140461f20`). The record is rebuilt on every
+  load.
+- The id (`0x7ba7` in the measurement) belongs to a **map object**, and is
+  only resolved **after** the reload: `FUN_1401c3c60` looks the object up in
+  the list `*(ctx+0x70)+0x58` and **[re-checked]** `FUN_1401cb1b0` puts the
+  player at `translação − 1,1 × eixo Z` of the object's matrix
+  (`DAT_1410bf020 = 1.1f`), facing the same way as it.
 
-Logo **coordenadas de fogueira existem, mas só do mapa carregado.**
+So **bonfire coordinates do exist, but only for the loaded map.**
 
-### Todo warp recarrega, e é isso que tira o fantasma
+### Every warp reloads, and that is what takes the phantom away
 
-Leitura do Fable da máquina do loader (`GameManagerImp`, vftable `0x1410c4c68`):
-a entrada do warp só aceita no estado `0x1e`; ao aceitar, notifica o multiplay e
-arma um atraso (6 s para morte, 2 s para os outros); o estado `0x14` destrói
-**incondicionalmente** o mapa, os personagens e **`ctx+0xd0 = 0`**; o `0xb` recria
-tudo. Os tipos 0–4 resolvem o destino só depois disso. Não há atalho de "mesmo
-mapa". **[reconferido]** `FUN_140419610` recria o personagem com
-`ctx[0x1a] = chr` — então **`ctx+0xd0` é o personagem local**, e o que este
-documento chamava de "contador de multiplay em `ctx+0xd0 +0x168`" é um campo do
-personagem, reconstruído a cada carga.
+Fable's reading of the loader's state machine (`GameManagerImp`, vftable
+`0x1410c4c68`): the warp entry only accepts in state `0x1e`; on accepting it
+notifies multiplay and arms a delay (6 s for death, 2 s for the others); state
+`0x14` **unconditionally** destroys the map, the characters and
+**`ctx+0xd0 = 0`**; `0xb` rebuilds everything. Types 0–4 resolve the
+destination only after that. There is no "same map" shortcut.
+**[re-checked]** `FUN_140419610` rebuilds the character with
+`ctx[0x1a] = chr` — so **`ctx+0xd0` is the local character**, and what this
+document called the "multiplay counter at `ctx+0xd0 +0x168`" is a field of the
+character, rebuilt on every load.
 
-Sobrevive à recarga o gerenciador de sessão (`ctx+0x22f0`) — por isso as sessões
-ficavam de pé no estado 7. Não sobrevive a presença: do lado do convidado, os
-jogadores remotos são registrados no estado 5 (`FUN_1402c3c80` →
-`FUN_14051b0e0`), que **não aparece no rastro da nona tentativa**; do lado do
-host, o personagem do convidado é criado na sequência `0xd → 0xe
-(WaitGuestWarpFinished) → 0xf`, que o host parado em `0x10` nunca refaz.
+The session manager (`ctx+0x22f0`) survives the reload — which is why the
+sessions stayed standing in state 7. Presence does not survive: on the guest's
+side, the remote players are registered in state 5 (`FUN_1402c3c80` →
+`FUN_14051b0e0`), which **does not appear in the ninth attempt's trace**; on
+the host's side, the guest's character is created by the sequence `0xd → 0xe
+(WaitGuestWarpFinished) → 0xf`, which a host stopped at `0x10` never does
+again.
 
-### A morte tem um ponto só
+### Death has a single point
 
-> **Corrigido pela medição de 13/09** (seção "A morte medida, e segurada", no fim
-> deste documento): o byte é o ponto certo, mas quem o consome para o jogador
-> local é o slot **`+0x20`**, `FUN_14013c720`; o `+0x10` abaixo nunca foi chamado
-> para ele. E `+0x759` tem dez escritores, não um.
+> **Corrected by the 13/09 measurement** (section "Death measured, and held",
+> at the end of this document): the byte is the right point, but what consumes
+> it for the local player is slot **`+0x20`**, `FUN_14013c720`; the `+0x10`
+> below was never called for him. And `+0x759` has ten writers, not one.
 
-**[reconferido]** `FUN_14013c3b0` (slot `+0x10` de `ChrDeadActionCtrl`, vftable
-`0x1410bf308`) sai se `*(chr+0xb8)+0x5fc != 0`, sai se `+0x759 == 0`, copia os
-parâmetros da morte de `+0x75c..+0x76d` e só então chama `FUN_14013d430`. Segundo
-o Fable, dano letal (`FUN_14013a9b0`), flags do personagem, evento de animação
-`0x19` e status todos escrevem `+0x759 = 1`. Cancelar ali impede que o resto do
-jogo veja uma morte — sem sequência de "YOU DIED", sem `RequestNotifyDeath`, sem
-`EndSession`, sem warp. É o plano do M2 na lista de tarefas.
+**[re-checked]** `FUN_14013c3b0` (slot `+0x10` of `ChrDeadActionCtrl`, vftable
+`0x1410bf308`) leaves if `*(chr+0xb8)+0x5fc != 0`, leaves if `+0x759 == 0`,
+copies the death parameters from `+0x75c..+0x76d` and only then calls
+`FUN_14013d430`. According to Fable, lethal damage (`FUN_14013a9b0`),
+character flags, animation event `0x19` and status all write `+0x759 = 1`.
+Cancelling there keeps the rest of the game from seeing a death — no "YOU
+DIED" sequence, no `RequestNotifyDeath`, no `EndSession`, no warp. It is the
+M2 plan in the task list.
 
-Riscos nomeados por ele: fontes de morte que não passem por `+0x759` (a função de
-dano é virtual em quatro vtables e só uma foi lida); deixar `+0x759` ligado com
-`+0x5fc != 0` faz o consumidor ignorar a morte; e cada consequência reproduzida à
-mão que ficar de fora é uma divergência de save entre os dois jogadores.
+Risks he named: death sources that do not go through `+0x759` (the damage
+function is virtual in four vtables and only one was read); leaving `+0x759`
+on with `+0x5fc != 0` makes the consumer ignore the death; and every
+consequence reproduced by hand that is left out is a save divergence between
+the two players.
 
-### A morte do host, lida e não medida
+### The host's death, read and not measured
 
-O warp do host chama `FUN_1402bd0d0(ctrl, 4)`, que **só encerra a sessão se o
-host não está em `0x10`**. Quem encerra, na morte do host, é o convidado: o
-terminal de morte de fantasma roda com motivo ≠ 2 e pede o fim. Com a morte
-interceptada nos dois clientes, o host nunca morre nem warpa, e não há o que
-suprimir.
+The host's warp calls `FUN_1402bd0d0(ctrl, 4)`, which **only ends the session
+if the host is not at `0x10`**. What ends it, on the host's death, is the
+guest: the phantom's death terminal runs with reason ≠ 2 and asks for the end.
+With death intercepted on both clients, the host never dies and never warps,
+and there is nothing to suppress.
 
-## Teleporte sem warp, e as coordenadas da fogueira (13/09)
+## Teleport without a warp, and the bonfire's coordinates (13/09)
 
-Os passos 1 e 2 do plano do M2, medidos solo com o Samuel em Heide, sem sessão.
+Steps 1 and 2 of the M2 plan, measured solo with Samuel in Heide, with no
+session.
 
-### Onde a posição realmente mora
+### Where the position really lives
 
-Escrever a posição que parece a do personagem não move nada: toda cópia
-visível é reescrita no quadro seguinte. A vigia de escrita (`wp` no
-`DS2_Trace`, ver [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md))
-seguiu a cadeia de cima para baixo, uma camada por medição:
+Writing the position that looks like the character's moves nothing: every
+visible copy is rewritten on the next frame. The write watchdog (`wp` in
+`DS2_Trace`, see [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md))
+followed the chain from the top down, one layer per measurement:
 
-| cópia | quem a reescreve por quadro | o que ela é |
+| copy | what rewrites it per frame | what it is |
 | --- | --- | --- |
-| `ChrPhysicsCtrl+0x80` | `+0x36ec7f`, em `FUN_14036ec00` | medidor de velocidade: amostra a posição pelo getter virtual `+0x148` do `PlayerCtrl` e deriva a velocidade |
-| `PlayerCtrl+0x90` | `+0x314df1` (setter `+0x140`, vindo do `ChrMotionCtrl`) e `+0x36df42` (física) | translação da matriz de mundo `+0x60..+0x9f`; animação escreve, física corrige |
-| `ChrPhysicsCtrl+0x1c0` | `+0xbd2c18`, em `FUN_140bd2bd0` | cache do corpo, `y` 0,05 m acima dos pés (`ChrPhysicsCtrl+0x104`) |
-| **`hkpRigidBody+0x1a0`** | o integrador do Havok | **a posição autoritativa** |
+| `ChrPhysicsCtrl+0x80` | `+0x36ec7f`, in `FUN_14036ec00` | speed meter: samples the position through `PlayerCtrl`'s virtual getter `+0x148` and derives the velocity |
+| `PlayerCtrl+0x90` | `+0x314df1` (setter `+0x140`, coming from `ChrMotionCtrl`) and `+0x36df42` (physics) | the world matrix's translation `+0x60..+0x9f`; animation writes, physics corrects |
+| `ChrPhysicsCtrl+0x1c0` | `+0xbd2c18`, in `FUN_140bd2bd0` | the body's cache, `y` 0.05 m above the feet (`ChrPhysicsCtrl+0x104`) |
+| **`hkpRigidBody+0x1a0`** | Havok's integrator | **the authoritative position** |
 
-Os objetos, todos com nome pelo RTTI:
+The objects, all named through RTTI:
 
 ```
 ctx+0xd0                          PlayerCtrl                (HP em +0x168, máximo em +0x170)
@@ -1106,377 +1148,386 @@ hkpRigidBody+0x1b0 / +0x1c0       centros de massa do swept transform (os w são
 hkpRigidBody+0x250 / +0x260       posições de quadros anteriores
 ```
 
-### O teleporte que funcionou
+### The teleport that worked
 
-Um único pedido, escrevendo só XYZ e preservando cada `w`:
+A single request, writing only XYZ and preserving every `w`:
 
-1. as cópias de referência do jogo — `PlayerCtrl+0x90` e `+0xa0`,
-   `ChrPhysicsCtrl+0x80`, `ChrMotionCtrl+0x50` — e zerando as velocidades do
-   medidor (`ChrPhysicsCtrl+0x60` e `+0x70`);
-2. no `hkpRigidBody`: `+0x250`, `+0x260`, `+0x1b0`, `+0x1c0`, `+0x1a0`, com
-   `y` somado de `0,05`;
-3. por último o cache `ChrPhysicsCtrl+0x1c0`.
+1. the game's reference copies — `PlayerCtrl+0x90` and `+0xa0`,
+   `ChrPhysicsCtrl+0x80`, `ChrMotionCtrl+0x50` — and zeroing the meter's
+   velocities (`ChrPhysicsCtrl+0x60` and `+0x70`);
+2. in the `hkpRigidBody`: `+0x250`, `+0x260`, `+0x1b0`, `+0x1c0`, `+0x1a0`,
+   with `0,05` added to `y`;
+3. last of all the cache `ChrPhysicsCtrl+0x1c0`.
 
-Resultado: o Samuel saiu da fogueira de Heide e apareceu **de pé na Catedral de
-Blue, a 69 m e 12 m acima, sem tela de carregamento**. O servidor confirmou pelo
-próprio log (`Location: ... position 13.6 -6.2 276.0`), a posição ficou estável,
-e ele andou 1,8 m com o analógico logo depois, com `y` constante. Ficou uns
-85 cm fora do ponto exato — a física empurrando a cápsula para fora da
-geometria da fogueira.
+Result: Samuel left the Heide bonfire and appeared **standing in the Cathedral
+of Blue, 69 m away and 12 m above, with no loading screen**. The server
+confirmed it in its own log (`Location: ... position 13.6 -6.2 276.0`), the
+position stayed stable, and he walked 1.8 m with the stick right afterwards,
+with `y` constant. He ended up about 85 cm off the exact point — the physics
+pushing the capsule out of the bonfire's geometry.
 
-**Resolva a cadeia de novo a cada uso.** Depois de uma recarga (uma morte, um
-warp) o `PlayerCtrl`, a física e o controle de movimento voltaram nos mesmos
-endereços, mas o `hkpRigidBody` não: o endereço antigo passou a ser o corpo de
-outra coisa, a (−100, 0,7, 188), e um teleporte com o ponteiro guardado moveu
-esse corpo e deixou o personagem onde estava (13/09). A vftable do corpo
-(`0x141126578`) não distingue um do outro; o que distingue é ter vindo agora de
-`*(*(ChrPhysicsCtrl+0x320)+0x20)`.
+**Resolve the chain again on every use.** After a reload (a death, a warp) the
+`PlayerCtrl`, the physics and the motion control came back at the same
+addresses, but the `hkpRigidBody` did not: the old address had become some
+other thing's body, at (−100, 0.7, 188), and a teleport with the stored
+pointer moved that body and left the character where he was (13/09). The
+body's vftable (`0x141126578`) does not tell one from the other; what tells
+them apart is having just come from `*(*(ChrPhysicsCtrl+0x320)+0x20)`.
 
-Duas tentativas anteriores contam o que **não** basta: escrever só a física
-(`ChrPhysicsCtrl+0x80`) é desfeito no quadro seguinte; escrever as cópias do
-jogo mais o cache do corpo, sem o Havok, é desfeito também (o personagem andou
-16 cm e voltou). E um caso lateral: escrever só o cache do corpo moveu o
-personagem 0,8 m para o lado errado — a varredura da cápsula entre a posição
-antiga e a nova batendo na geometria —, o que se lê como teleporte e não é.
+Two earlier attempts say what is **not** enough: writing only the physics
+(`ChrPhysicsCtrl+0x80`) is undone on the next frame; writing the game's copies
+plus the body's cache, without Havok, is undone too (the character moved 16 cm
+and came back). And a side case: writing only the body's cache moved the
+character 0.8 m the wrong way — the capsule's sweep between the old position
+and the new one hitting the geometry — which reads as a teleport and is not.
 
-### As coordenadas da fogueira
+### The bonfire's coordinates
 
-O registro da última fogueira (`*(ctx+0x70)`, campos `+0x164` mapa, `+0x168`
-tipo, `+0x16c` id) dizia `0x0a1f0000 / 0 / 0x7ba7`. A lista em
-`*(*(ctx+0x70)+0x58)` (primeiro nó em `+8`, próximo em `+0x60`, objeto em
-`nó+8`) tinha **3 nós** no mapa carregado — as fogueiras. A posição de
-nascimento de cada uma, pela conta do jogo (`translação(+0x70) − 1,1 ×
-eixoZ(+0x60)` da matriz do objeto), deu para a de Heide
-`(6.1855, -18.5166, 209.0531)`, **a 0,000 m** de onde o jogo tinha posto o
-Samuel ao carregar. As outras duas: `(13.0562, -6.1674, 276.6603)` — o destino
-do teleporte acima — e `(-162.0097, -1.7606, 190.6973)`.
+The last bonfire's record (`*(ctx+0x70)`, fields `+0x164` map, `+0x168` type,
+`+0x16c` id) said `0x0a1f0000 / 0 / 0x7ba7`. The list at
+`*(*(ctx+0x70)+0x58)` (first node at `+8`, next at `+0x60`, object at `nó+8`)
+had **3 nodes** in the loaded map — the bonfires. Each one's spawn point, by
+the game's own arithmetic (`translação(+0x70) − 1,1 × eixoZ(+0x60)` of the
+object's matrix), gave `(6.1855, -18.5166, 209.0531)` for the Heide one,
+**0.000 m** from where the game had put Samuel on loading. The other two:
+`(13.0562, -6.1674, 276.6603)` — the destination of the teleport above — and
+`(-162.0097, -1.7606, 190.6973)`.
 
-### De qualquer fogueira do registro às coordenadas
+### From any bonfire in the record to the coordinates
 
-O id de cada nó é o que `FUN_14017f170` compara ao procurar a fogueira do pedido
-tipo 3, e agora ele é lido de fora. `FUN_1403ba6a0(obj)` chama
-`FUN_1401ca770(obj+0xb8, obj)`: se o byte `obj+0xa2` for 1 ou 5, o componente é
-`*(*(obj+0xb8)+0x20)`; senão ele percorre a lista de componentes em `obj+0x18`
-comparando tipos (`FUN_1401ca700`). O id é `**(componente+0xe0)`. As três
-fogueiras de Heide têm `+0xa2 = 1`, então o caminho curto basta:
+Each node's id is what `FUN_14017f170` compares when looking for the type 3
+request's bonfire, and now it is read from outside. `FUN_1403ba6a0(obj)` calls
+`FUN_1401ca770(obj+0xb8, obj)`: if the byte `obj+0xa2` is 1 or 5, the
+component is `*(*(obj+0xb8)+0x20)`; otherwise it walks the component list at
+`obj+0x18` comparing types (`FUN_1401ca700`). The id is `**(componente+0xe0)`.
+Heide's three bonfires have `+0xa2 = 1`, so the short path is enough:
 
 ```
 chain id 16148f0 70,58,8[,60...],8,b8,20,e0 4
 ```
 
-Medido em 13/09, com o registro dizendo `mapa 0x0a1f0000 / tipo 0 / id 0x7ba7`:
+Measured on 13/09, with the record saying
+`mapa 0x0a1f0000 / tipo 0 / id 0x7ba7`:
 
-| nó | id | ponto de nascimento |
+| node | id | spawn point |
 | --- | --- | --- |
 | 1 | `0x7bac` | `(-162.0097, -1.7606, 190.6973)` |
-| **2** | **`0x7ba7`** | **`(6.1855, -18.5166, 209.0531)`** — onde o jogo pôs o Samuel ao carregar |
-| 3 | `0x7ba2` | `(13.0562, -6.1674, 276.6603)` — a Catedral de Blue |
+| **2** | **`0x7ba7`** | **`(6.1855, -18.5166, 209.0531)`** — where the game put Samuel on loading |
+| 3 | `0x7ba2` | `(13.0562, -6.1674, 276.6603)` — the Cathedral of Blue |
 
-O id do registro casa com o nó cujo ponto de nascimento bate a 0,000 m com o
-jogo, então a receita está conferida contra o próprio jogo:
+The record's id matches the node whose spawn point agrees with the game to
+0.000 m, so the recipe is checked against the game itself:
 
-1. `registro = *(ctx+0x70)`: mapa `+0x164`, tipo `+0x168`, id `+0x16c`;
-2. `nó = *(*(registro+0x58)+8)`, próximo em `nó+0x60`;
-3. `obj = *(nó+8)` (um `MapEntity`); componente pelo caminho acima (um
+1. `registro = *(ctx+0x70)`: map `+0x164`, type `+0x168`, id `+0x16c`;
+2. `nó = *(*(registro+0x58)+8)`, next at `nó+0x60`;
+3. `obj = *(nó+8)` (a `MapEntity`); the component by the path above (a
    `MapObjReactionComponent`);
-4. o nó cujo `**(componente+0xe0)` é o id do registro;
-5. nascimento em `translação(obj+0x70) − 1,1 × eixoZ(obj+0x60)`, virado como a
-   matriz do objeto.
+4. the node whose `**(componente+0xe0)` is the record's id;
+5. the spawn at `translação(obj+0x70) − 1,1 × eixoZ(obj+0x60)`, facing the
+   same way as the object's matrix.
 
-Duas notas. O registro só muda quando se interage com uma fogueira: depois do
-teleporte para a Catedral ele continuou em `0x7ba7`. E a lista é **do mapa
-carregado** — uma fogueira de outro mapa não está nela, que é o limite já
-conhecido da abordagem.
+Two notes. The record only changes when you interact with a bonfire: after the
+teleport to the Cathedral it stayed at `0x7ba7`. And the list is **the loaded
+map's** — a bonfire from another map is not in it, which is the approach's
+already known limit.
 
-## A morte medida, e segurada (13/09)
+## Death measured, and held (13/09)
 
-O passo 3 do plano do M2. Medido solo com o Samuel, sem sessão.
+Step 3 of the M2 plan. Measured solo with Samuel, with no session.
 
-### Uma morte de verdade, de fora
+### A real death, from outside
 
-Antes de escrever qualquer hook, com a DLL que já rodava: o HP do Samuel foi
-zerado pelo `DS2_MemProbe` (`PlayerCtrl+0x168 = 0`) com três breakpoints do
-tracer (`FUN_14013d430`, `FUN_140416960`, `FUN_14013d560`) e a vigia de escrita
-em `*(chr+0xb8)+0x759`. Zerar o HP mata de verdade, pelo caminho comum: no mesmo
-segundo o servidor recebeu `RequestNotifyKillEnemy` e `RequestNotifyDeath`, e
-6 s depois veio `warp motivo=1 ... ponto=00007ba7`, saindo de `FUN_14044fde0`.
+Before writing any hook, with the DLL that was already running: Samuel's HP
+was zeroed by `DS2_MemProbe` (`PlayerCtrl+0x168 = 0`) with three tracer
+breakpoints (`FUN_14013d430`, `FUN_140416960`, `FUN_14013d560`) and the write
+watchdog on `*(chr+0xb8)+0x759`. Zeroing the HP really kills, through the
+ordinary path: in the same second the server received `RequestNotifyKillEnemy`
+and `RequestNotifyDeath`, and 6 s later came
+`warp motivo=1 ... ponto=00007ba7`, out of `FUN_14044fde0`.
 
-| o que | onde |
+| what | where |
 | --- | --- |
-| liga `+0x759` | `+0x16a695`, em `FUN_14016a650`, chamado pela atualização do jogador (`FUN_140315520`) |
-| apaga `+0x759` | `+0x13cb5b`, em `FUN_14013c720` |
-| `FUN_14013d430` (o aviso da morte) | chamado de `+0x13c938`, em `FUN_14013c720` |
-| `FUN_14013d560` (almas, `RequestNotifyKillEnemy`) | chamado de `+0x13c97a`, em `FUN_14013c720` |
+| turns `+0x759` on | `+0x16a695`, in `FUN_14016a650`, called by the player's update (`FUN_140315520`) |
+| clears `+0x759` | `+0x13cb5b`, in `FUN_14013c720` |
+| `FUN_14013d430` (the death notice) | called from `+0x13c938`, in `FUN_14013c720` |
+| `FUN_14013d560` (souls, `RequestNotifyKillEnemy`) | called from `+0x13c97a`, in `FUN_14013c720` |
 
-`FUN_14013c720` é o slot **`+0x20`** do `ChrDeadActionCtrl` e roda uma vez por
-quadro para cada personagem, chamado de `FUN_14030eb60`. Com breakpoints nos
-dois slots, só ele disparou; o `+0x10` (`FUN_14013c3b0`) nunca foi chamado para
-o jogador local. Depois de uma recarga ele aparece para dois personagens que não
-são o jogador, chamado de `+0x30ea2f`.
+`FUN_14013c720` is `ChrDeadActionCtrl`'s slot **`+0x20`** and runs once per
+frame for each character, called from `FUN_14030eb60`. With breakpoints on
+both slots, only it fired; `+0x10` (`FUN_14013c3b0`) was never called for the
+local player. After a reload it shows up for two characters that are not the
+player, called from `+0x30ea2f`.
 
-### A fonte do HP, e a máquina do controlador
+### The HP source, and the controller's state machine
 
-`FUN_14016a650` liga o byte quando `chr+0x168 < 1`, o bit 15 de `+0x4c8` está
-limpo e o byte ainda está zerado, e preenche `+0x75c` (um handle do matador),
-`+0x760` (flags que suprimem consequências isoladas), `+0x768 = 10` (a causa).
-Ela roda todo quadro: **apagar o byte sem devolver o HP só adia a morte um
-quadro.**
+`FUN_14016a650` turns the byte on when `chr+0x168 < 1`, bit 15 of `+0x4c8` is
+clear and the byte is still zero, and it fills in `+0x75c` (a handle for the
+killer), `+0x760` (flags that suppress individual consequences), `+0x768 = 10`
+(the cause). It runs every frame: **clearing the byte without giving the HP
+back only puts the death off by one frame.**
 
-A máquina de `FUN_14013c720`, no byte `ctrl+0x10`:
+`FUN_14013c720`'s state machine, in the byte `ctrl+0x10`:
 
-- **0, vivo.** Se `+0x5fc == 0`, chama `FUN_14013cc30` (as fontes por flag:
-  `*(chr+0xd8)`, `*(chr+0xd0)`, evento de animação `0x19`). Com o byte ligado:
-  copia os parâmetros, chama `FUN_14013d9f0`, **apaga o byte**, busca a linha de
-  tempos (`FUN_14013d880`, guardada em `+0x70`), chama `FUN_14013d250` (avisa o
-  gerenciador em `ctx+0x40` e o registro de fogueira em `ctx+0x70`) e
-  `FUN_14013cec0`, e vai para 2 (ou 1, se `+0x5d0`).
-- **2, morrendo.** Soma o tempo em `+0x58` e dispara cada consequência uma vez
-  quando o tempo passa do limiar da linha; as travas são `+0x14..+0x4c`. Depois
-  da morte medida estavam todas em 1, com `+0x58 ≈ 7,49 s`.
-- O rabo liga os bits `0x4000`/`0x8000` de `+0x4c8` fora do estado 0, e é o
-  `0x8000` que cala `FUN_14016a650` enquanto o personagem morre.
+- **0, alive.** If `+0x5fc == 0`, it calls `FUN_14013cc30` (the flag sources:
+  `*(chr+0xd8)`, `*(chr+0xd0)`, animation event `0x19`). With the byte on: it
+  copies the parameters, calls `FUN_14013d9f0`, **clears the byte**, fetches
+  the timing row (`FUN_14013d880`, kept at `+0x70`), calls `FUN_14013d250`
+  (which tells the manager at `ctx+0x40` and the bonfire record at `ctx+0x70`)
+  and `FUN_14013cec0`, and goes to 2 (or 1, if `+0x5d0`).
+- **2, dying.** It adds up the time in `+0x58` and fires each consequence once
+  when the time passes that row's threshold; the latches are `+0x14..+0x4c`.
+  After the measured death they were all at 1, with `+0x58 ≈ 7,49 s`.
+- The tail turns on bits `0x4000`/`0x8000` of `+0x4c8` outside state 0, and it
+  is `0x8000` that silences `FUN_14016a650` while the character dies.
 
-Uma segunda porta, que não passa pelo byte: `FUN_14013c500(ctrl, tipo)`,
-alcançado por um salto de `FUN_14030eb20` (virtual em cinco vftables). Com tipo
-1 ou 2 ele dispara todas as consequências de uma vez e estaciona o controlador
-no estado 3.
+A second door, which does not go through the byte: `FUN_14013c500(ctrl, tipo)`,
+reached by a jump from `FUN_14030eb20` (virtual in five vftables). With type 1
+or 2 it fires every consequence at once and parks the controller in state 3.
 
-`+0x759` recebe `1` em dez lugares (varredura do `.text` inteiro por
-`0x759(`): `+0x13aae5` (dano letal, `FUN_14013a9b0`), os três de
-`FUN_14013cc30`, `+0x145f3f` (causa `0x6e`), `+0x16a695` (HP), `+0x31b753`,
-`+0x37046b` (`FUN_1403703e0`, morte ao aterrissar, causa 10), `+0x372ed7`
-(`FUN_140372e20`, morte por queda, causa `0x5a`) e `+0xd1c7f8`. Há ainda uma
-cópia do bloco inteiro de uma estrutura para outra em `+0x8d615`, que pode ser
-replicação. O hook fica no consumidor, e não em cada fonte. Duas ressalvas: a
-lista vem de uma varredura por padrão, que não vê deslocamento dobrado num
-registrador; e o byte tem um terceiro leitor, `+0x13683a` em `FUN_140136570`,
-que não foi lido.
+`+0x759` gets `1` in ten places (a scan of the whole `.text` for `0x759(`):
+`+0x13aae5` (lethal damage, `FUN_14013a9b0`), the three in `FUN_14013cc30`,
+`+0x145f3f` (cause `0x6e`), `+0x16a695` (HP), `+0x31b753`, `+0x37046b`
+(`FUN_1403703e0`, death on landing, cause 10), `+0x372ed7` (`FUN_140372e20`,
+death by falling, cause `0x5a`) and `+0xd1c7f8`. There is also a copy of one
+structure's whole block into another at `+0x8d615`, which may be replication.
+The hook goes on the consumer, not on each source. Two caveats: the list comes
+from a pattern scan, which does not see a displacement folded into a register;
+and the byte has a third reader, `+0x13683a` in `FUN_140136570`, which was not
+read.
 
-### O hook: `DS2_DeathInterceptHook`
+### The hook: `DS2_DeathInterceptHook`
 
-Desvia `FUN_14013c720` e só age quando `*(ctrl+8)` é o personagem local
-(`ctx+0xd0`). Os 15 controladores vivos incluem inimigos, e cancelar sem esse
-filtro os deixaria imortais. Com o controlador no estado 0, `+0x5fc == 0` e o
-byte já ligado **antes** da chamada, ele:
+It detours `FUN_14013c720` and only acts when `*(ctrl+8)` is the local
+character (`ctx+0xd0`). The 15 live controllers include enemies, and
+cancelling without that filter would leave them immortal. With the controller
+in state 0, `+0x5fc == 0` and the byte already on **before** the call, it:
 
-- em `observe` (o padrão), escreve a morte e deixa passar;
-- em `cancel`, apaga o byte, devolve o HP para `chr+0x174` (o máximo efetivo,
-  já descontado o hollow; `+0x170` é a base), limpa `0x4000|0x8000` de `+0x4c8`
-  e **não chama o original** naquele quadro.
+- in `observe` (the default), writes the death down and lets it through;
+- in `cancel`, clears the byte, gives the HP back to `chr+0x174` (the
+  effective maximum, with hollowing already taken off; `+0x170` is the base),
+  clears `0x4000|0x8000` of `+0x4c8` and **does not call the original** on
+  that frame.
 
-Se o estado sair de 0 sem o byte antes, o log diz `SEM +0x759 ANTES`: é uma
-morte das fontes de `FUN_14013cc30`, que ligam o byte dentro da chamada e
-passariam pela checagem. `FUN_14013c500` e o slot `+0x10` são só registrados.
-`DS2_Death.req` troca o modo sem relançar (`observe`, `cancel`, `status`), e o
-log é `DS2_Death.log`.
+If the state leaves 0 without the byte beforehand, the log says
+`SEM +0x759 ANTES`: it is a death from `FUN_14013cc30`'s sources, which turn
+the byte on inside the call and would slip past the check. `FUN_14013c500` and
+slot `+0x10` are only logged. `DS2_Death.req` changes the mode without
+relaunching (`observe`, `cancel`, `status`), and the log is `DS2_Death.log`.
 
-### O resultado
+### The result
 
-**Morte por HP, cancelada.** Com `cancel`, o HP zerado voltou para 869 no mesmo
-quadro (`morte CANCELADA #1 hp=0 -> 869 ... causa=10`), o controlador ficou no
-estado 0, `+0x759` e `+0x4c8` zerados, nenhum warp no `DS2_Seamless.log`, e o
-personagem andou. Num segundo cancelamento ele foi 2,5 m em direção à escada,
-com `y` constante e câmera normal. O controle positivo do servidor veio depois:
-a primeira morte deixada passar nessa mesma conexão (em `observe`, 13:42:49)
-imprimiu `First ... RequestNotifyDeath`, então nenhuma das anteriores tinha
-chegado lá.
+**Death by HP, cancelled.** With `cancel`, the zeroed HP went back to 869 on
+the same frame (`morte CANCELADA #1 hp=0 -> 869 ... causa=10`), the controller
+stayed in state 0, `+0x759` and `+0x4c8` zeroed, no warp in
+`DS2_Seamless.log`, and the character walked. On a second cancellation he went
+2.5 m towards the stairs, with `y` constant and a normal camera. The server's
+positive control came afterwards: the first death let through on that same
+connection (in `observe`, 13:42:49) printed `First ... RequestNotifyDeath`, so
+none of the earlier ones had got there.
 
-**Morte por queda: o byte é segurado, o resto não.** O primeiro teste de
-controle levou o Samuel para trás e para fora da plataforma de Heide. Ele caiu
-para `y = -3000`, e:
+**Death by falling: the byte is held, the rest is not.** The first control
+test took Samuel backwards and off Heide's platform. He fell to `y = -3000`,
+and:
 
-1. `FUN_140372e20` (a morte por queda, chamada pelo controle de queda
-   `FUN_140372620` quando o tempo no ar passa do limiar) zerou o HP, ligou o bit
-   **`0x200` de `*(chr+0xb8)+0x4c0`** e o byte com causa `0x5a` e `+0x76d = 2`.
-   O hook cancelou (#2).
-2. Enquanto ele caía, o HP voltava a zero todo quadro, e o hook cancelou **2956
-   vezes em 100 s**, uma por quadro, sem nada chegar ao servidor. (O servidor
-   parou de receber posição: o `Location` ficou em `6.2 -18.7 211.4`, a beira.)
-3. O teleporte do passo 1 para o ponto de nascimento da fogueira `0x7ba7`,
-   escrevendo só XYZ, **parou o loop**: o contador ficou parado e o servidor
-   voltou a dizer `position 6.2 -18.5 209.1`.
-4. Mas o personagem ficou **sem controle e com a câmera parada** no ponto da
-   queda. O thread do jogo estava vivo (breakpoint no chamador por quadro
-   disparou na hora), START abriu o menu, e o analógico não moveu nada.
-   Apagar o bit `0x200` não devolveu o controle.
+1. `FUN_140372e20` (the death by falling, called by the fall control
+   `FUN_140372620` when the time in the air passes the threshold) zeroed the
+   HP, turned on the bit **`0x200` of `*(chr+0xb8)+0x4c0`** and the byte with
+   cause `0x5a` and `+0x76d = 2`. The hook cancelled (#2).
+2. While he fell, the HP went back to zero every frame, and the hook cancelled
+   **2956 times in 100 s**, once per frame, with nothing reaching the server.
+   (The server stopped receiving position: `Location` stayed at
+   `6.2 -18.7 211.4`, the edge.)
+3. Step 1's teleport to the spawn point of bonfire `0x7ba7`, writing only XYZ,
+   **stopped the loop**: the counter stopped moving and the server went back
+   to saying `position 6.2 -18.5 209.1`.
+4. But the character was left **without control and with the camera frozen**
+   at the point of the fall. The game thread was alive (a breakpoint on the
+   per-frame caller fired at once), START opened the menu, and the stick moved
+   nothing. Clearing the bit `0x200` did not give the control back.
 
-A saída foi voltar para `observe` e zerar o HP: morte comum, warp, recarga, e
-ele de pé na fogueira de novo.
+The way out was to go back to `observe` and zero the HP: an ordinary death, a
+warp, a reload, and him standing at the bonfire again.
 
-### A morte por queda, desfeita (13/09)
+### Death by falling, undone (13/09)
 
-A "trava de controle" da primeira queda não existia. O que prendia o Samuel era
-a câmera, e a morte por queda deixa três marcas que o byte não desfaz.
+The first fall's "control lock" did not exist. What held Samuel was the
+camera, and death by falling leaves three marks that the byte does not undo.
 
-**De onde vem a queda.** `FUN_14036fdf0` trata o contato do personagem com um
-volume de colisão do mapa, pelo tipo em `*(*(volume+0x30)+0x70)+0x14`. Nos
-tipos 1, 2, 5 e 6 ele liga o **bit 51** de `*(chr+0xb8)+0x4c0`
-(`0x8000000000000`); nos tipos 3, 4, 7 e 8, o **bit 52**. Nos tipos 1, 3, 5, 7
-e 10 ainda manda à câmera um pedido de tipo 7, para personagens cujo tipo passa
-na tabela `0x1410bfff1` (o Samuel passa; quem mais passa não foi lido). A
-água embaixo da plataforma de Heide é um desses volumes. Com o bit 51 ligado, o
-controle de queda (`FUN_140372620`, chamado pela atualização por quadro do
-personagem antes do controlador da morte) chama `FUN_140372e20` em todo quadro
-que o personagem passa no ar: HP a zero, **bit 9** (`0x200`) e o byte com causa
-`0x5a`. Por isso o hook cancelava uma vez por quadro durante a queda inteira.
+**Where the fall comes from.** `FUN_14036fdf0` handles the character's contact
+with a map collision volume, by the type at `*(*(volume+0x30)+0x70)+0x14`. On
+types 1, 2, 5 and 6 it turns on **bit 51** of `*(chr+0xb8)+0x4c0`
+(`0x8000000000000`); on types 3, 4, 7 and 8, **bit 52**. On types 1, 3, 5, 7
+and 10 it also sends the camera a type 7 request, for characters whose type
+passes the table `0x1410bfff1` (Samuel passes; who else passes was not read).
+The water under Heide's platform is one of those volumes. With bit 51 on, the
+fall control (`FUN_140372620`, called by the character's per-frame update
+before the death controller) calls `FUN_140372e20` on every frame the
+character spends in the air: HP to zero, **bit 9** (`0x200`) and the byte with
+cause `0x5a`. That is why the hook was cancelling once per frame for the whole
+fall.
 
-**A câmera.** O pedido de tipo 7 (`FUN_140492080`, caso 6) só escreve
-**`CameraManager+0x450 = 1`** (`CameraManager` em `ctx+0x20`, vftable
-`0x1410f45a8`). A cada quadro, `FUN_140492880` compara esse byte com o id em
-`+0x454`: ligado sem id, empilha um pedido de tipo 5 no `IngameCameraOperator`
-(`FUN_140495380`, vetor em `+0x100..+0x108`, entradas de `0x40` bytes com o id
-em `+0x30`), que ativa o `FallDeadCameraOperator` (índice `+0x1520 = 6`);
-desligado com id, **remove o próprio pedido** (`FUN_1404955a0`). O operador de
-queda fixa a posição e só gira para olhar o personagem. Nada desliga o byte
-fora de uma recarga, e com a câmera olhando de onde ele caiu, o analógico, que é
-relativo à câmera, move o personagem quase nada. Na primeira queda isso deu zero
-movimento; na reprodução, 0,3 m em 600 ms.
+**The camera.** The type 7 request (`FUN_140492080`, case 6) only writes
+**`CameraManager+0x450 = 1`** (`CameraManager` at `ctx+0x20`, vftable
+`0x1410f45a8`). Every frame, `FUN_140492880` compares that byte with the id at
+`+0x454`: on with no id, it pushes a type 5 request onto the
+`IngameCameraOperator` (`FUN_140495380`, vector at `+0x100..+0x108`,
+`0x40`-byte entries with the id at `+0x30`), which activates the
+`FallDeadCameraOperator` (index `+0x1520 = 6`); off with an id, it **removes
+its own request** (`FUN_1404955a0`). The fall operator pins the position and
+only turns to look at the character. Nothing turns the byte off short of a
+reload, and with the camera looking from where he fell, the stick, which is
+relative to the camera, moves the character almost nowhere. On the first fall
+that gave zero movement; on the reproduction, 0.3 m in 600 ms.
 
-A comparação de memória (personagem, `*(chr+0xb8)`, controles de ação, física,
-câmera) entre o Samuel de pé e o Samuel preso não achou mais nada: fora
-posições e valores do pouso, só os dois bits de `+0x4c0`,
-`CameraManager+0x450`/`+0x454` e o estado do operador de câmera. Uma primeira tentativa de desligar a câmera
-escrevendo o índice `+0x1520` não durou um quadro: `FUN_140495e10` o reescreve
-a partir do vetor de pedidos.
+The memory comparison (character, `*(chr+0xb8)`, action controls, physics,
+camera) between Samuel standing and Samuel stuck found nothing else: apart
+from positions and landing values, only the two bits of `+0x4c0`,
+`CameraManager+0x450`/`+0x454` and the camera operator's state. A first
+attempt at turning the camera off by writing the index `+0x1520` did not last
+a frame: `FUN_140495e10` rewrites it from the request vector.
 
-**A receita, medida à mão:** teleporte para o nascimento da fogueira; o controle
-de queda diz que pousou já na primeira leitura (`+0x08 = 0`); então
-`CameraManager+0x450 = 0` (o gerenciador remove o pedido, índice de volta a 10)
-e os bits 9, 51 e 52 de `+0x4c0` limpos. Cancelamentos param, câmera normal, e o
-Samuel andou 1 m em 500 ms na mesma altura. Limpar os bits antes de pousar não
-serve: no ar, com o tempo de queda ainda acima do limiar, o controle de queda
-mata de novo.
+**The recipe, measured by hand:** teleport to the bonfire's spawn; the fall
+control says he has landed on the very first read (`+0x08 = 0`); then
+`CameraManager+0x450 = 0` (the manager removes the request, index back to 10)
+and bits 9, 51 and 52 of `+0x4c0` cleared. Cancellations stop, the camera is
+normal, and Samuel walked 1 m in 500 ms at the same height. Clearing the bits
+before landing is no good: in the air, with the fall time still above the
+threshold, the fall control kills again.
 
-**O hook.** No modo `cancel`, uma morte recusada que traz os bits ou o byte da
-câmera inicia uma recuperação: teleporte para o nascimento da fogueira do
-registro (a receita do passo 2, lida dentro do jogo; sem a fogueira no mapa
-carregado, a última posição no chão do controle de queda), e nos quadros
-seguintes, assim que o controle de queda disser que pousou, limpa os bits e o
-byte da câmera. Refaz o teleporte a cada 30 quadros e desiste em 300.
+**The hook.** In `cancel` mode, a refused death that brings the bits or the
+camera byte starts a recovery: teleport to the spawn of the record's bonfire
+(step 2's recipe, read inside the game; with no bonfire in the loaded map, the
+fall control's last position on the ground), and on the following frames, as
+soon as the fall control says he has landed, it clears the bits and the camera
+byte. It redoes the teleport every 30 frames and gives up at 300.
 
-**Medido com o hook (13/09, Heide, solo):**
+**Measured with the hook (13/09, Heide, solo):**
 
-| teste | resultado |
+| test | result |
 | --- | --- |
-| teleporte para o vazio | um cancelamento (causa 90, `+0x4c0 = 0008000000000200`), teleporte para a fogueira `0x7ba7`, "queda desfeita em 1 quadros" 18 ms depois; câmera no modo 10, byte e bits zerados, HP 823, e ele andou 2,8 m em 1 s |
-| andar para fora da beira | duas quedas (o analógico ainda empurrava depois da primeira volta), duas recuperações de 1 quadro, de pé na fogueira |
-| HP zerado, sem queda | cancelamento comum, sem "queda", posição idêntica bit a bit |
-| servidor | nenhum `RequestNotifyDeath` nem `RequestNotifyKillEnemy` na conexão, nenhum warp no `DS2_Seamless.log` |
+| teleport into the void | one cancellation (cause 90, `+0x4c0 = 0008000000000200`), teleport to bonfire `0x7ba7`, "queda desfeita em 1 quadros" 18 ms later; camera in mode 10, byte and bits zeroed, HP 823, and he walked 2.8 m in 1 s |
+| walking off the edge | two falls (the stick was still pushing after the first return), two 1-frame recoveries, standing at the bonfire |
+| HP zeroed, no fall | an ordinary cancellation, no "queda", position identical bit for bit |
+| server | no `RequestNotifyDeath` and no `RequestNotifyKillEnemy` on the connection, no warp in `DS2_Seamless.log` |
 
-Um custo de percurso: um vigia de escrita (`wp`) na página do
-`IngameCameraOperator`, com 24 mil faltas por segundo, derrubou o jogo com
-`0xC0000005` no instante em que foi levantado. Era uma corrida no próprio vigia,
-corrigida no mesmo dia (ver DS2_INVESTIGATION_TOOLS.md).
+One cost along the way: a write watchdog (`wp`) on the
+`IngameCameraOperator`'s page, at 24 thousand faults per second, brought the
+game down with `0xC0000005` the instant it was raised. It was a race in the
+watchdog itself, fixed the same day (see DS2_INVESTIGATION_TOOLS.md).
 
-### O que fica para o passo 5
+### What is left for step 5
 
-- A morte por HP está resolvida no lugar: cancelar e devolver o HP deixa o
-  personagem controlável sem carregamento. Falta levá-lo à fogueira como a
-  queda já faz.
-- A morte por queda está resolvida com teleporte para a fogueira, solo.
-- Das dez fontes de `+0x759`, só duas foram exercitadas: HP e queda (a queda
-  pelo volume de morte; a morte por dano ao aterrissar, `FUN_140372c00`, não).
+- Death by HP is solved in place: cancelling and giving the HP back leaves the
+  character controllable with no loading. What is missing is taking him to the
+  bonfire the way the fall already does.
+- Death by falling is solved with a teleport to the bonfire, solo.
+- Of the ten sources of `+0x759`, only two were exercised: HP and falling (the
+  fall through the death volume; death from landing damage, `FUN_140372c00`,
+  was not).
 
-## Renascer pagando a morte (passo 5, 13/09)
+## Respawning and paying for the death (step 5, 13/09)
 
-Medido solo com o Samuel em Heide. O modo `respawn` do `DS2_DeathInterceptHook`
-recusa a morte e cobra dela o que o jogo cobraria, com as funções do próprio
-jogo, **sem recarga**. Cada peça foi achada contra uma morte que o jogo fez
-sozinho (`observe`), com o vigia de escrita nos campos e o Ghidra.
+Measured solo with Samuel in Heide. `DS2_DeathInterceptHook`'s `respawn` mode
+refuses the death and charges for it what the game would charge, with the
+game's own functions, **with no reload**. Each piece was found against a death
+the game did on its own (`observe`), with the write watchdog on the fields and
+Ghidra.
 
-### O que uma morte custa, e quem cobra
+### What a death costs, and what charges it
 
-| custo | onde mora | quem o jogo usa |
+| cost | where it lives | what the game uses |
 | --- | --- | --- |
-| almas | `PlayerParam+0xec` (`PlayerParam = *(chr+0x490)`) | `FUN_14026af40(NetSvrBloodstainManager, saída)`, alcançado pela sequência "YOU DIED" via `NetSvrManager` slot `+0xe0` |
-| a mancha | registro do `NetSvrBloodstainManager` (`*(*(*(0x141616cf8)+0x30)+0x90)`): `+0x2c` tem, `+0x2d` já cobrada, `+0x30` almas, `+0x34` mapa, posição, ângulo e célula | depois da recarga, slot `+0x28` (`FUN_14026b0d0`) cria o sinal tipo 10 do `BloodstainSetCtrl` |
-| hollow | nível em `PlayerParam+0x1ac` | `FUN_140202c30(PlayerParam, *(data+0x76d))`, chamado por `FUN_14037dcc0` no quadro em que o controlador entra no estado 2 |
-| aparência e HP máximo | `*(chr+0xb0)+0x3e` (0 humano, 1 hollow, 2 muito hollow); máximo efetivo `chr+0x174` | `FUN_1402026e0(chr)` na carga seguinte |
-| Estus | `+0x24` da entrada do Estus Flask (item 60155000) no inventário `*(*(ctx+0xa8)+0x10)` | `FUN_1401ac370(inventário)`, o que o SpEffect do descanso na fogueira chama |
+| souls | `PlayerParam+0xec` (`PlayerParam = *(chr+0x490)`) | `FUN_14026af40(NetSvrBloodstainManager, saída)`, reached by the "YOU DIED" sequence through `NetSvrManager` slot `+0xe0` |
+| the bloodstain | the `NetSvrBloodstainManager`'s record (`*(*(*(0x141616cf8)+0x30)+0x90)`): `+0x2c` has one, `+0x2d` already charged, `+0x30` souls, `+0x34` map, position, angle and cell | after the reload, slot `+0x28` (`FUN_14026b0d0`) creates the `BloodstainSetCtrl`'s type 10 marker |
+| hollow | the level at `PlayerParam+0x1ac` | `FUN_140202c30(PlayerParam, *(data+0x76d))`, called by `FUN_14037dcc0` on the frame the controller enters state 2 |
+| appearance and maximum HP | `*(chr+0xb0)+0x3e` (0 human, 1 hollow, 2 very hollow); effective maximum `chr+0x174` | `FUN_1402026e0(chr)` on the next load |
+| Estus | `+0x24` of the Estus Flask entry (item 60155000) in the inventory `*(*(ctx+0xa8)+0x10)` | `FUN_1401ac370(inventário)`, what the bonfire rest's SpEffect calls |
 
-Detalhes que custaram medição:
+Details that cost measurement:
 
-- **A posição da mancha é a última posição segura**, não onde o personagem
-  está: o registro a toma de `IBloodstainSetCtrl` slot `+0x80`, um anel de
-  posições em chão firme. Por isso a cobrança tem de vir antes do teleporte, e
-  por isso numa queda a mancha fica na beira.
-- **A mancha antiga não some sozinha.** Na morte comum quem a tira é a recarga;
-  `FUN_14020e4e0` só expulsa um sinal quando o conjunto está cheio. O hook
-  percorre os dois conjuntos do `BloodstainSetCtrl` (`+0x18`, `+0x20`; contagem
-  no slot `+0x18`, entrada no `+0x10`, ativa quando `+0x14` é negativo, tipo no
-  nibble baixo do handle) e remove os sinais tipo 10 pela interface (slot
-  `+0x20`, que recebe o ponteiro da entrada) antes de criar o novo.
-- **O nível de hollow sozinho não muda nada.** O multiplicador do HP máximo
-  (`FUN_140202820`) vale 1,0 enquanto `*(chr+0xb0)+0x3e` diz humano. Chamar só
-  o recálculo (`FUN_140202ca0`) deixou o máximo em 915 com hollow 1; quem
-  converte o nível em estado, troca o modelo e recalcula é `FUN_1402026e0`, o
-  inverso de `FUN_140203d50` (o que a Human Effigy chama).
-- **As checagens de hollow** são as de `FUN_14037dcc0`: sem hollow se
-  `FUN_14031c850(data)` (dois bits de efeito em `+0x4b8`), se `+0x4c8` bit 55,
-  se `FUN_14016f740(chr)` (tipo NPC ou fantasma), ou se `+0x4b8` bit 58. A
-  quinta, `thunk_FUN_140014b03`, pula para código ofuscado e ficou de fora.
+- **The bloodstain's position is the last safe position**, not where the
+  character is: the record takes it from `IBloodstainSetCtrl` slot `+0x80`, a
+  ring of positions on solid ground. That is why the charge has to come before
+  the teleport, and why on a fall the bloodstain stays at the edge.
+- **The old bloodstain does not go away on its own.** In an ordinary death
+  what removes it is the reload; `FUN_14020e4e0` only evicts a marker when the
+  set is full. The hook walks the `BloodstainSetCtrl`'s two sets (`+0x18`,
+  `+0x20`; count at slot `+0x18`, entry at `+0x10`, active when `+0x14` is
+  negative, type in the handle's low nibble) and removes the type 10 markers
+  through the interface (slot `+0x20`, which takes the entry's pointer) before
+  creating the new one.
+- **The hollowing level on its own changes nothing.** The maximum HP
+  multiplier (`FUN_140202820`) is 1.0 while `*(chr+0xb0)+0x3e` says human.
+  Calling only the recalculation (`FUN_140202ca0`) left the maximum at 915
+  with hollow 1; what turns the level into a state, swaps the model and
+  recalculates is `FUN_1402026e0`, the inverse of `FUN_140203d50` (what the
+  Human Effigy calls).
+- **The hollowing checks** are `FUN_14037dcc0`'s: no hollowing if
+  `FUN_14031c850(data)` (two effect bits at `+0x4b8`), if `+0x4c8` bit 55, if
+  `FUN_14016f740(chr)` (NPC or phantom type), or if `+0x4b8` bit 58. The
+  fifth, `thunk_FUN_140014b03`, jumps into obfuscated code and was left out.
 
-### O que o modo `respawn` faz
+### What `respawn` mode does
 
-Na primeira recusa de uma morte (as seguintes, enquanto a recuperação corre,
-são a mesma morte sendo segurada):
+On the first refusal of a death (the ones after it, while the recovery runs,
+are the same death being held):
 
-1. almas para a mancha (`FUN_14026af40`), se o registro não estiver marcado;
-2. hollow com as checagens, e `FUN_1402026e0`;
-3. manchas tipo 10 removidas, e a nova criada (`FUN_14026b0d0`, que também
-   desmarca o registro para a próxima morte);
-4. Estus recarregado;
-5. a recuperação da queda: teleporte para o nascimento da fogueira do registro,
-   e, quando o controle de queda diz que pousou, bits e câmera limpos e o HP
-   cheio no máximo novo.
+1. souls to the bloodstain (`FUN_14026af40`), if the record is not marked;
+2. hollowing with the checks, and `FUN_1402026e0`;
+3. type 10 bloodstains removed, and the new one created (`FUN_14026b0d0`,
+   which also unmarks the record for the next death);
+4. Estus refilled;
+5. the fall recovery: teleport to the spawn of the record's bonfire, and, when
+   the fall control says he has landed, bits and camera cleared and the HP
+   full at the new maximum.
 
-Cada chamada ao jogo fica atrás de um `__try` próprio, e os bytes de cada
-função são conferidos na instalação.
+Every call into the game sits behind a `__try` of its own, and each function's
+bytes are checked at installation.
 
-### O resultado
+### The result
 
-| teste | log do hook | conferido |
+| test | hook log | checked |
 | --- | --- | --- |
-| HP zerado a 6 m da fogueira, 4321 almas, Estus em 0 | `almas 4321 -> 0 (registradas: 4321 ..., 10000 perdidas da anterior); hollow 1 -> 2; 1 antiga removida, nova criada, agora 1 no mundo; estus recarregado` | de pé na fogueira; a mancha verde onde ele morreu, a da fogueira sumida; ao tocar, 4321 almas de volta e o registro vazio |
-| queda no vazio | `almas 4321 -> 0; hollow 0 -> 1; nova criada`, recuperação da queda em 1 quadro | a mancha na última posição segura; câmera normal |
-| segunda morte antes de recuperar | `registradas: 1000 almas para a mancha, 4321 perdidas da anterior; 1 antiga removida` | uma mancha só no mundo |
-| humano (efígie) morrendo | `hollow 0 -> 1, hp maximo 915 -> 869`, `renascer concluido ... hp 915 -> 869` | `*(chr+0xb0)+0x3e = 1`, HP 869/869 |
-| servidor | — | nenhum `RequestNotifyDeath` nem `RequestNotifyKillEnemy` na conexão; nenhum warp |
+| HP zeroed 6 m from the bonfire, 4321 souls, Estus at 0 | `almas 4321 -> 0 (registradas: 4321 ..., 10000 perdidas da anterior); hollow 1 -> 2; 1 antiga removida, nova criada, agora 1 no mundo; estus recarregado` | standing at the bonfire; the green bloodstain where he died, the bonfire's one gone; on touching it, 4321 souls back and the record empty |
+| fall into the void | `almas 4321 -> 0; hollow 0 -> 1; nova criada`, fall recovery in 1 frame | the bloodstain at the last safe position; camera normal |
+| second death before recovering | `registradas: 1000 almas para a mancha, 4321 perdidas da anterior; 1 antiga removida` | only one bloodstain in the world |
+| human (effigy) dying | `hollow 0 -> 1, hp maximo 915 -> 869`, `renascer concluido ... hp 915 -> 869` | `*(chr+0xb0)+0x3e = 1`, HP 869/869 |
+| server | — | no `RequestNotifyDeath` and no `RequestNotifyKillEnemy` on the connection; no warp |
 
-O Estus apareceu recarregado no próprio inventário do jogo (1 carga depois de
-zerado à mão).
+The Estus showed up refilled in the game's own inventory (1 charge after being
+zeroed by hand).
 
-## Com sessão (passo 6, 13–14/09)
+## With a session (step 6, 13–14/09)
 
-Samuel em Heide, Chico invocado por marca branca, os dois no modo `respawn`.
-Duas sessões, cada uma terminada pelo caminho legal (modo `observe` no Chico e
-uma morte comum de fantasma: `RequestNotifyLeaveSession` e
-`RequestNotifyLeaveGuestPlayer` em um segundo). Saves fotografados antes
-(`pre-passo6`) e restaurados depois.
+Samuel in Heide, Chico summoned by a white sign, both in `respawn` mode. Two
+sessions, each ended the legal way (`observe` mode on Chico and an ordinary
+phantom death: `RequestNotifyLeaveSession` and `RequestNotifyLeaveGuestPlayer`
+within a second). Saves snapshotted beforehand (`pre-passo6`) and restored
+afterwards.
 
-### Quem paga o quê, pelas checagens do jogo
+### Who pays what, by the game's own checks
 
-A cobrança do passo 5 cobrava de qualquer um. O que o jogo decide está na
-sequência da morte e em `FUN_14037dcc0`, e o hook agora passa pelas mesmas
-portas:
+The billing in step 5 charged anybody. What the game decides lives in the
+death sequence and in `FUN_14037dcc0`, and the hook now goes through the same
+doors:
 
-| custo | quem decide | fantasma branco (papel 1) |
+| cost | who decides | white phantom (role 1) |
 | --- | --- | --- |
-| almas | `FUN_14018fbc0`, passo da sequência `EventResult` para a morte tipo 1: há gerenciador de sessão (`ctx+0x22f0`) e `NetSvrManager`, e `FUN_14018fd70` concorda — `*(ctx+0x70)+0x1b9` limpo e, se o papel é de convidado (segundo byte da linha do papel na tabela `0x1410c0050`, 16 bytes por papel), o param do papel (`FUN_14016f540`) com `+0x2e == 1` | `+0x2e = 0`: **as almas ficam** |
-| mancha | só quando almas entraram agora, e só onde `FUN_14026b0d0` poria uma (slot `+0x58` do contexto) | intocada |
-| hollow | as cinco checagens de `FUN_14037dcc0`; a que o decompilador não mostra é `call 0x14016f7d0`, um salto para código ofuscado, `bool(chr)` | a ofuscada diz **isento** |
-| contador de mortes, anel | `call 0x140203be0` (outro salto ofuscado) escolhe o ramo do jogador desta máquina: `FUN_140203ad0` soma em `PlayerParam+0x104+papel*8` e `+0x1a4`, `FUN_1401ac240` quebra o anel de proteção vestido, e um menu aberto de `ctx+0x22e0` é fechado | soma |
-| Estus | o renascer comum recarrega para todos | recarregado |
+| souls | `FUN_14018fbc0`, the `EventResult` sequence step for death type 1: there is a session manager (`ctx+0x22f0`) and a `NetSvrManager`, and `FUN_14018fd70` agrees — `*(ctx+0x70)+0x1b9` clear and, if the role is a guest's (second byte of the role's row in the table `0x1410c0050`, 16 bytes per role), the role's param (`FUN_14016f540`) with `+0x2e == 1` | `+0x2e = 0`: **the souls stay** |
+| bloodstain | only when souls went in just now, and only where `FUN_14026b0d0` would put one (slot `+0x58` of the context) | untouched |
+| hollow | the five checks in `FUN_14037dcc0`; the one the decompiler does not show is `call 0x14016f7d0`, a jump into obfuscated code, `bool(chr)` | the obfuscated one says **exempt** |
+| death counter, ring | `call 0x140203be0` (another obfuscated jump) picks the branch for this machine's player: `FUN_140203ad0` adds into `PlayerParam+0x104+papel*8` and `+0x1a4`, `FUN_1401ac240` breaks the protection ring being worn, and an open menu from `ctx+0x22e0` is closed | adds |
+| Estus | the ordinary respawn refills for everyone | refilled |
 
-O papel é o byte `*(chr+0xb0)+0x3c` (0 dono do mundo, 1 fantasma branco); o
-estado de hollow é o `+0x3e` ao lado. Os dois saltos ofuscados foram chamados
-como o jogo chama, com o personagem em `rcx`, e os bytes do salto são
-conferidos na instalação.
+The role is the byte `*(chr+0xb0)+0x3c` (0 world owner, 1 white phantom); the
+hollow state is the `+0x3e` beside it. Both obfuscated jumps were called the
+way the game calls them, with the character in `rcx`, and the jump's bytes are
+checked on install.
 
-### A cópia do outro jogador morria
+### The other player's copy was dying
 
-A primeira rodada (build `1424e7c8`) acertou tudo do lado de quem morre e
-errou do outro lado. Com o HP do Chico zerado:
+The first round (build `1424e7c8`) got everything right on the side of the one
+dying and wrong on the other side. With Chico's HP zeroed:
 
 ```
 Chico   custos da morte (papel 1, convidado 1): almas 1234 -> 1234 (convidado que nao paga ...);
@@ -1484,411 +1535,418 @@ Chico   custos da morte (papel 1, convidado 1): almas 1234 -> 1234 (convidado qu
 Samuel  outro controlador ... personagem ... (vftable +0x10e4bb8, papel 1) estado 0 -> 2 hp=0
 ```
 
-Na tela do Samuel, **"Phantom Chico has been vanquished."**; no servidor,
-`RequestNotifyKillEnemy` do Samuel. O HP 0 do Chico já tinha saído pela rede
-antes de o hook devolvê-lo, e a cópia dele no mundo do Samuel (`PlayerCtrl`,
-tipo de personagem 2 em `chr+0x54`) morreu pelo próprio controlador — o mesmo
-formato de uma morte local: causa 10, bits `0x4000/0x8000` em `+0x4c8`. As
-máquinas de sessão continuaram em `0x10` e 7, mas o host não via mais o
-fantasma.
+On Samuel's screen, **"Phantom Chico has been vanquished."**; on the server,
+`RequestNotifyKillEnemy` from Samuel. Chico's HP 0 had already gone out over
+the network before the hook gave it back, and his copy in Samuel's world
+(`PlayerCtrl`, character type 2 at `chr+0x54`) died through its own controller
+— the same shape as a local death: cause 10, bits `0x4000/0x8000` at `+0x4c8`.
+The session machines stayed at `0x10` and 7, but the host no longer saw the
+phantom.
 
-É uma corrida: aconteceu uma vez em duas mortes com o HP zerado por fora do
-quadro, e nenhuma vez nas sete seguintes (seis com o HP zerado, uma queda).
+It is a race: it happened once in two deaths with the HP zeroed from outside
+the frame, and not once in the seven that followed (six with the HP zeroed,
+one fall).
 
-A morte de um jogador pertence à máquina que joga o personagem. O build
-`69a68af9` recusa, nos modos `cancel` e `respawn`, a morte pendente de uma
-cópia de `PlayerCtrl` com o mesmo teste do controlador local (estado 0,
-`+0x5fc` zero, `+0x759` ligado): limpa o byte, devolve o HP e os bits, e não
-deixa o controlador rodar naquele quadro. Medido com o byte ligado à mão na
-cópia do Chico dentro do Samuel:
+A player's death belongs to the machine that plays that character. Build
+`69a68af9` refuses, in `cancel` and `respawn` modes, the pending death of a
+`PlayerCtrl` copy with the same test as the local controller (state 0,
+`+0x5fc` zero, `+0x759` set): it clears the byte, gives back the HP and the
+bits, and does not let the controller run on that frame. Measured with the
+byte set by hand on Chico's copy inside Samuel:
 
 ```
 morte da copia RECUSADA #1 ... personagem ... tipo 2 papel 1 hp=853 -> 853 ...
 ```
 
-e o Chico continuou de pé ao lado dele. Zerar o HP da cópia à mão **não**
-serve de teste: a rede o regrava antes do quadro seguinte.
+and Chico stayed standing beside him. Zeroing the copy's HP by hand is **not**
+a test: the network rewrites it before the next frame.
 
 ### "YOU DIED"
 
-A sequência da morte (`EventResult` slot `+0x20`, `FUN_14018f830`) monta jobs
-a partir de uma linha de parâmetro: id `papel + tipo*100` na tabela do registro
-da fogueira (`FUN_14044ed10`), ou `tipo*100 + 99`. O primeiro byte é um tipo
-FE, e a tabela de dez ints em `0x1410c3580` o traduz em banner para
-`FUN_1405012e0(*(ctx+0x22e0), id)`. Lido ao vivo: a linha 100 (dono do mundo)
-e a 199 (fantasma branco) dizem FE 1, banner 3.
+The death sequence (`EventResult` slot `+0x20`, `FUN_14018f830`) builds jobs
+from a parameter row: id `papel + tipo*100` in the bonfire record's table
+(`FUN_14044ed10`), or `tipo*100 + 99`. The first byte is an FE type, and the
+ten-int table at `0x1410c3580` translates it into a banner for
+`FUN_1405012e0(*(ctx+0x22e0), id)`. Read live: row 100 (world owner) and row
+199 (white phantom) say FE 1, banner 3.
 
-O banner 3 esconde o HUD (`+0x46c` de `*(frontend+0xd8)`), e só uma carga o
-devolve: `FUN_1404fffb0` liga `+0x468`, que o update do HUD (`FUN_140507360`)
-lê como "mostrar tudo de novo". O hook chama a mesma função quando
-`FUN_140500b10` diz que o front end terminou. Medido no Chico e no Samuel, em
-sessão: o letreiro, o HUD sumido, e `banner 3 acabou em 203 quadros: HUD
-devolvido`. Ligado por padrão desde `22880bf2`, conferido solo com esse build
-(só `respawn` escrito, `banner=1` no status). O som da morte (`FUN_1401905c0`,
-uma sobreposição de BGM que ninguém desfaz sem carga) ficou de fora.
+Banner 3 hides the HUD (`+0x46c` of `*(frontend+0xd8)`), and only a load gives
+it back: `FUN_1404fffb0` sets `+0x468`, which the HUD update (`FUN_140507360`)
+reads as "show everything again". The hook calls the same function when
+`FUN_140500b10` says the front end has finished. Measured on Chico and on
+Samuel, in a session: the lettering, the HUD gone, and
+`banner 3 acabou em 203 quadros: HUD
+devolvido`. On by default since `22880bf2`, checked solo with that build
+(only `respawn` written, `banner=1` in the status). The death sound
+(`FUN_1401905c0`, a BGM overlay nobody undoes without a load) was left out.
 
-Para fantasma, a morte comum mostra depois do banner "You have been
-vanquished. Returning to your world..." (mensagem `0x129da1` da linha 199). O
-hook não a mostra: o fantasma não volta para casa.
+For a phantom, the ordinary death shows, after the banner, "You have been
+vanquished. Returning to your world..." (message `0x129da1` from row 199). The
+hook does not show it: the phantom does not go home.
 
-### A mancha online não sai
+### The online bloodstain does not go out
 
-`FUN_14026c0b0` (ou `FUN_14026c1b0` para morte tipo 3) é o que o update do
-`NetSvrBloodstainManager` chama no quadro em que o personagem local está com
-HP 0 e o bit `0x4000`. Rastreado com hora numa morte comum: a chamada no mesmo
-quadro da morte, o job (`FUN_14026bd10`) **cinco segundos depois**, e aí
-`FUN_14019f520` lê o gravador de fantasma e `FUN_140269650` envia; o servidor
-registrou `RequestCreateBloodstain` cinco segundos depois da morte.
+`FUN_14026c0b0` (or `FUN_14026c1b0` for death type 3) is what the
+`NetSvrBloodstainManager` update calls on the frame where the local character
+has HP 0 and the `0x4000` bit. Traced with timestamps on an ordinary death:
+the call on the same frame as the death, the job (`FUN_14026bd10`) **five
+seconds later**, and then `FUN_14019f520` reads the ghost recorder and
+`FUN_140269650` sends; the server logged `RequestCreateBloodstain` five
+seconds after the death.
 
-Chamada pelo hook, a mesma cadeia passa pelas três checagens de
-`FUN_14026bc50`, cria o job, o job roda cinco segundos depois — e não envia.
-`FUN_14019f520` só aceita se entre os últimos 16 quadros do gravador houver um
-marcado `0x1000` (`FUN_1401a25e0`): um quadro gravado com o personagem morto.
-Com a morte recusada no mesmo quadro, esse quadro nunca é gravado. A chave
-`mancha_online` fica desligada.
+Called by the hook, the same chain passes the three checks in
+`FUN_14026bc50`, creates the job, the job runs five seconds later — and sends
+nothing. `FUN_14019f520` only accepts if among the recorder's last 16 frames
+there is one marked `0x1000` (`FUN_1401a25e0`): a frame recorded with the
+character dead. With the death refused on the same frame, that frame is never
+recorded. The `mancha_online` switch stays off.
 
-### O resultado
+### The result
 
-| teste | quem morreu | conferido |
+| test | who died | checked |
 | --- | --- | --- |
-| HP zerado a 7,6 m da fogueira (build 1) | Chico, fantasma | lado dele certo; **cópia morta no host**, "vanquished" |
-| HP zerado (build 1) | Samuel, host | almas 4321 para a mancha, hollow 0→1, máximo 915→869, mortes 55→56, teleporte; na tela do Chico, o Samuel na fogueira; 60 s depois: nenhum `NotifyDeath`/`LeaveGuestPlayer`, host `0x10`, convidado 7 |
-| HP zerado (build 2) | Chico | **o host vê o Chico na fogueira**, sem "vanquished"; 60 s depois host `0x10`, convidado 7, nenhum `LeaveGuestPlayer` |
-| byte de morte ligado na cópia (build 2) | cópia do Chico no Samuel | `morte da copia RECUSADA`, cópia de pé |
-| quatro mortes seguidas (build 2) | Chico | todas recusadas, nenhuma cópia morta |
-| queda no mar (build 2) | Chico | causa 90, câmera de queda desligada, fogueira em 1 quadro |
-| queda no mar (build 2) | Samuel | almas para a mancha na beira, hollow 0→1, fogueira; 60 s depois host `0x10`, convidado 7 |
-| banner (build 2) | Chico e Samuel | "YOU DIED", HUD devolvido em 203 quadros |
-| servidor | — | o primeiro `RequestNotifyDeath` da conexão do Chico só apareceu na morte comum da saída, depois de sete mortes recusadas na sessão |
+| HP zeroed 7.6 m from the bonfire (build 1) | Chico, phantom | his side right; **copy dead on the host**, "vanquished" |
+| HP zeroed (build 1) | Samuel, host | 4321 souls into the bloodstain, hollow 0→1, maximum 915→869, deaths 55→56, teleport; on Chico's screen, Samuel at the bonfire; 60 s later: no `NotifyDeath`/`LeaveGuestPlayer`, host `0x10`, guest 7 |
+| HP zeroed (build 2) | Chico | **the host sees Chico at the bonfire**, no "vanquished"; 60 s later host `0x10`, guest 7, no `LeaveGuestPlayer` |
+| death byte set on the copy (build 2) | Chico's copy inside Samuel | `morte da copia RECUSADA`, copy standing |
+| four deaths in a row (build 2) | Chico | all refused, no copy dead |
+| fall into the sea (build 2) | Chico | cause 90, fall camera off, bonfire in 1 frame |
+| fall into the sea (build 2) | Samuel | souls into the bloodstain at the edge, hollow 0→1, bonfire; 60 s later host `0x10`, guest 7 |
+| banner (build 2) | Chico and Samuel | "YOU DIED", HUD back in 203 frames |
+| server | — | the first `RequestNotifyDeath` on Chico's connection only appeared on the ordinary death on the way out, after seven deaths refused in the session |
 
-### Duas armadilhas desta rodada
+### Two traps from this round
 
-**O modo volta a `observe` a cada boot.** Um `goto --to-instance 2` feito
-antes de escrever `respawn` levou o Samuel para fora da laje de Heide: morte
-por queda de verdade, sem sessão aberta, custando a efígie e as almas de teste.
-Escreva o modo nos dois `DS2_Death.req` antes de mexer em qualquer personagem.
+**The mode goes back to `observe` on every boot.** A `goto --to-instance 2`
+done before writing `respawn` took Samuel off the Heide slab: a real death by
+falling, with no session open, costing the Human Effigy and the test souls.
+Write the mode into both `DS2_Death.req` before moving any character.
 
-**Um breakpoint armado no meio de uma instrução derruba o jogo** quando o fluxo
-chega nele: o `0xCC` corta a instrução. `bp` precisa do início exato de uma
-instrução; confira no objdump antes de armar.
+**A breakpoint set in the middle of an instruction crashes the game** when the
+flow reaches it: the `0xCC` cuts the instruction in half. `bp` needs the exact
+start of an instruction; check it in objdump before setting one.
 
-## A fogueira do host (passo 7, 14/09)
+## The host's bonfire (step 7, 14/09)
 
-Até o passo 6 o convidado renascia na fogueira do **próprio** registro, e só
-deu certo porque o Samuel e o Chico tinham a mesma (`0x7ba7`). O registro de um
-convidado é o do mundo dele, e o jogo não grava outro enquanto ele está no
-mundo do host: `FUN_1401caf50` (acender) e `FUN_1401cb950` (sentar) só gravam
-quando quem interagiu é o personagem local **e** o slot `+0x58` do contexto diz
-que ele não está no mundo de outro. O registro do host existe só na máquina do
-host.
+Up to step 6 the guest respawned at the bonfire in his **own** record, and it
+only worked because Samuel and Chico had the same one (`0x7ba7`). A guest's
+record is his own world's, and the game does not write another while he is in
+the host's world: `FUN_1401caf50` (light) and `FUN_1401cb950` (rest) only
+write when the one who interacted is the local character **and** slot `+0x58`
+of the context says he is not in someone else's world. The host's record
+exists only on the host's machine.
 
-### Um canal P2P, e não o servidor
+### A P2P channel, not the server
 
-A lista de tarefas previa um canal "provavelmente pelo servidor". Não precisou:
-a sessão entre os dois já é P2P da Steam, e o jogo usa **um canal só** dela. Das
-oito chamadas a `SteamNetworking()` no binário, as seis que levam canal passam
-0 — `FUN_140a75800` pergunta e `FUN_140a73de0` lê, `FUN_140a7a410` e
-`FUN_140a76d90` enviam —, e as outras duas aceitam e fecham a sessão com um
-usuário. Um pacote em outro canal viaja pela mesma sessão P2P e fica esperando
-na outra máquina, sem que o jogo o toque, até alguém ler aquele canal. O
-servidor não participa e nada muda na VPS.
+The task list expected a channel "probably through the server". It was not
+needed: the session between the two is already Steam P2P, and the game uses
+**one channel only** of it. Of the eight calls to `SteamNetworking()` in the
+binary, the six that take a channel pass 0 — `FUN_140a75800` asks and
+`FUN_140a73de0` reads, `FUN_140a7a410` and `FUN_140a76d90` send —, and the
+other two accept and close the session with a user. A packet on another
+channel travels over the same P2P session and sits waiting on the other
+machine, untouched by the game, until somebody reads that channel. The server
+takes no part and nothing changes on the VPS.
 
-| peça | onde |
+| piece | where |
 | --- | --- |
-| o poll da sessão | `FUN_140a75800`, slot `+0x108` de `DLNRD::SteamSessionLight` (vftable `0x1411b1058`), na thread do gerenciador de sessões; cerca de 107 chamadas por segundo em sessão (74 224 em 11,5 min) |
-| os membros | vetor em `+0x68..+0x70`; cada um é um `SteamSessionMemberLight` (vftable `0x1411b35e8`) com o CSteamID em `+0xc8`, onde o jogo procura o remetente de um pacote. O próprio jogador está na lista |
-| quem é o host | `+0xad` do membro, ligado por `FUN_140a72740` ao acrescentá-lo quando o id dele é o `GetLobbyOwner` do lobby (`+0x3f0` da sessão); o log de depuração do jogo chama de "Host". Lido ao vivo: 1 para o Samuel e 0 para o Chico, nas duas máquinas |
-| aceitar pacotes de alguém | `FUN_140a735f0` (`P2PSessionRequest_t`) só aceita quem está no lobby da sessão |
-| enviar e ler | `ISteamNetworking` slots `+0x00`, `+0x08`, `+0x10`, com os mesmos argumentos que o jogo passa; o próprio SteamID sai de `ISteamUser` slot `+0x10`, por ponteiro |
-| fora de sessão | varredura solo em 14/09: nenhum objeto com a vftable de `SteamSessionLight` |
+| the session poll | `FUN_140a75800`, slot `+0x108` of `DLNRD::SteamSessionLight` (vftable `0x1411b1058`), on the session manager's thread; about 107 calls per second in a session (74 224 in 11.5 min) |
+| the members | vector at `+0x68..+0x70`; each one is a `SteamSessionMemberLight` (vftable `0x1411b35e8`) with the CSteamID at `+0xc8`, where the game looks for a packet's sender. The player himself is on the list |
+| who the host is | `+0xad` of the member, set by `FUN_140a72740` when adding him if his id is the lobby's `GetLobbyOwner` (`+0x3f0` of the session); the game's debug log calls it "Host". Read live: 1 for Samuel and 0 for Chico, on both machines |
+| accepting packets from someone | `FUN_140a735f0` (`P2PSessionRequest_t`) only accepts someone who is in the session's lobby |
+| sending and reading | `ISteamNetworking` slots `+0x00`, `+0x08`, `+0x10`, with the same arguments the game passes; your own SteamID comes out of `ISteamUser` slot `+0x10`, by pointer |
+| outside a session | solo scan on 14/09: no object with `SteamSessionLight`'s vftable |
 
-### O que o mod faz
+### What the mod does
 
-`DS2_CoopChannelHook` desvia o poll: deixa o jogo rodar e depois lê o canal 7.
-Se o jogador local é o host da sessão e o dono do mundo em que está (papel 0),
-anuncia `{mapa, tipo, id}` do registro dele para cada outro membro, a cada 2 s
-e na hora em que muda. O anúncio tem 24 bytes (`JMJC`, versão, tipo, papel de
-quem envia) e só é guardado se vier do host de uma sessão vista nos últimos
-5 s. A thread de rede não lê o mundo do jogo: o `DS2_DeathInterceptHook`
-publica o papel e o registro a cada quadro, na thread do jogo. `DS2_Channel.req`
-com `status` escreve o que o canal viu em `DS2_Channel.log`.
+`DS2_CoopChannelHook` detours the poll: it lets the game run and then reads
+channel 7. If the local player is the session's host and the owner of the
+world he is in (role 0), it announces `{mapa, tipo, id}` from his record to
+every other member, every 2 s and the moment it changes. The announcement is
+24 bytes (`JMJC`, version, type, sender's role) and is only kept if it comes
+from the host of a session seen in the last 5 s. The network thread does not
+read the game's world: `DS2_DeathInterceptHook` publishes the role and the
+record every frame, on the game thread. `DS2_Channel.req` with `status` writes
+what the channel saw into `DS2_Channel.log`.
 
-Na morte de quem não é dono do mundo, o renascer procura a fogueira anunciada
-no mapa carregado; sem anúncio de menos de 30 s, ou com a fogueira do host fora
-do mapa, cai na do próprio registro e, sem ela, na última posição no chão. A
-procura agora confere o mapa além do id: `*(*(obj+0x28)+8)`, o mesmo campo que
-`FUN_1401caf50` grava no registro (`FUN_1403ba320`), `0x0a1f0000` nas três
-fogueiras de Heide, lido em 14/09. O registro do convidado **não** é tocado —
-gravar ali a fogueira do host a levaria para o save dele — e a chave
-`fogueira_do_host` do `DS2_Death.req` desliga a escolha sem build.
+On the death of someone who is not the world's owner, the respawn looks for
+the announced bonfire on the loaded map; with no announcement newer than 30 s,
+or with the host's bonfire off the map, it falls back to the one in his own
+record and, failing that, to the last position on the ground. The search now
+checks the map as well as the id: `*(*(obj+0x28)+8)`, the same field
+`FUN_1401caf50` writes into the record (`FUN_1403ba320`), `0x0a1f0000` on
+Heide's three bonfires, read on 14/09. The guest's record is **not** touched —
+writing the host's bonfire there would carry it into his save — and the
+`fogueira_do_host` switch in `DS2_Death.req` turns the choice off without a
+build.
 
-### O resultado
+### The result
 
-Encenação: o Chico descansou sozinho na fogueira "Tower of Flame" (`0x7ba2`,
-69 m ao norte da de Heide) e foi levado de volta à fogueira do Samuel; o
-registro dele ficou em `0x7ba2`, o do Samuel em `0x7ba7`. Os dois humanos,
-marca branca, sessão formada (`RequestNotifyJoinGuestPlayer` às 01:48:08,
-`RequestNotifyJoinSession` às 01:48:10), os dois em `respawn`. Build
-`d3cd29e5`.
+Staging: Chico rested alone at the "Tower of Flame" bonfire (`0x7ba2`, 69 m
+north of Heide's) and was taken back to Samuel's bonfire; his record stayed at
+`0x7ba2`, Samuel's at `0x7ba7`. Both human, white sign, session formed
+(`RequestNotifyJoinGuestPlayer` at 01:48:08, `RequestNotifyJoinSession` at
+01:48:10), both in `respawn`. Build `d3cd29e5`.
 
-| teste | quem | log do hook | conferido |
+| test | who | hook log | checked |
 | --- | --- | --- | --- |
-| HP zerado na Tower of Flame | Chico | `levando para fogueira do host (6.186, -18.517, 209.053) mapa=0a1f0000 tipo=0 id=00007ba7; papel 1, anunciada por 011000010afd1a3a ha 1050 ms` | de (13.08, 276.66) para (6.27, 209.91); na tela do Samuel, o Chico na fogueira dele |
-| HP zerado ao lado do Samuel, `fogueira_do_host off` | Chico | `levando para fogueira do registro (13.056, -6.167, 276.660) ... id=00007ba2` | o controle: sem o anúncio, 69 m para a própria |
-| HP zerado na Tower of Flame, chave de volta | Chico | `fogueira do host ... id=00007ba7 ... ha 1064 ms` | ao lado do Samuel de novo |
-| queda no mar | Chico | `morte CANCELADA #4 queda ... causa=90`, `fogueira do host ... ha 1778 ms`, `renascer concluido em 1 quadros ... camera de queda desligada` | na fogueira do Samuel |
-| HP zerado na Tower of Flame | Samuel | `levando para fogueira do registro ... id=00007ba7`, sem nota de host; hollow 0→1, máximo 915→869, mortes 55→56, mancha trocada | de volta à própria fogueira; na tela do Chico, o Samuel lá |
-| 60 s depois da última morte | — | — | host `0x10`, convidado 7; nenhum `RequestNotifyDeath`, `KillEnemy` ou `Leave` no servidor |
-| canal | — | host: 347 enviados, 0 falhas; convidado: 346 recebidos, 0 recusados | um anúncio a cada 2 s durante 11 minutos |
-| saída | Chico em `observe`, `copias off` no Samuel | — | o primeiro `RequestNotifyDeath` da conexão do Chico às 02:00:09, `LeaveSession` e `LeaveGuestPlayer` às 02:00:21/22; o Chico voltou para casa na **própria** fogueira, `0x7ba2` |
+| HP zeroed at the Tower of Flame | Chico | `levando para fogueira do host (6.186, -18.517, 209.053) mapa=0a1f0000 tipo=0 id=00007ba7; papel 1, anunciada por 011000010afd1a3a ha 1050 ms` | from (13.08, 276.66) to (6.27, 209.91); on Samuel's screen, Chico at his bonfire |
+| HP zeroed beside Samuel, `fogueira_do_host off` | Chico | `levando para fogueira do registro (13.056, -6.167, 276.660) ... id=00007ba2` | the control: with no announcement, 69 m to his own |
+| HP zeroed at the Tower of Flame, switch back on | Chico | `fogueira do host ... id=00007ba7 ... ha 1064 ms` | beside Samuel again |
+| fall into the sea | Chico | `morte CANCELADA #4 queda ... causa=90`, `fogueira do host ... ha 1778 ms`, `renascer concluido em 1 quadros ... camera de queda desligada` | at Samuel's bonfire |
+| HP zeroed at the Tower of Flame | Samuel | `levando para fogueira do registro ... id=00007ba7`, with no host note; hollow 0→1, maximum 915→869, deaths 55→56, bloodstain moved | back at his own bonfire; on Chico's screen, Samuel there |
+| 60 s after the last death | — | — | host `0x10`, guest 7; no `RequestNotifyDeath`, `KillEnemy` or `Leave` on the server |
+| channel | — | host: 347 sent, 0 failures; guest: 346 received, 0 refused | one announcement every 2 s for 11 minutes |
+| exit | Chico in `observe`, `copias off` on Samuel | — | the first `RequestNotifyDeath` on Chico's connection at 02:00:09, `LeaveSession` and `LeaveGuestPlayer` at 02:00:21/22; Chico went home to his **own** bonfire, `0x7ba2` |
 
-A última linha é a outra metade da prova: o registro do convidado continuou
-sendo dele.
+The last row is the other half of the proof: the guest's record stayed his.
 
-### O convidado que ainda está entrando
+### The guest who is still coming in
 
-O mesmo teste mostrou um erro do primeiro build. Nos 10 segundos entre o lobby
-se formar e ele chegar ao mundo do Samuel, o Chico ainda era dono do próprio
-mundo (papel 0) e anunciou a **própria** fogueira cinco vezes — e o Samuel
-aceitou. Com dois jogadores não teve efeito, porque o host não usa anúncio; com
-três, um convidado já dentro iria para a fogueira de quem está entrando. Papel 0
-não identifica o host da sessão. O que identifica é a marca que o jogo põe no
-membro (`+0xad`), e o build `4862d723` só anuncia e só aceita com ela.
+The same test showed up a bug in the first build. In the 10 seconds between
+the lobby forming and him reaching Samuel's world, Chico was still the owner
+of his own world (role 0) and announced his **own** bonfire five times — and
+Samuel accepted it. With two players it had no effect, because the host does
+not use the announcement; with three, a guest already inside would go to the
+bonfire of whoever is coming in. Role 0 does not identify the session's host.
+What does is the mark the game puts on the member (`+0xad`), and build
+`4862d723` only announces and only accepts with it.
 
-Conferido numa segunda sessão com esse build, a mesma encenação (saves com o
-Chico ainda em `0x7ba2`):
+Checked in a second session with that build, the same staging (saves with
+Chico still at `0x7ba2`):
 
-- os dois logs listam `011000010afd1a3a (host) 0110000140d6d6d1`;
-- o Chico **não anunciou nada** na entrada (`enviados=0`), e o Samuel não
-  recebeu nada (`recebidos=0`); o Chico recebeu 22 anúncios do Samuel em 40 s,
-  nenhum recusado;
-- HP do Chico zerado na Tower of Flame: `levando para fogueira do host ...
-  id=00007ba7 ...; papel 1, anunciada por 011000010afd1a3a ha 753 ms`, e na
-  tela do Samuel o Chico na fogueira;
-- 60 s depois, host `0x10` e convidado 7; saída pelo caminho legal
-  (`RequestNotifyDeath` às 02:12:41, `LeaveSession` e `LeaveGuestPlayer` às
-  02:12:53/54), e o Chico em casa na `0x7ba2`.
+- both logs list `011000010afd1a3a (host) 0110000140d6d6d1`;
+- Chico **announced nothing** on the way in (`enviados=0`), and Samuel
+  received nothing (`recebidos=0`); Chico received 22 announcements from
+  Samuel in 40 s, none refused;
+- Chico's HP zeroed at the Tower of Flame: `levando para fogueira do host ...
+  id=00007ba7 ...; papel 1, anunciada por 011000010afd1a3a ha 753 ms`, and on
+  Samuel's screen Chico at the bonfire;
+- 60 s later, host `0x10` and guest 7; exit the legal way
+  (`RequestNotifyDeath` at 02:12:41, `LeaveSession` and `LeaveGuestPlayer` at
+  02:12:53/54), and Chico home at `0x7ba2`.
 
-Saves devolvidos a `pre-passo6` depois das duas sessões.
+Saves restored to `pre-passo6` after both sessions.
 
-### Uma armadilha de encenação
+### A staging trap
 
-**O teleporte não gira o personagem, e a fogueira só oferece "Rest" a quem está
-virado para ela.** Posto no ponto exato de nascimento da Tower of Flame, o
-Chico não recebeu prompt nenhum; e andar com o analógico mexe a câmera junto,
-de modo que "para baixo" muda de sentido a cada passo. O que funcionou foi
-medir o deslocamento de um toque curto no analógico, converter a direção do
-mundo para a da tela e dar o último passo *em direção* à fogueira: o prompt
-apareceu a 0,16 m do ponto de nascimento.
+**The teleport does not turn the character, and the bonfire only offers "Rest"
+to someone facing it.** Put on the Tower of Flame's exact spawn point, Chico
+got no prompt at all; and walking with the stick moves the camera along with
+it, so that "down" changes meaning at every step. What worked was to measure
+the displacement of a short tap on the stick, convert the world direction into
+the screen one and take the last step *towards* the bonfire: the prompt
+appeared 0.16 m from the spawn point.
 
-## A fogueira de outro mapa (passo 8, 14/09)
+## A bonfire on another map (step 8, 14/09)
 
-Até o passo 7 o renascer procurava a fogueira na lista das fogueiras
-carregadas, e sem ela deixava o personagem na última posição no chão: pagava a
-morte e ficava onde morreu. Acontece sempre que alguém morre num mapa depois de
-descansar em outro. O dono do projeto escolheu manter o desenho ao pé da letra
-— a última fogueira, com carregamento — em vez de renascer na fogueira acesa
-mais próxima.
+Up to step 7 the respawn looked for the bonfire in the list of loaded
+bonfires, and without it left the character at the last position on the
+ground: he paid the death and stayed where he died. It happens whenever
+somebody dies on one map after resting on another. The project's owner chose
+to keep the design to the letter — the last bonfire, with loading — instead of
+respawning at the nearest lit bonfire.
 
-Todo carregamento que o jogo faz passa pelo warp, e o warp desmonta a presença
-do outro jogador. Mas andar de uma área para outra não passa por warp: o jogo
-carrega por partes, a cada quadro, e é essa via que o passo 8 usa.
+Every load the game does goes through the warp, and the warp tears down the
+other player's presence. But walking from one area to another does not go
+through a warp: the game loads in parts, every frame, and that is the route
+step 8 uses.
 
-### Como o jogo carrega mapas
+### How the game loads maps
 
-| peça | onde |
+| piece | where |
 | --- | --- |
-| a lista de fogueiras | os `MapObjBonfireComponent` instanciados: `FUN_1401cb310` insere, `FUN_1401caee0` tira. Uma fogueira só está ali com a parte do mapa dela carregada |
-| a tabela de fogueiras | 77 entradas de `MapObjectBonfireParam` em `EventBonfireManager+0x20` (contagem em `+0x28`, 0x18 bytes: id, acesa no mundo próprio em `+2`, no do host em `+3`, a linha do param em `+8`). Sem posição |
-| um dono por mapa | 38 `MapAreaCtrlOwner` (vftable `0x1410e87f0`), criados a cada carga para todos os mapas (`FUN_1403dc0a0`): `+8` mapa, `+0xc` índice, sete máscaras de partes de 128 bits a partir de `+0x10`, `+0x1e8` estado (5 é carregado), `+0x1e9` forçar, `+0x1ea` querer. Atualização `FUN_1403cc3f0`, máquina de estados `FUN_1403cc450` |
-| o streamer | `*(*(ctx+0x38)+8)`: donos em `+0x38` (contagem `+0x1b6`), a parte sob o jogador em `+0x28` e o índice do mapa dela em `+0x30` (os dois gravados por `FUN_1403dc8e0`), o mundo de células em `+0x18` |
-| quais partes | uma busca em grafo de células de navegação a partir da célula onde o jogador está (`FUN_1403dadd0` guarda posição e célula, `FUN_1403da960` busca). Cada parte alcançada soma o conjunto de partes que traz consigo, `*(*(parte+0x30)+0x70)` (128 bits), à máscara do mapa dela |
-| a parte sob um personagem | `FUN_140312ba0`: o contato físico `*(chr+0x100)+0x10`, cujo handle em `+0xe0` tem o tipo no nibble baixo (7 colisão do mapa, 1 objeto), o índice do mapa nos bits 4..9 e o da colisão do bit 10 em diante; é uma parte quando o tipo da entidade (`+0xa2`) é 2 |
-| a célula de uma posição | `*(ctx+0xbc0)+0x10` é o gerenciador de navegação; `FUN_140badb90` acha o mapa de navegação pela chave `(índice & 0x3f) << 24 \| 0xffffff`, e `FUN_140babf90` a célula mais próxima em 10 unidades. Lê a posição com SSE alinhado |
+| the bonfire list | the instantiated `MapObjBonfireComponent`s: `FUN_1401cb310` inserts, `FUN_1401caee0` removes. A bonfire is only there with its map part loaded |
+| the bonfire table | 77 `MapObjectBonfireParam` entries at `EventBonfireManager+0x20` (count at `+0x28`, 0x18 bytes: id, lit in your own world at `+2`, in the host's at `+3`, the param row at `+8`). No position |
+| one owner per map | 38 `MapAreaCtrlOwner` (vftable `0x1410e87f0`), created on every load for every map (`FUN_1403dc0a0`): `+8` map, `+0xc` index, seven 128-bit part masks from `+0x10` on, `+0x1e8` state (5 is loaded), `+0x1e9` force, `+0x1ea` want. Update `FUN_1403cc3f0`, state machine `FUN_1403cc450` |
+| the streamer | `*(*(ctx+0x38)+8)`: owners at `+0x38` (count `+0x1b6`), the part under the player at `+0x28` and its map index at `+0x30` (both written by `FUN_1403dc8e0`), the cell world at `+0x18` |
+| which parts | a graph search over navigation cells starting from the cell the player is in (`FUN_1403dadd0` stores position and cell, `FUN_1403da960` searches). Every part reached adds the set of parts it brings with it, `*(*(parte+0x30)+0x70)` (128 bits), to its own map's mask |
+| the part under a character | `FUN_140312ba0`: the physics contact `*(chr+0x100)+0x10`, whose handle at `+0xe0` has the type in the low nibble (7 map collision, 1 object), the map index in bits 4..9 and the collision's from bit 10 on; it is a part when the entity's type (`+0xa2`) is 2 |
+| the cell of a position | `*(ctx+0xbc0)+0x10` is the navigation manager; `FUN_140badb90` finds the navigation map by the key `(índice & 0x3f) << 24 \| 0xffffff`, and `FUN_140babf90` the nearest cell within 10 units. It reads the position with aligned SSE |
 
-Carregados juntos, a primeira fogueira de Heide (`0x7ba7`, 6,186 / -18,517 /
-209,053) fica a 226,7 m da de Majula (`0x122a`, 10,526 / 5,916 / -16,255), e
-os dois mapas não precisam caber num espaço só: o jogo tem um deslocamento do
-mundo para algumas transições (`FUN_1401c3fe0` pede em `ctx+0x2530`,
-`FUN_1401c3b40` move jogador e câmera), que este passo não usa, e numa volta
-manual o Samuel pousou numa pedra de Majula no ponto da fogueira de Heide
-(abaixo).
+Loaded together, Heide's first bonfire (`0x7ba7`, 6.186 / -18.517 / 209.053)
+sits 226.7 m from Majula's (`0x122a`, 10.526 / 5.916 / -16.255), and the two
+maps do not have to fit into one space: the game has a world offset for some
+transitions (`FUN_1401c3fe0` asks for it at `ctx+0x2530`, `FUN_1401c3b40`
+moves player and camera), which this step does not use, and on a manual trip
+back Samuel landed on a Majula rock at the point of Heide's bonfire (below).
 
-### O que não deu chão
+### What gave no ground
 
-Samuel sozinho, parado em Heide, tentando pôr Majula carregado ao lado:
+Samuel alone, standing in Heide, trying to get Majula loaded beside him:
 
-| tentativa | resultado |
+| attempt | result |
 | --- | --- |
-| override do próprio streamer (`+0x1f0` índice, `+0x1d0` máscara) em Majula | zera os outros mapas: Heide descarregou sob o personagem e **o jogo fechou** |
-| o mesmo override em Heide | nada quebrou: carregar todas as partes não é o problema |
-| `+0x1e9` em Majula, por escrita | estado 5 em meio segundo, os personagens de Majula criados, `0x122a` na lista a 226,7 m — e nenhum chão: levado até lá, o personagem caiu |
-| um gancho forçando e somando `+0x10`/`+0x40`, depois todas as máscaras menos `+0x70` | caiu; nenhum corpo rígido novo (197 antes e depois) |
-| o pedido de posição do próprio jogo (`*(chr+0xc8)`, bit 0 de `+0xfc`) | caiu igual |
+| the streamer's own override (`+0x1f0` index, `+0x1d0` mask) on Majula | zeroes the other maps: Heide unloaded under the character and **the game closed** |
+| the same override on Heide | nothing broke: loading every part is not the problem |
+| `+0x1e9` on Majula, by writing | state 5 in half a second, Majula's characters created, `0x122a` on the list 226.7 m away — and no ground: taken there, the character fell |
+| a hook forcing and adding `+0x10`/`+0x40`, then every mask but `+0x70` | fell; no new rigid body (197 before and after) |
+| the game's own position request (`*(chr+0xc8)`, bit 0 of `+0xfc`) | fell just the same |
 
-O chão não vinha porque a busca de partes parte da célula do jogador, e um
-personagem no ar não tem célula.
+The ground did not come because the part search starts from the player's cell,
+and a character in the air has no cell.
 
-### O que deu chão: o foco
+### What gave ground: the focus
 
-`DS2_BackreadHook` desvia duas funções. Na atualização de cada dono
-(`FUN_1403cc3f0`) liga o byte de forçar e soma as partes pedidas. No streamer
-(`FUN_1403dc8e0`) entrega, no lugar da célula do jogador, a célula de uma
-posição do mapa pedido. O jogo então carrega o chão em volta dessa posição como
-se o jogador tivesse andado até lá. A primeira versão achou a célula -2 — uma
-exceção dentro de `FUN_140babf90`, que lê a posição com SSE alinhado; com o
-vetor alinhado em 16 bytes, célula `0x0C000128`, e o Samuel foi da fogueira de
-Majula à de Heide de pé, sem morte e sem warp. Solto o foco, Majula descarregou
-e o servidor viu Heide.
+`DS2_BackreadHook` detours two functions. In each owner's update
+(`FUN_1403cc3f0`) it sets the force byte and adds the requested parts. In the
+streamer (`FUN_1403dc8e0`) it hands over, in place of the player's cell, the
+cell of a position on the requested map. The game then loads the ground around
+that position as if the player had walked there. The first version found cell
+-2 — an exception inside `FUN_140babf90`, which reads the position with
+aligned SSE; with the vector aligned to 16 bytes, cell `0x0C000128`, and
+Samuel went from Majula's bonfire to Heide's on his feet, with no death and no
+warp. Once the focus was released, Majula unloaded and the server saw Heide.
 
-`DS2_Backread.req` expõe as mesmas peças para medição
+`DS2_Backread.req` exposes the same pieces for measurement
 ([DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)).
 
-### O renascer em outro mapa
+### Respawning on another map
 
-Quando a fogueira alvo — a do registro, ou a anunciada pelo host a um
-convidado — não está na lista e o mapa dela é conhecido, o renascer
-(`DS2_DeathInterceptHook`, chave `outro_mapa`):
+When the target bonfire — the record's, or the one the host announced to a
+guest — is not on the list and its map is known, the respawn
+(`DS2_DeathInterceptHook`, switch `outro_mapa`):
 
-1. pede o mapa com todas as partes e deixa o personagem na última posição no
-   chão;
-2. a cada 10 quadros confere: com o mapa no estado 5 e a fogueira na lista,
-   foca a fogueira e leva o personagem;
-3. solta foco e mapa quando o streamer diz que o personagem pisa no mapa novo.
-   Se ele estiver pisando noutro mapa, manda de novo a cada 90 quadros e desiste
-   em 600.
+1. asks for the map with every part and leaves the character at the last
+   position on the ground;
+2. every 10 frames it checks: with the map in state 5 and the bonfire on the
+   list, it focuses the bonfire and takes the character there;
+3. releases focus and map when the streamer says the character is standing on
+   the new map. If he is standing on another map, it asks again every 90
+   frames and gives up at 600.
 
-Nas medidas abaixo o mapa chegou ao estado 5 em 500 ms, sempre em 40 quadros, e
-o personagem pisou no mapa novo de 5 a 10 quadros depois. O reenvio do passo 3
-nunca disparou.
+In the measurements below the map reached state 5 in 500 ms, always in 40
+frames, and the character stood on the new map 5 to 10 frames later. Step 3's
+re-send never fired.
 
-Numa sessão, o mapa onde está a cópia de outro jogador também fica carregado
-nesta máquina, até 5 s depois de a cópia deixar de pisar nele. Na primeira
-sessão, sem isso (build `3392846c`), o jogo do Chico **fechou** no segundo em
-que o renascer dele em Majula soltou o mapa (11:40:50,835; a telemetria parou
-em 11:40:50 e a Steam viu a saída às 11:40:51), com a cópia do Samuel parada
-em Heide — uma desconexão ilegal, curada com os saves de `pre-passo6`. A causa
-exata não foi lida: `DS2_CrashHook` foi escrito nessa hora, um handler
-vetorizado que anota em `DS2_Crash.log` as violações de acesso com a instrução
-na imagem do jogo, e com a manutenção nenhum jogo fechou nem anotou nada nas
-quatro mortes em sessão que vieram depois.
+In a session, the map where another player's copy is stays loaded on this
+machine too, until 5 s after the copy stops standing on it. In the first
+session, without that (build `3392846c`), Chico's game **closed** the second
+his respawn in Majula released the map (11:40:50.835; telemetry stopped at
+11:40:50 and Steam saw the exit at 11:40:51), with Samuel's copy standing in
+Heide — an illegal disconnect, cured with the `pre-passo6` saves. The exact
+cause was not read: `DS2_CrashHook` was written at that point, a vectored
+handler that notes the access violations in `DS2_Crash.log` with the
+instruction in the game's image, and with the map kept no game closed or noted
+anything in the four deaths in a session that came after.
 
-### A queda que o teleporte fazia
+### The fall the teleport was causing
 
-A primeira morte na direção inversa — Samuel sozinho em Majula, registro em
-Heide — cobrou **duas** mortes. O mapa carregou, o personagem foi para a
-fogueira, e um quarto de segundo depois:
+The first death in the reverse direction — Samuel alone in Majula, record in
+Heide — charged **two** deaths. The map loaded, the character went to the
+bonfire, and a quarter of a second later:
 
 ```text
 12:29:27.754  morte CANCELADA #2 (seguida 2) queda hp=-182 -> 732 ... causa=60 +0x4c0=0000000000000200
 ```
 
-Hollow de 3 para 5, mortes de 55 para 57, e a mancha da primeira morte trocada
-por uma segunda. O controlador de queda (`FUN_140372620`, em
-`*(*(chr+0xe0)+0xb0)`) guarda em `+0x20` a posição onde viu o personagem no
-chão — reescrita a cada quadro no chão ou subindo — e mede o pouso a partir
-dela: `FUN_140372560` é `*(queda+0x24)` menos a altura atual, e
-`FUN_140372c00` transforma a altura em dano. O teleporte não mexia ali. Da
-última posição no chão em Majula (y 6,006) à fogueira de Heide (y -18,517),
-bastou um quadro no ar antes de pousar em Heide para o pouso contar como uma
-queda de 24,5 m. O próprio jogo resolve isso no pedido de posição: com o bit 0
-de `*(chr+0xc8)+0xfc`, `FUN_140372620` copia a posição pedida para `+0x20`. O
-teleporte agora faz o mesmo.
+Hollow from 3 to 5, deaths from 55 to 57, and the first death's bloodstain
+replaced by a second. The fall controller (`FUN_140372620`, at
+`*(*(chr+0xe0)+0xb0)`) keeps at `+0x20` the position where it saw the
+character on the ground — rewritten every frame on the ground or going up —
+and measures the landing from it: `FUN_140372560` is `*(queda+0x24)` minus the
+current height, and `FUN_140372c00` turns the height into damage. The teleport
+did not touch that. From the last position on the ground in Majula (y 6.006)
+to Heide's bonfire (y -18.517), one frame in the air before landing in Heide
+was enough for the landing to count as a 24.5 m fall. The game itself solves
+this in the position request: with bit 0 of `*(chr+0xc8)+0xfc`,
+`FUN_140372620` copies the requested position into `+0x20`. The teleport now
+does the same.
 
-Na direção de ida (Heide para Majula) a fogueira fica 24 m **acima** da morte,
-e a mesma falta não aparecia. Pelo mecanismo, qualquer renascer numa fogueira
-bem abaixo do lugar da morte, com um quadro no ar antes do pouso, caía na mesma
-conta desde o passo 5; no mesmo mapa isso não foi medido.
+In the outbound direction (Heide to Majula) the bonfire is 24 m **above** the
+death, and the same flaw did not show. By the mechanism, any respawn at a
+bonfire well below the place of death, with one frame in the air before the
+landing, would have hit the same bill since step 5; on the same map this was
+not measured.
 
-A segunda morte só foi cobrada porque o renascer já tinha terminado:
-`renascer concluido em 1 quadros` saiu **no mesmo quadro** do teleporte, lendo
-"no chão" do controlador de queda, que ainda não tinha rodado desde a mudança.
-Nesse quadro o renascer não pergunta mais; enquanto ele está ativo, uma morte
-que chega é a mesma morte, e não se paga de novo.
+The second death was only charged because the respawn had already finished:
+`renascer concluido em 1 quadros` came out **on the same frame** as the
+teleport, reading "on the ground" from the fall controller, which had not run
+since the change. On that frame the respawn no longer asks; while it is
+active, a death that arrives is the same death, and is not paid for twice.
 
-### O mapa do outro jogador, inteiro e depois só em volta
+### The other player's map, whole and then only around him
 
-A primeira versão mantinha o mapa da cópia **inteiro** (forçado, todas as
-partes). Achei que isso poria as pedras do mar de Majula sobre a primeira
-fogueira de Heide: numa volta manual Majula → Heide soltando o foco cedo, o
-Samuel pousou numa pedra de Majula naquele ponto. Medido depois, sozinho, com o
-pedido `keep` fazendo o papel da cópia: Majula inteiro no estado 5, uma morte
-em Majula renasceu em Heide pisando em Heide (contato `0xc7`, mapa 12), sem
-geometria de Majula na tela. O que pôs a pedra sob o Samuel na volta manual não
-foi medido; Majula inteiro, sozinho, não põe.
+The first version kept the copy's map **whole** (forced, every part). I
+thought that would put Majula's sea rocks over Heide's first bonfire: on a
+manual Majula → Heide trip releasing the focus early, Samuel landed on a
+Majula rock at that point. Measured afterwards, alone, with the `keep` request
+playing the copy's part: Majula whole in state 5, a death in Majula respawned
+in Heide standing on Heide (contact `0xc7`, map 12), with no Majula geometry
+on screen. What put the rock under Samuel on the manual trip was not measured;
+Majula whole, alone, does not put one there.
 
-Mesmo assim, ficou só o que o jogo carregaria para um jogador parado onde a
-cópia está: o mapa forçado e o conjunto da parte sob a cópia
-(`*(*(parte+0x30)+0x70)`). Na fogueira de Majula esse conjunto é o bit 37; na
-de Heide, o bit 1. Sem parte (no ar, num objeto), vale o que já estava, ou
-todas as partes. E soltar um mapa pedido para o renascer não tira mais o byte
-de forçar de um mapa que outro jogador segura (`solto, mas segue mantido por
-outro jogador`), o que antes acontecia por um quadro.
+Even so, what stayed is only what the game would load for a player standing
+where the copy is: the forced map and the set of the part under the copy
+(`*(*(parte+0x30)+0x70)`). At Majula's bonfire that set is bit 37; at Heide's,
+bit 1. With no part (in the air, on an object), what was already there stands,
+or every part. And releasing a map requested for the respawn no longer clears
+the force byte of a map another player holds (`solto, mas segue mantido por
+outro jogador`), which used to happen for one frame.
 
-### O resultado
+### The result
 
-Sozinho, Samuel, sem warp em nenhum caso:
+Alone, Samuel, with no warp in any case:
 
-| build | teste | log | conferido |
+| build | test | log | checked |
 | --- | --- | --- | --- |
-| `3392846c` | morte em Heide, registro em Majula | `o mapa 0a040000 carregou em 40 quadros; levando para a fogueira 0000122a`, solto em 6 quadros | 0,7 s do HP zerado a de pé em Majula; estável 15 s; servidor em "Majula" |
-| `36a6cc62` | morte em Majula, registro em Heide | Heide em 40 quadros, solto em 5 quadros, e a segunda morte por queda acima | o defeito da queda |
-| `7eaa79f1` | a mesma | um `custos da morte` (hollow 3→4, mortes 55→56), sem `queda`; `concluido` 17 ms depois do teleporte; solto em 10 quadros em (6,221, -18,532, 207,326), contato `0xc7` | HP 732/732 depois |
-| `7eaa79f1` | a mesma, com `keep 1 600000` (Majula inteiro) | um custo; solto em 6 quadros, contato `0xc7` | Majula e Heide no estado 5; nada de Majula sobre a fogueira |
-| `7eaa79f1` | `keep 1 600000` com o conjunto da fogueira | — | Majula forçado, estado 5, máscara só com o bit 37 |
+| `3392846c` | death in Heide, record in Majula | `o mapa 0a040000 carregou em 40 quadros; levando para a fogueira 0000122a`, released in 6 frames | 0.7 s from HP zeroed to standing in Majula; stable for 15 s; server in "Majula" |
+| `36a6cc62` | death in Majula, record in Heide | Heide in 40 frames, released in 5 frames, and the second death by falling, above | the fall defect |
+| `7eaa79f1` | the same | one `custos da morte` (hollow 3→4, deaths 55→56), no `queda`; `concluido` 17 ms after the teleport; released in 10 frames at (6.221, -18.532, 207.326), contact `0xc7` | HP 732/732 afterwards |
+| `7eaa79f1` | the same, with `keep 1 600000` (Majula whole) | one charge; released in 6 frames, contact `0xc7` | Majula and Heide in state 5; nothing of Majula over the bonfire |
+| `7eaa79f1` | `keep 1 600000` with the bonfire's set | — | Majula forced, state 5, mask with bit 37 only |
 
-Em sessão, Chico invocado no mundo do Samuel por marca branca, os dois em
-`respawn`, efígie queimada pelo Inventário nos dois antes da marca:
+In a session, Chico summoned into Samuel's world by a white sign, both in
+`respawn`, a Human Effigy burned through the Inventory on both before the
+sign:
 
-| build | teste | log | conferido |
+| build | test | log | checked |
 | --- | --- | --- | --- |
-| `3392846c` | Chico morre em Heide, fogueira do host em Majula | Majula em 40 quadros, solto em 6 | **o jogo do Chico fechou** em seguida; `LeaveGuestPlayer` do Samuel às 11:40:51 |
-| `1f0c387b` | a mesma | `a fogueira do host (mapa 0a040000 id 0000122a) nao esta no mapa carregado`, Majula em 40 quadros, solto em 6, `mapa de indice 1 mantido` | o Chico na fogueira de Majula; o Samuel em Heide ainda com a barra dele; 96 s depois host `0x10`, convidado 7, sem exceção nem `Leave` |
-| `1f0c387b` | Samuel morre em Heide, registro em Majula | Majula em 40 quadros, solto em 6, Heide solto 5 s depois | o Samuel em Majula ao lado do Chico; 62 s depois `0x10`/7 |
-| `8c278604` | Samuel morre em Majula, registro em Heide, Majula mantido para o Chico | um custo (hollow 0→1, máximo 915→869, mortes 55→56); Heide em 40 quadros, solto em 6, contato `0xc7`; na máquina do Chico, `morte da copia RECUSADA` | o Samuel na fogueira de Heide com a barra do Chico; o Chico em Majula com a do Samuel; 69 s depois `0x10`/7, sem `Leave`, `Death` ou `KillEnemy`, canal no anúncio 174 |
-| `8c278604` | Chico morre em Majula, fogueira do host em Heide | custo de convidado (sem almas, hollow isento, mortes 69→70); Heide em 40 quadros, solto em 10, contato `0xc7`; na máquina dele, `mapa 0a1f0000 solto, mas segue mantido por outro jogador` | os dois lado a lado na fogueira de Heide, cada um vendo o outro; 74 s depois `0x10`/7, só Heide carregado nas duas máquinas |
+| `3392846c` | Chico dies in Heide, host's bonfire in Majula | Majula in 40 frames, released in 6 | **Chico's game closed** straight after; `LeaveGuestPlayer` from Samuel at 11:40:51 |
+| `1f0c387b` | the same | `a fogueira do host (mapa 0a040000 id 0000122a) nao esta no mapa carregado`, Majula in 40 frames, released in 6, `mapa de indice 1 mantido` | Chico at Majula's bonfire; Samuel in Heide still with his bar; 96 s later host `0x10`, guest 7, no exception and no `Leave` |
+| `1f0c387b` | Samuel dies in Heide, record in Majula | Majula in 40 frames, released in 6, Heide released 5 s later | Samuel in Majula beside Chico; 62 s later `0x10`/7 |
+| `8c278604` | Samuel dies in Majula, record in Heide, Majula kept for Chico | one charge (hollow 0→1, maximum 915→869, deaths 55→56); Heide in 40 frames, released in 6, contact `0xc7`; on Chico's machine, `morte da copia RECUSADA` | Samuel at Heide's bonfire with Chico's bar; Chico in Majula with Samuel's; 69 s later `0x10`/7, no `Leave`, `Death` or `KillEnemy`, channel on announcement 174 |
+| `8c278604` | Chico dies in Majula, host's bonfire in Heide | a guest's charge (no souls, hollow exempt, deaths 69→70); Heide in 40 frames, released in 10, contact `0xc7`; on his machine, `mapa 0a1f0000 solto, mas segue mantido por outro jogador` | the two side by side at Heide's bonfire, each seeing the other; 74 s later `0x10`/7, only Heide loaded on both machines |
 
-As duas sessões terminaram pelo caminho legal (Chico em `observe`, `copias off`
-no Samuel, HP zerado): `RequestNotifyDeath`, `LeaveSession` e
-`LeaveGuestPlayer` às 12:06:36/48/49 e às 13:38:40/52/53, e o Chico em casa na
-própria `0x7ba7`. Nenhuma linha em `DS2_Crash.log` nas duas máquinas. Saves
-devolvidos a `pre-passo6`.
+Both sessions ended the legal way (Chico in `observe`, `copias off` on Samuel,
+HP zeroed): `RequestNotifyDeath`, `LeaveSession` and `LeaveGuestPlayer` at
+12:06:36/48/49 and at 13:38:40/52/53, and Chico home at his own `0x7ba7`. Not
+a line in `DS2_Crash.log` on either machine. Saves restored to `pre-passo6`.
 
-Depois dos renasceres do Chico em outro mapa o HP ficou em 853 de 854, tanto
-às 12:02 (fogueira acima da morte) quanto às 13:36 (abaixo). Não é a queda, e
-não foi investigado.
+After Chico's respawns on another map the HP settled at 853 of 854, both at
+12:02 (bonfire above the death) and at 13:36 (below). It is not the fall, and
+it was not investigated.
 
-## Sem efígie (M3, 14/09)
+## Without a Human Effigy (M3, 14/09)
 
-### Onde a efígie travava
+### Where the Human Effigy was blocking
 
-Medido com os dois personagens hollow (nível 3, estado 1) na fogueira de Heide:
+Measured with both characters hollow (level 3, state 1) at Heide's bonfire:
 
-| quem | o que faz hollow | prova |
+| who | what hollow does | proof |
 | --- | --- | --- |
-| convidado | põe a White Sign Soapstone | `Sign 1002 created: type 1` |
-| host | **recebe** a placa do servidor | o poll dele passa de `room for 20` a `19` |
-| host | **não** ganha o prompt | só "Rest at bonfire" e "Pick up item" no Y; humano (efígie pelo `human`), "Touch Summon Sign" no mesmo lugar |
+| guest | places the White Sign Soapstone | `Sign 1002 created: type 1` |
+| host | **receives** the sign from the server | his poll goes from `room for 20` to `19` |
+| host | does **not** get the prompt | only "Rest at bonfire" and "Pick up item" on Y; human (Human Effigy through `human`), "Touch Summon Sign" in the same place |
 
-A trava é do cliente do host, depois da entrega.
+The block is on the host's client, after delivery.
 
-### Como foi achada
+### How it was found
 
-Nenhuma instrução lia o estado de hollow (`*(chr+0xb0)+0x3e`) em 20 s ao lado
-da placa — uma vigia de leitura nova (`wpr`, ver
-[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)), com o controle
-positivo de 9 instruções lendo o HP em 5 s. O **nível**
-(`PlayerParam+0x1ac`) era lido por quatro, duas delas dois getters de uma
-linha:
+No instruction read the hollow state (`*(chr+0xb0)+0x3e`) in 20 s beside the
+sign — a new read watchdog (`wpr`, see
+[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)), with the positive
+control of 9 instructions reading the HP in 5 s. The **level**
+(`PlayerParam+0x1ac`) was read by four, two of them one-line getters:
 
 ```c
 bool FUN_1402ab0e0(void) { return FUN_140203db0(PlayerParam(local)->hollow) != 0; }  // hollow
 bool FUN_1402ab120(void) { return FUN_140203db0(PlayerParam(local)->hollow) == 0; }  // humano
 ```
 
-O primeiro é chamado a cada quadro por `FUN_1402a1980`, a partir do
-`SummonSignSetCtrl` (retorno `+0x212a01` → `+0x2a1b23`), que recusa a placa
-quando o papel dela na tabela `0x1410c0050` é 2 ou 3 e o jogador local está
+The first is called every frame by `FUN_1402a1980`, from the
+`SummonSignSetCtrl` (return `+0x212a01` → `+0x2a1b23`), which refuses the sign
+when its role in the table `0x1410c0050` is 2 or 3 and the local player is
 hollow:
 
 ```
@@ -1897,80 +1955,82 @@ hollow:
 +0x2a1b25  75 20            jne  (recusa)
 ```
 
-Os outros usuários dos getters ficaram como estão: `FUN_140297f20` (caso 8)
-informa "humano" ao servidor, `FUN_1402a1bf0` trava itens de alguns tipos, e
-`FUN_140272120` / `FUN_1402af7e0` usam o "humano" em elegibilidade de invocação
-automática.
+The getters' other users were left as they are: `FUN_140297f20` (case 8)
+reports "human" to the server, `FUN_1402a1bf0` blocks items of some types, and
+`FUN_140272120` / `FUN_1402af7e0` use the "human" in automatic summoning
+eligibility.
 
-### O patch e o resultado
+### The patch and the result
 
-`DS2_HollowSummonHook` troca o `call` por `xor eax,eax` + nop de três bytes,
-conferindo `e8 bd 95 00 00` antes. Instala junto do `DS2SeamlessCoop`. O nível,
-o HP máximo e a aparência continuam os do hollow.
+`DS2_HollowSummonHook` swaps the `call` for `xor eax,eax` plus a three-byte
+nop, checking `e8 bd 95 00 00` first. It installs alongside `DS2SeamlessCoop`.
+The level, the maximum HP and the appearance stay the hollow ones.
 
-| quando | host | resultado |
+| when | host | result |
 | --- | --- | --- |
-| byte original | hollow | sem prompt |
-| poke ao vivo (MemProbe, bytes esperados) | hollow | prompt; `Summoning sign 1003` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` |
-| DLL `716f0c5b`, recibo `DS2 Hollow Summon: true` | hollow | idem, com a placa 1000 e Soul Memory fora de tier (abaixo) |
+| original byte | hollow | no prompt |
+| live poke (MemProbe, expected bytes) | hollow | prompt; `Summoning sign 1003` → `RequestNotifyJoinGuestPlayer` → `RequestNotifyJoinSession`, `p2pSessionVerified: true` |
+| DLL `716f0c5b`, receipt `DS2 Hollow Summon: true` | hollow | the same, with sign 1000 and Soul Memory out of tier (below) |
 
-Nas duas sessões o fim foi o `session end`.
+In both sessions the end was `session end`.
 
-## Sem Soul Memory (M3, 14/09)
+## Without Soul Memory (M3, 14/09)
 
-O servidor já filtra por tier em `DS2_SignManager::CanMatchWith`, e o poll agora
-diz o que filtrou: `sent N, refused by matching M (soul memory S)`. Samuel tem
-5130 e Chico 2551, o mesmo tier padrão, então o controle usou tiers de
-propósito: `2999` à frente da lista da placa branca, 0 tiers abaixo e acima.
+The server already filters by tier in `DS2_SignManager::CanMatchWith`, and the
+poll now says what it filtered:
+`sent N, refused by matching M (soul memory S)`. Samuel has 5130 and Chico
+2551, the same default tier, so the control used tiers on purpose: `2999` at
+the front of the white sign's list, 0 tiers below and above.
 
-| `DisableSoulMemoryMatching` | poll do Samuel com a placa do Chico no cache | na tela do host hollow (com o hook) |
+| `DisableSoulMemoryMatching` | Samuel's poll with Chico's sign in the cache | on the hollow host's screen (with the hook) |
 | --- | --- | --- |
-| `false` | `sent 0, refused by matching 1 (soul memory 5130)` | sem prompt |
-| `true` | `sent 1, refused by matching 0` | prompt, e a invocação chegou ao servidor |
+| `false` | `sent 0, refused by matching 1 (soul memory 5130)` | no prompt |
+| `true` | `sent 1, refused by matching 0` | prompt, and the summon reached the server |
 
-A configuração local ficou com os tiers padrão e `DisableSoulMemoryMatching`
-ligado na White e na Small White Sign Soapstone; a vermelha continua com tiers.
+The local configuration was left with the default tiers and
+`DisableSoulMemoryMatching` on for the White and the Small White Sign
+Soapstone; the red one still has tiers.
 
-## Entrar sem soapstone (M3, 14/09)
+## Coming in without a soapstone (M3, 14/09)
 
-### Onde o jogo põe a placa
+### Where the game places the sign
 
-Um breakpoint em `NetSvrSummonSignInterface::CreateSummonSign`
-(`FUN_14029dfa0`, único chamador do construtor do `NetSvrCreateSummonSignJob`,
-`FUN_14029d6c0`) só disparou no uso real da White Sign Soapstone, com o
-chamador `+0x2a2b98`, a área em `rdx` e a Soul Memory e o nível do Chico no
-`MatchingParameter`. Subindo:
+A breakpoint on `NetSvrSummonSignInterface::CreateSummonSign`
+(`FUN_14029dfa0`, the only caller of the `NetSvrCreateSummonSignJob`
+constructor, `FUN_14029d6c0`) only fired on a real use of the White Sign
+Soapstone, with the caller `+0x2a2b98`, the area in `rdx` and Chico's Soul
+Memory and level in the `MatchingParameter`. Going up:
 
-| função | o que é |
+| function | what it is |
 | --- | --- |
-| `FUN_1402a2780(manager, &tipo)` | pôr a minha placa: checa, monta célula e matching, chama o `CreateSummonSign`; guarda a placa em `manager+0x18` (posta), `+0x24` (alça), `+0x40` (tipo); uma segunda chamada troca a placa |
-| `FUN_1402a1410(manager, tipo)` | método do `NetSvrSummonSignManager`: converte o tipo pelo estado do jogador (`FUN_14029c9b0`) e chama a de cima |
-| `FUN_14029fff0(manager, tipo)` | o vizinho "dá para pôr agora?", só a checagem (`FUN_1402a1bf0`); o código de item chama a cada quadro — **só** em quem tem a soapstone em avaliação, nunca rodou no Samuel |
-| `FUN_140291cb0`, `FUN_14024fb80` | consultas de uso de item por tipo, não criação — foi o primeiro engano desta rodada |
+| `FUN_1402a2780(manager, &tipo)` | place my own sign: checks, builds cell and matching, calls `CreateSummonSign`; keeps the sign at `manager+0x18` (placed), `+0x24` (handle), `+0x40` (type); a second call replaces the sign |
+| `FUN_1402a1410(manager, tipo)` | a `NetSvrSummonSignManager` method: converts the type by the player's state (`FUN_14029c9b0`) and calls the one above |
+| `FUN_14029fff0(manager, tipo)` | the neighbouring "can one be placed right now?", the check only (`FUN_1402a1bf0`); the item code calls it every frame — **only** on whoever has the soapstone under evaluation, it never ran on Samuel |
+| `FUN_140291cb0`, `FUN_14024fb80` | item-use queries by type, not creation — this was the first mistake of this round |
 
-O gerenciador sai do getter do jogo, `FUN_1405132a0`: `*(*0x141616cf8 + 0x30)`
-é o `NetSvrManager` (vftable `0x1410d53a8`), e o campo `+0x78` dele é o
-`NetSvrSummonSignManager` (vftable `0x1410d61f8`), igual nas duas instâncias.
-Os invólucros do `NetSvrManager` que carregam esse `+0x78` são os slots 14
-(pôr) e 17 (invocar).
+The manager comes out of the game's getter, `FUN_1405132a0`:
+`*(*0x141616cf8 + 0x30)` is the `NetSvrManager` (vftable `0x1410d53a8`), and
+its `+0x78` field is the `NetSvrSummonSignManager` (vftable `0x1410d61f8`),
+the same on both instances. The `NetSvrManager` wrappers that carry that
+`+0x78` are slots 14 (place) and 17 (summon).
 
-Cuidado com o `chain` do MemProbe: o primeiro desreferenciamento é implícito.
-`chain x 1616cf8 30,78 8` é `*(*(*(base+0x1616cf8)+0x30)+0x78)`; com um `0` à
-frente ele desreferencia uma vez a mais e responde `chain_unresolved`.
+Careful with MemProbe's `chain`: the first dereference is implicit.
+`chain x 1616cf8 30,78 8` is `*(*(*(base+0x1616cf8)+0x30)+0x78)`; with a `0`
+in front it dereferences one time more and answers `chain_unresolved`.
 
-### O hook
+### The hook
 
-`DS2_PartyHook` (com `--seamless`) faz um detour do update do
-`SummonSignSetCtrl` (`+0x2139d0`), que roda a cada quadro no host e no
-convidado, e executa ali, na thread do jogo, o que chegou em `DS2_Party.req`:
-`placa <tipo>` chama `FUN_1402a1410`; `status` diz o que o gerenciador guarda.
-A revanche, armada à mão com `alvo` antes de qualquer summon, usa o mesmo
-gerenciador resolvido.
+`DS2_PartyHook` (with `--seamless`) detours the `SummonSignSetCtrl` update
+(`+0x2139d0`), which runs every frame on the host and on the guest, and
+executes there, on the game thread, whatever arrived in `DS2_Party.req`:
+`placa <tipo>` calls `FUN_1402a1410`; `status` says what the manager holds.
+The rematch, armed by hand with `alvo` before any summon, uses the same
+resolved manager.
 
-### O resultado
+### The result
 
-Os dois hollow na fogueira de Heide, build `b30cadef`, `up --seamless
---keep-fog --auto-rematch`, **nenhuma tecla** em nenhuma das duas instâncias:
+Both hollow at Heide's bonfire, build `b30cadef`, `up --seamless
+--keep-fog --auto-rematch`, **not a key pressed** on either instance:
 
     23:31:51  Chico   DS2_Party   placa tipo 1: "placa posta, alca 60000001"
     23:31:51  3:Chico             Sign 1015 created: type 1
@@ -1980,60 +2040,63 @@ Os dois hollow na fogueira de Heide, build `b30cadef`, `up --seamless
     23:32:46  3:Chico             RequestNotifyJoinSession
               session             p2pSessionVerified: true
 
-Quase um minuto da ordem à sessão, dos quais a maior parte é o intervalo do
-poll de placas do host. A sessão terminou com `session end`.
+Almost a minute from the order to the session, most of which is the interval
+of the host's sign poll. The session ended with `session end`.
 
-### A entrada nasce da configuração (15/09)
+### Coming in is born from the configuration (15/09)
 
-`DS2PartyGuest` e `DS2PartyAccept` no `Injector.config` (com `DS2SeamlessCoop`);
-no harness, `up --seamless --party` faz da conta 2 convidado e da conta 1 o host
-que aceita a steam id configurada da conta 2; `--party-host 2` inverte (medido
-15/09: Chico hospedou, Samuel entrou sozinho, `p2pSessionVerified: true`).
+`DS2PartyGuest` and `DS2PartyAccept` in `Injector.config` (with
+`DS2SeamlessCoop`); in the harness, `up --seamless --party` makes account 2
+the guest and account 1 the host that accepts account 2's configured steam id;
+`--party-host 2` swaps them (measured 15/09: Chico hosted, Samuel came in by
+himself, `p2pSessionVerified: true`).
 
-- **Convidado**, a cada segundo no quadro do `SummonSignSetCtrl`: no próprio
-  mundo (papel 0) sem placa branca, põe uma. Ao voltar de outro mundo (papel
-  1 → 0), repõe. Quando a placa some com ele ainda no próprio mundo, espera
-  30 s: ser invocado tira a placa segundos antes de o papel mudar, e repor
-  nessa janela disputa o join (visto uma vez, sem estrago, antes da carência).
-  O gerenciador zera o "placa posta" quando a placa é invocada.
-- **Host**, no detour do `AddSign`: acha a entrada pelo handle
-  (`FUN_14020e6f0` na coleção `*(this-8)`), lê a steam id em `+0x38` e, se ela
-  está em `DS2PartyAccept` e o host está no próprio mundo, invoca
-  (`FUN_1402a14c0`).
-- **`pausa` / `retoma`** em `DS2_Party.req` param e religam os dois lados;
-  `ds2os-dev session end` pausa sozinho, e confirma pelo eco.
+- **Guest**, once a second on the `SummonSignSetCtrl` frame: in his own world
+  (role 0) with no white sign, it places one. On coming back from another
+  world (role 1 → 0), it places it again. When the sign disappears with him
+  still in his own world, it waits 30 s: being summoned takes the sign away
+  seconds before the role changes, and placing one again in that window races
+  the join (seen once, with no damage, before the grace period). The manager
+  clears the "sign placed" when the sign is summoned.
+- **Host**, in the `AddSign` detour: it finds the entry by the handle
+  (`FUN_14020e6f0` in the collection `*(this-8)`), reads the steam id at
+  `+0x38` and, if it is in `DS2PartyAccept` and the host is in his own world,
+  summons (`FUN_1402a14c0`).
+- **`pausa` / `retoma`** in `DS2_Party.req` stop and restart both sides;
+  `ds2os-dev session end` pauses by itself, and confirms by the echo.
 
-Medido com os dois hollow, `DS2AutoRematch` desligado, nenhuma tecla e nenhum
-arquivo de pedido:
+Measured with both hollow, `DS2AutoRematch` off, not a key pressed and no
+request file:
 
-| hora | o quê |
+| time | what |
 | --- | --- |
-| 00:39:48 | Chico põe a placa ao chegar: `Sign 1016 created` |
-| 00:40:19 | Samuel invoca o parceiro 76561199048087249 |
+| 00:39:48 | Chico places the sign on arrival: `Sign 1016 created` |
+| 00:40:19 | Samuel summons partner 76561199048087249 |
 | 00:40:30–32 | `JoinGuestPlayer`, `JoinSession`, `p2pSessionVerified: true` |
-| 00:41:21 | `session end` (build sem pausa) |
-| 00:41:39 | Chico, de volta, repõe: `Sign 1017 created` |
-| 00:42:19–32 | Samuel invoca de novo, `JoinGuestPlayer`, `JoinSession` |
+| 00:41:21 | `session end` (build with no pause) |
+| 00:41:39 | Chico, back, places another: `Sign 1017 created` |
+| 00:42:19–32 | Samuel summons again, `JoinGuestPlayer`, `JoinSession` |
 
-Com a carência e a pausa (build `cc2a3272`): às 00:50:18 o convidado registrou
-"a placa sumiu; espero 30 s", às 00:50:22 já era fantasma, e a sessão formou;
-`session end` pausou as duas contas e em dois minutos o servidor não viu
-placa, summon nem join.
+With the grace period and the pause (build `cc2a3272`): at 00:50:18 the guest
+logged "a placa sumiu; espero 30 s", at 00:50:22 he was already a phantom, and
+the session formed; `session end` paused both accounts and in two minutes the
+server saw no sign, no summon and no join.
 
-### A senha (15/09)
+### The password (15/09)
 
-**O canal.** O `MatchingParameter` do protocolo DS2 tem `name_engraved_ring`
-(o anel de nome gravado, o "senha" nativo do jogo), e ele vai tanto no
-`RequestCreateSign` quanto no `RequestGetSignList`. O `DS2_PartyHook` faz
-detour de `NetSvrSummonSignInterface::CreateSummonSign` (`+0x29dfa0`, o
-parâmetro no 4º argumento) e `GetSummonSignList` (`+0x29e230`, no 5º) e escreve
-nele `0x80000000 | (FNV-1a(senha) & 0x7fffffff)`.
+**The channel.** The DS2 protocol's `MatchingParameter` has
+`name_engraved_ring` (the Name-Engraved Ring, the game's native "password"),
+and it goes in both `RequestCreateSign` and `RequestGetSignList`.
+`DS2_PartyHook` detours `NetSvrSummonSignInterface::CreateSummonSign`
+(`+0x29dfa0`, the parameter in the 4th argument) and `GetSummonSignList`
+(`+0x29e230`, in the 5th) and writes into it
+`0x80000000 | (FNV-1a(senha) & 0x7fffffff)`.
 
-**Qual palavra da estrutura.** O cliente guarda o parâmetro como 16 `uint32`
-numa ordem que não é a do `.proto`. Escrevendo 3 numa palavra por vez e lendo
-o servidor (que agora registra os campos nomeados de cada placa criada):
+**Which word of the structure.** The client keeps the parameter as 16 `uint32`
+in an order that is not the `.proto`'s. Writing 3 into one word at a time and
+reading the server (which now logs the named fields of every sign created):
 
-| palavra | campo | palavra | campo |
+| word | field | word | field |
 | --- | --- | --- | --- |
 | [0] | calibration (20200) | [5] | **name_engraved_ring** |
 | [1] | soul_memory | [6] | covenant |
@@ -2041,48 +2104,53 @@ o servidor (que agora registra os campos nomeados de cada placa criada):
 | [3] | clear_count | [8] | cross_region |
 | [4] | unknown_4 | [9] | unknown_9 |
 
-`[10]` e `[11]` não chegam a nenhum campo. Até `0x80000000` o anel chega
-intacto; a primeira sonda, com valores grandes em [5], [6], [10] e [11] juntos,
-impediu a placa de sair do cliente (sem `RequestCreateSign` no servidor).
+`[10]` and `[11]` do not reach any field. Up to `0x80000000` the ring arrives
+intact; the first probe, with large values in [5], [6], [10] and [11]
+together, stopped the sign from leaving the client (no `RequestCreateSign` on
+the server).
 
-**O servidor.** `DS2_SignManager::CanMatchWith`, antes das regras de tipo e de
-Soul Memory: se a placa ou o poll têm o bit 31 no anel, casa só se os dois têm
-e o código é igual. O log do poll diz o anel de quem pediu.
+**The server.** `DS2_SignManager::CanMatchWith`, before the type and Soul
+Memory rules: if the sign or the poll have bit 31 in the ring, it matches only
+if both have it and the code is the same. The poll's log says the ring of
+whoever asked.
 
-**Medido** (build `d5219e06`, servidor com o filtro), sempre sem tecla:
+**Measured** (build `d5219e06`, server with the filter), always with no key
+pressed:
 
-| caso | poll de quem pede | resultado |
+| case | poll of the one asking | result |
 | --- | --- | --- |
-| mesma senha, host **sem** lista de steam ids | Samuel, anel 2900300237 | `sent 1`; o host invoca pela senha; `JoinGuestPlayer`, `JoinSession`, `p2pSessionVerified: true` |
-| senhas diferentes | Samuel, anel 2594159542, placa com 2900300237 | `refused by matching 1` em três polls, nenhum summon |
-| host público, convidado com senha | Samuel, anel 0 | `refused by matching 1` |
-| host com senha, placa pública | Chico, anel 2900300237, placa 1002 com anel 0 | `refused by matching 1` em cada poll, nenhum summon |
+| same password, host **with no** steam id list | Samuel, ring 2900300237 | `sent 1`; the host summons by the password; `JoinGuestPlayer`, `JoinSession`, `p2pSessionVerified: true` |
+| different passwords | Samuel, ring 2594159542, sign with 2900300237 | `refused by matching 1` on three polls, no summon |
+| public host, guest with a password | Samuel, ring 0 | `refused by matching 1` |
+| host with a password, public sign | Chico, ring 2900300237, sign 1002 with ring 0 | `refused by matching 1` on every poll, no summon |
 
-Detalhe do último: com a própria placa no chão o cliente não pede placas
-alheias, então para ver o poll do Chico ele teve de ser host, não convidado.
+A detail of the last one: with his own sign on the ground the client does not
+ask for other people's signs, so to see Chico's poll he had to be the host,
+not the guest.
 
-### Longe um do outro (15/09)
+### Far from each other (15/09)
 
-**O que impedia.** Uma placa é arquivada por área e célula, e o poll pede as
-células em volta de quem pede. Com o convidado em Majula e o host em Heide, a
-placa nunca chegava.
+**What was in the way.** A sign is filed by area and cell, and the poll asks
+for the cells around the one asking. With the guest in Majula and the host in
+Heide, the sign never arrived.
 
-**O servidor.** No poll com código de party, depois da passada normal (e antes
-do envio da resposta — a primeira versão ficou depois do `Send`, registrava a
-oferta e nunca a mandava), uma passada pelo cache inteiro oferece as placas de
-party do mesmo código, reportadas sob a área e a primeira célula que o host
-pediu. O cliente decodifica a posição do `player_struct` da placa
-(`FUN_14029cce0`: versão 6, 0x50 bytes, `int16` com 5 bits de fração em
-`+4/+6/+8`), então para uma placa de outra área essa posição é reescrita, só
-nessa resposta, para a última posição do host. O summon a encontra pelo id.
+**The server.** On a poll with a party code, after the normal pass (and before
+the reply is sent — the first version sat after the `Send`, logged the offer
+and never sent it), a pass over the whole cache offers the party signs with
+the same code, reported under the area and the first cell the host asked for.
+The client decodes the position from the sign's `player_struct`
+(`FUN_14029cce0`: version 6, 0x50 bytes, `int16` with 5 fraction bits at
+`+4/+6/+8`), so for a sign from another area that position is rewritten, in
+that reply only, to the host's last position. The summon finds it by the id.
 
-**O que o convidado faz.** O destino do warp de entrada (`FUN_1402c2a80`,
-`motivo=4 forca=1`) sai da placa do próprio convidado, convertida para o mapa
-do host; o `player_struct` do host no summon (71 bytes, versão 4) traz área,
-célula e nome, não posição. De Majula para Heide o ponto foi sempre
-(-7.81, -33.53, 372.06), no vazio. Com o modo `observe` o convidado morria e a
-sessão caía; com `respawn` o hook de morte cancela a queda e o leva à fogueira
-do host que o canal P2P anunciou, e a sessão fica:
+**What the guest does.** The destination of the entry warp (`FUN_1402c2a80`,
+`motivo=4 forca=1`) comes from the guest's own sign, converted to the host's
+map; the host's `player_struct` in the summon (71 bytes, version 4) carries
+area, cell and name, not position. From Majula to Heide the point was always
+(-7.81, -33.53, 372.06), in the void. With `observe` mode the guest died and
+the session collapsed; with `respawn` the death hook cancels the fall and
+takes him to the host's bonfire that the P2P channel announced, and the
+session holds:
 
     03:00:28  Chico (Majula)  Sign 1004 created, area 0x009932c0
     03:01:21  Samuel (Heide)  Party sign 1004 ... moved to 6.4 -18.5 209.2; Summoning sign 1004
@@ -2090,37 +2158,38 @@ do host que o canal P2P anunciou, e a sessão fica:
     03:01:38  Samuel          RequestNotifyJoinGuestPlayer
     03:01:40  Chico           RequestNotifyJoinSession        p2pSessionVerified: true
 
-A encenação tem que ser uma viagem de fogueira de verdade: com `goto-map` e
-saída para o título o cliente ficou com a área de um mapa e a posição de outro,
-e pôs placas com posição (0,0,0) que o host não aceitou.
+The staging has to be a real bonfire trip: with `goto-map` and a trip out to
+the title the client ended up with one map's area and another's position, and
+placed signs with position (0,0,0) that the host did not accept.
 
-**Retomar revisa o cache.** Uma placa que chega com o host pausado não é
-entregue de novo; `retoma` agora percorre a coleção do `SummonSignSetCtrl`
-(slots `0x18` contagem e `0x10` item, entrada viva com `+0x14` negativo, alça
-com a marca `0x80000000`) e invoca a do parceiro. Medido: placa 1005 ignorada
-às 03:10:11 com o host pausado, invocada às 03:10:29 ao retomar, entrada de
-Majula com a queda recuperada e `p2pSessionVerified: true`.
+**Resuming revisits the cache.** A sign that arrives with the host paused is
+not delivered again; `retoma` now walks the `SummonSignSetCtrl` collection
+(slots `0x18` count and `0x10` item, a live entry with `+0x14` negative, a
+handle with the `0x80000000` mark) and summons the partner's. Measured: sign
+1005 ignored at 03:10:11 with the host paused, summoned at 03:10:29 on
+resuming, an entry from Majula with the fall recovered and
+`p2pSessionVerified: true`.
 
-**A chegada, sem esperar cair.** Depender da queda amarrava a entrada ao modo
-`respawn` e a um ponto que por acaso fosse vazio. O hook de morte agora olha a
-chegada: quando o papel do jogador local passa de dono do mundo para outro, ele
-lembra o mapa de onde veio, espera o anúncio da fogueira do host pelo canal e,
-se o host está num mapa diferente, leva o convidado para lá (o mesmo
-`StartRecovery` da queda). Duas coisas medidas no caminho, que derrubaram as
-duas primeiras versões:
+**Arrival, without waiting to fall.** Depending on the fall tied the entry to
+`respawn` mode and to a point that happened to be empty. The death hook now
+watches the arrival: when the local player's role goes from world owner to
+something else, it remembers the map he came from, waits for the host's
+bonfire announcement on the channel and, if the host is on a different map,
+takes the guest there (the same `StartRecovery` as the fall). Two things
+measured along the way, which brought down the first two versions:
 
-- o controlador do jogador local **sobrevive** ao warp de entrada — nenhuma
-  linha "controlador do jogador local" na chegada —, então o gatilho é a troca
-  de papel, não um controlador novo;
-- no ponto de chegada não há parte sob os pés, e o mapa do streamer lê **0**;
-  exigir o mapa do host ali nunca casava. Mapa 0 ou o do host, com o anúncio
-  de outro mapa, bastam (depois de 30 quadros).
+- the local player's controller **survives** the entry warp — not a
+  "controlador do jogador local" line on arrival —, so the trigger is the role
+  change, not a new controller;
+- at the arrival point there is no part under the feet, and the streamer's map
+  reads **0**; requiring the host's map there never matched. Map 0 or the
+  host's, with an announcement from another map, are enough (after 30 frames).
 
     03:50:40  Samuel  host: invocando a placa 80000011 do parceiro
     03:50:50  Chico   chegada de outro mapa: vim de 0a040000, o host esta em 0a1f0000, sob os pes 00000000
     03:50:50  Chico   levando para fogueira do host (6.186, -18.517, 209.053) ... teleportado; anunciada ha 1590 ms
     03:50:50  Chico   concluido em 2 quadros                      p2pSessionVerified: true, nenhuma morte
 
-Repetido às 03:53:50 depois de `session end` e `retoma`, igual. O controle, com
-o Chico levado a Heide por viagem de fogueira: entrada às 03:57:50 no mesmo
-mapa, sessão verificada, nenhuma linha de chegada.
+Repeated at 03:53:50 after `session end` and `retoma`, the same. The control,
+with Chico taken to Heide by a bonfire trip: entry at 03:57:50 on the same
+map, session verified, not a single arrival line.

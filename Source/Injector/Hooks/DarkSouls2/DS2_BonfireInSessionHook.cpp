@@ -260,18 +260,20 @@ namespace
     // copy of its bytes: the copy is what the plan warns against, and the
     // session outlives the travel, so the list it lives in should too. If that
     // turns out to be wrong it will show as a failed recreate, not as damage.
-    // A lista viva de membros da sessao, que e de onde o `membro` tem de sair.
+    // The session's live member list, which is where the `membro` has to
+    // come from.
     //
-    // Medido em 17/09: o objeto de rede `*(0x141616cf8)` guarda seis registros
-    // de 0x48 bytes a partir de `+0xb8`, com uma marca de validade em `+0x40`.
-    // Numa sessao de dois havia exatamente dois validos. Os primeiros 0x40
-    // bytes sao o membro - e o tamanho que `FUN_140a3dbd0` copia para o slot.
+    // Measured 17/09: the net object `*(0x141616cf8)` holds six records of
+    // 0x48 bytes starting at `+0xb8`, with a validity mark at `+0x40`. In a
+    // two-player session there were exactly two valid ones. The first 0x40
+    // bytes are the member - the size `FUN_140a3dbd0` copies into the slot.
     //
-    // Guardar o ponteiro que o jogo passou na entrada nao serve, e isso agora
-    // esta medido e nao suposto: o convidado guardou `0x7FFFFE5C1B80` e a lista
-    // viva trazia `0x7ffffe430600` e `0x7ffffe622280`. No host o atalho
-    // funcionava por sorte; no convidado a recriacao era aceita, o slot era
-    // consumido e nenhuma das cinco entradas nascia.
+    // Keeping the pointer the game passed on the way in does not work, and
+    // that is now measured rather than assumed: the guest kept
+    // `0x7FFFFE5C1B80` while the live list carried `0x7ffffe430600` and
+    // `0x7ffffe622280`. On the host the shortcut worked by luck; on the guest
+    // the recreate was accepted, the slot was consumed and none of the five
+    // entries was born.
     constexpr size_t kNetMembers = 0xb8;
     constexpr size_t kNetMemberStride = 0x48;
     constexpr size_t kNetMemberValid = 0x40;
@@ -1485,7 +1487,7 @@ namespace
         }
     }
 
-    // O objeto de rede, que hospeda a lista de membros.
+    // The net object, which hosts the member list.
     uintptr_t NetObject()
     {
         uintptr_t Root = 0, Net = 0;
@@ -1614,9 +1616,9 @@ namespace
             Append(StringFormat("presencas (%s): ja ha %u viva(s); nao recrio para nao duplicar\n", Why, Alive));
             return false;
         }
-        // Cada membro vivo e tentado, e a prova e a entrada nascer. Com dois
-        // jogadores ha dois candidatos e um deles e este jogador; em vez de
-        // adivinhar qual, tenta-se e olha-se o resultado.
+        // Every living member is tried, and the proof is the entry being
+        // born. With two players there are two candidates and one of them is
+        // this player; rather than guess which, try and look at the result.
         const uintptr_t Net = NetObject();
         if (Net == 0)
         {
@@ -1638,10 +1640,11 @@ namespace
             {
                 continue;
             }
-            // Da tempo de a batida do registro materializar antes de julgar.
-            // Dois segundos nao bastavam: em 17/09 os dois lados disseram
-            // "nenhum membro produziu presenca" e oito segundos depois os dois
-            // registros liam uma viva. O julgamento era cedo, nao a receita.
+            // Gives the registry's tick time to materialise it before
+            // judging. Two seconds were not enough: on 17/09 both sides said
+            // "nenhum membro produziu presenca" and eight seconds later both
+            // registries read one living. The judgement was early, not the
+            // recipe.
             for (int w = 0; w < 240; ++w)
             {
                 Sleep(50);
@@ -2572,10 +2575,10 @@ void DS2_BonfireInSession_Tick()
             (unsigned)s_go.Bonfire, s_go.Map));
     }
 
-    // `DS2_Bonfire.req`: `ir <mapa hex> <fogueira hex>` takes this machine's
+    // `DS2_Bonfire.req`: `ir <map hex> <bonfire hex>` takes this machine's
     // player to that bonfire the way a travel does, with no session and no
-    // vote - the control for a travel that closed the game. `votar <mapa hex>
-    // <fogueira hex>` on the host starts the vote itself, without the travel
+    // vote - the control for a travel that closed the game. `votar <map hex>
+    // <bonfire hex>` on the host starts the vote itself, without the travel
     // list, so the whole road (vote, host first, guests called) can be
     // measured from the request file.
     if (Now - s_request_tick >= 500)
@@ -2652,13 +2655,13 @@ void DS2_BonfireInSession_Tick()
                 }
                 else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
                 {
-                    // O silencio da rede foi feito para o warp do host, que
-                    // e quem derruba a sessao. No convidado ele pode nao ser
-                    // necessario - e pode ser nocivo: em 17/09 o convidado
-                    // morreu em +0x2f0987 durante o proprio carregamento, numa
-                    // **thread de trabalho** (360, nao a 364 do jogo), onde nem
-                    // o silencio nem as guardas alcancam. `sem-silencio` deixa
-                    // medir os dois casos sem outra build.
+                    // The net silence was made for the host's warp, which is
+                    // what brings the session down. On the guest it may not
+                    // be needed - and it may be harmful: on 17/09 the guest
+                    // died at +0x2f0987 during its own load, on a **worker
+                    // thread** (360, not the game's 364), where neither the
+                    // silence nor the guards reach. `sem-silencio` allows
+                    // both cases to be measured without another build.
                     const bool Quiet = Line.find("sem-silencio") == std::string::npos;
                     DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma");
                     ReportNetSync("antes da viagem de fantasma");

@@ -1,312 +1,309 @@
-# Arquitetura da viagem em conjunto
+# Architecture for travelling together
 
-## Recomendação
+## Recommendation
 
-Minha recomendação é **reconstruir a presença dos jogadores a cada viagem,
-usando o carregamento e a entrada nativos**. Eu investigaria duas arquiteturas,
-nesta ordem: reentrada coordenada completa; reconstrução apenas das cópias
-remotas, mantendo o transporte atual.
+My recommendation is to **rebuild the players' presence on every trip, using
+the game's own loading and entry**. I would investigate two architectures, in
+this order: a full coordinated re-entry; rebuilding only the remote copies,
+keeping the current transport.
 
-Não considero demonstrado que a arquitetura atual seja irrecuperável. Está
-demonstrado que **as guardas não estabeleceram um ciclo de vida seguro**. A
-assinatura da corrupção ainda permite escrita fora dos limites, uso após
-liberação e corrida entre tarefas. Dois bytes alterados num ponteiro não provam
-que a instrução escritora tenha largura de dois bytes.
+I do not consider it demonstrated that the current architecture is beyond
+saving. What is demonstrated is that **the guards did not establish a safe
+lifetime**. The corruption's signature still allows a write out of bounds, a
+use after free and a race between tasks. Two changed bytes in a pointer do not
+prove the writing instruction is two bytes wide.
 
-Este parecer foi feito a partir dos documentos do projeto, dos quatro hooks da
-viagem e da conferência, em modo somente leitura no Ghidra, das funções de
-entrada. Nenhuma viagem foi executada durante a análise.
+This assessment was made from the project's documents, the four travel hooks
+and a read-only check, in Ghidra, of the entry functions. No trip was run
+during the analysis.
 
-Há três achados que pesam na decisão:
+Three findings weigh on the decision:
 
-- A recarga destrói a presença dos jogadores, enquanto partes da sessão
-  sobrevivem. A experiência anterior já mostrou host em `0x10` e convidado em
-  `7`, sem interação entre eles. **Preservar a sessão não preserva nem
-  reconstrói os personagens.** Ver [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md),
-  seção "Todo warp recarrega, e é isso que tira o fantasma".
-- A entrada fornece mais que coordenadas: o host exporta um instantâneo, o
-  convidado importa o mundo e recebe os dados necessários para registrar os
-  jogadores remotos. Isso oferece um mecanismo existente para reconstrução.
-  Ver [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md), seção "De onde vem a cópia na
-  entrada".
-- A guarda do ciclo do mapa admite deixar a desmontagem incompleta. Executar a
-  conclusão de uma tarefa após uma exceção preserva sua contabilidade; não
-  desfaz as alterações parciais do trabalho. Portanto, o custo atual pode
-  incluir recursos retidos e estruturas inconsistentes, além do quadro
-  perdido. Ver `DS2_BackreadHook.cpp`, em `GuardedOwnerUpdate`.
+- The reload destroys the players' presence, while parts of the session
+  survive. Earlier experience already showed the host at `0x10` and the guest
+  at `7`, with no interaction between them. **Preserving the session neither
+  preserves nor rebuilds the characters.** See
+  [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), section "Every warp reloads,
+  and that is what takes the phantom away".
+- The entry supplies more than coordinates: the host exports a snapshot, the
+  guest imports the world and receives the data needed to register the remote
+  players. That gives an existing mechanism for rebuilding. See
+  [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md), section "Where the copy on entry
+  comes from".
+- The map-cycle guard allows the teardown to be left incomplete. Running a
+  task's completion after an exception preserves its bookkeeping; it does not
+  undo the work's partial changes. So the current cost may include retained
+  resources and inconsistent structures, on top of the lost frame. See
+  `DS2_BackreadHook.cpp`, in `GuardedOwnerUpdate`.
 
-## 1. Reentrada coordenada pelo carregamento nativo
+## 1. Re-entry coordinated by the game's own loading
 
-Esta é a primeira escolha.
+This is the first choice.
 
-### Mecanismo
+### Mechanism
 
-Separar a permanência na party da existência dos personagens naquele mapa.
-Durante a cortina, a party permanece; as presenças antigas são retiradas e as
-novas são construídas pelo jogo.
+Separate staying in the party from the characters existing on that map. Behind
+the curtain, the party stays; the old presences are removed and the new ones
+are built by the game.
 
-A sequência proposta seria:
+The proposed sequence would be:
 
-1. A votação aprovada inicia uma transação identificada, com destino e
-   participantes fixados.
-2. Ambos suspendem ações e a aplicação de atualizações aos personagens que
-   serão retirados. O transporte e as mensagens de controle continuam
-   funcionando.
-3. Cada máquina termina as tarefas pendentes e retira corretamente suas cópias
-   remotas dos gerenciadores.
-4. O host faz o carregamento nativo do destino, agora sem cópias antigas
-   penduradas no mundo desmontado.
-5. O host fornece um **novo** convite e instantâneo daquele mundo; o convidado
-   carrega diretamente esse destino pela entrada nativa.
-6. Ambos reconstruem as presenças e confirmam interação antes de liberar o
-   controle.
+1. An approved vote starts an identified transaction, with the destination and
+   the participants fixed.
+2. Both sides suspend actions and the application of updates to the characters
+   that are going to be removed. The transport and the control messages keep
+   working.
+3. Each machine finishes the pending tasks and properly removes its remote
+   copies from the managers.
+4. The host does the game's own load of the destination, now with no old
+   copies left hanging in the torn-down world.
+5. The host supplies a **new** invitation and snapshot of that world; the guest
+   loads that destination directly through the game's own entry.
+6. Both rebuild the presences and confirm interaction before handing control
+   back.
 
-As peças concretas são:
+The concrete pieces are:
 
-| Peça | Caminho existente |
+| Piece | Existing path |
 | --- | --- |
-| Viagem nativa do host | `FUN_1401843b0`, `FUN_140184830`, registro por `FUN_14044fe30` |
-| Entrada do convidado | `FUN_1402c2a80`, pedido de motivo 4 e flag 1 |
-| Instantâneo do host | `FUN_1402bf8f0` |
-| Importação no convidado | `FUN_1402c2fa0`, quando está no estado 4 |
-| Registro das presenças no convidado | estado 5, `FUN_1402c3c80` → `FUN_14051b0e0` |
-| Finalização do host | sequência `0xd → 0xe → 0xf → 0x10`; handler de `0xf`: `FUN_1402c03e0` |
+| The host's own travel | `FUN_1401843b0`, `FUN_140184830`, record through `FUN_14044fe30` |
+| The guest's entry | `FUN_1402c2a80`, a request with reason 4 and flag 1 |
+| The host's snapshot | `FUN_1402bf8f0` |
+| Import on the guest | `FUN_1402c2fa0`, when it is in state 4 |
+| Registering the presences on the guest | state 5, `FUN_1402c3c80` → `FUN_14051b0e0` |
+| The host's finalisation | sequence `0xd → 0xe → 0xf → 0x10`; the `0xf` handler: `FUN_1402c03e0` |
 
-A conferência no Ghidra mostrou que a importação também preenche a lista de
-jogadores consumida pelo estado 5. `FUN_14051b0e0` prepara uma entrada pendente
-no gerenciador: seu retorno positivo **não significa que um personagem já
-nasceu**.
+The check in Ghidra showed that the import also fills the player list that
+state 5 consumes. `FUN_14051b0e0` prepares a pending entry in the manager: a
+positive return from it **does not mean a character has been spawned**.
 
-A diferença para o que já falhou é substancial: não seria repetir o warp,
-escrever `estado=2`, nem reapresentar sozinho o convite antigo. Seria executar
-novamente o protocolo de materialização **nas duas pontas**, incluindo o
-instantâneo, o registro dos remotos e as confirmações.
+The difference from what has already failed is substantial: it would not be
+repeating the warp, writing `estado=2`, or replaying the old invitation on its
+own. It would be running the materialisation protocol again **at both ends**,
+including the snapshot, the registration of the remotes and the confirmations.
 
-O convidado não passa pelo próprio mundo: durante a transição ele pode estar
-sem mundo jogável, sob carregamento, mas o próximo mundo materializado precisa
-ser o do host. É necessário preservar o registro original de retorno
-`+0x1a0..+0x1c8` e a separação entre estado próprio e estado emprestado. Uma
-nova entrada não pode registrar o mundo do host como se fosse a casa do
-convidado.
+The guest does not pass through his own world: during the transition he may be
+without a playable world, loading, but the next world materialised has to be
+the host's. The original return record `+0x1a0..+0x1c8` and the separation
+between his own state and borrowed state have to be preserved. A new entry
+must not record the host's world as if it were the guest's home.
 
-### Por que respeita o ciclo de vida
+### Why it respects the lifetime
 
-Permite ao loader destruir e construir personagens e recursos na ordem que o
-jogo espera. Elimina a necessidade de transportar o grafo vivo de animação,
-modelo e física entre mapas.
+It lets the loader destroy and build characters and resources in the order the
+game expects. It removes the need to carry the live graph of animation, model
+and physics between maps.
 
-A hipótese ainda não demonstrada é que essa reconstrução possa acontecer
-mantendo o vínculo de rede utilizável, sem acionar o retorno para casa. A
-invocação original demonstra que as peças existem; não demonstra sua
-reutilização em uma sessão já estabelecida.
+The hypothesis still not demonstrated is that this rebuild can happen while
+keeping the network link usable, without triggering the return home. The
+original summon shows that the pieces exist; it does not show them being
+reused in a session that is already established.
 
-### Experimento mais barato que a refuta
+### The cheapest experiment that refutes it
 
-Primeiro, instrumentar uma invocação normal em Heide e sua saída legal, sem
-viagem experimental: identificar registro, retirada, conclusão das tarefas e
-associação entre peer e personagem.
+First, instrument a normal summon in Heide and its legal exit, with no
+experimental travel: identify the registration, the removal, the completion of
+the tasks and the association between peer and character.
 
-Depois, fazer uma **reentrada coordenada no mesmo mapa, com o convidado vivo**.
-O host deve participar da reconstrução; não repetir o experimento unilateral
-antigo. A tentativa falha se:
+Then do a **coordinated re-entry on the same map, with the guest alive**. The
+host has to take part in the rebuild; do not repeat the old one-sided
+experiment. The attempt fails if:
 
-- for necessário materializar o mundo próprio do convidado;
-- os estados terminarem corretamente, mas os personagens não voltarem a
-  interagir;
-- não for possível retirar e recriar a presença sem perder o vínculo necessário
-  à entrada.
+- the guest's own world has to be materialised;
+- the states end correctly but the characters do not interact again;
+- the presence cannot be removed and recreated without losing the link the
+  entry needs.
 
-Esse teste já exige duas contas. Sozinho só é possível verificar o loader e a
-instrumentação.
+That test already needs two accounts. Alone, only the loader and the
+instrumentation can be checked.
 
-### Critério positivo de aceitação
+### Positive acceptance criterion
 
-Registrar a retirada das presenças antigas, a construção das novas, o
-instantâneo correto aplicado e movimento ou ações efetivamente reproduzidos
-nos dois sentidos. Depois repetir atravessando mapas. Endereços diferentes não
-são requisito: o alocador pode reutilizá-los; é preciso acompanhar gerações de
-objetos.
+Record the removal of the old presences, the building of the new ones, the
+correct snapshot applied, and movement or actions actually reproduced in both
+directions. Then repeat across maps. Different addresses are not a
+requirement: the allocator may reuse them; object generations have to be
+tracked.
 
-### Riscos e pioras
+### Risks and regressions
 
-Mais carregamento que os atuais aproximadamente 2,5 segundos por jogador;
-timeouts nativos; mensagens atrasadas referentes a personagens antigos;
-duplicação de registros; sobrescrita do retorno para casa; interferência com o
-progresso compartilhado do M7.
+More loading than the current roughly 2.5 seconds per player; the game's own
+timeouts; late messages referring to old characters; duplicated registrations;
+overwriting the return home; interference with M7's shared progress.
 
-A maior lacuna é a retirada segura da presença **sem saída da sessão**. Não há
-uma primitiva pronta comprovada para isso. Esse é o primeiro trabalho de
-engenharia reversa, não um detalhe a preencher depois.
+The biggest gap is removing the presence safely **without leaving the
+session**. There is no proven ready-made primitive for that. That is the first
+piece of reverse engineering, not a detail to fill in later.
 
-## 2. Destruir e recriar apenas as cópias remotas
+## 2. Destroy and recreate only the remote copies
 
-Esta é a segunda escolha.
+This is the second choice.
 
-### Mecanismo
+### Mechanism
 
-Manter `StartTravel`, backread, foco e teleporte do jogador local, mas remover
-temporariamente as cópias remotas **antes de qualquer máquina começar a
-viajar**.
+Keep `StartTravel`, backread, focus and the local player's teleport, but
+temporarily remove the remote copies **before any machine starts travelling**.
 
-A transação seria: ambos retiram suas cópias, confirmam a conclusão das
-tarefas, viajam, confirmam contato no destino e registram novamente os remotos
-com dados atuais.
+The transaction would be: both remove their copies, confirm the tasks have
+completed, travel, confirm contact at the destination and register the remotes
+again with current data.
 
-As estruturas relevantes são o `PlayerCtrl` remoto, identificado por
-`chr+0x54 == 2`, seus componentes, o `CharacterManager` e o gerenciador
-alcançado por `FUN_14051b0e0`. Além do caminho do estado 5, o Ghidra mostrou
-`FUN_1402c8330` chamando esse registro a partir de `FUN_1402cf910`: outro ponto
-concreto para investigar a recepção que entrega os dados do jogador.
+The relevant structures are the remote `PlayerCtrl`, identified by
+`chr+0x54 == 2`, its components, the `CharacterManager` and the manager
+reached through `FUN_14051b0e0`. Besides the state 5 path, Ghidra showed
+`FUN_1402c8330` calling that registration from `FUN_1402cf910`: another
+concrete place to investigate the reception that delivers the player's data.
 
-Não bastaria chamar `FUN_1403f6300` para liberar o modelo. É necessário retirar
-a presença pelo caminho proprietário: registros de rede, física, animação e
-tarefas precisam concordar. Um destrutor isolado pode fabricar exatamente
-outra referência pendurada.
+Calling `FUN_1403f6300` to free the model would not be enough. The presence
+has to be removed through the owning path: network, physics, animation and
+task registrations all have to agree. An isolated destructor can manufacture
+exactly another dangling reference.
 
-O canal de controle existente usa Steam P2P no canal 7. Ele pode coordenar a
-operação, mas continuar trocando esses anúncios não comprova que a replicação
-nativa dos personagens voltou.
+The existing control channel uses Steam P2P on channel 7. It can coordinate
+the operation, but going on exchanging those announcements does not prove the
+game's own character replication came back.
 
-### Por que pode conviver com a viagem atual
+### Why it can live with the current travel
 
-Ataca a diferença mais forte entre os controles: sozinho, o jogador local
-atravessa; em sessão, existe também uma cópia remota atravessando. A
-arquitetura faria cada máquina transportar apenas seu jogador local e criaria
-a representação do parceiro já no destino.
+It attacks the strongest difference between the controls: alone, the local
+player crosses; in a session, there is also a remote copy crossing. The
+architecture would have each machine carry only its local player and create
+the partner's representation once at the destination.
 
-Isso é uma hipótese causal plausível, não uma generalização dos 14 trechos
-solo. Subsistemas de sessão continuam ativos mesmo quando a cópia não existe.
+That is a plausible causal hypothesis, not a generalisation from the 14 solo
+legs. Session subsystems stay active even when the copy does not exist.
 
-### Experimento mais barato que a refuta
+### The cheapest experiment that refutes it
 
-Em Heide, sem trocar de mapa, retirar e reconstruir **uma** cópia remota,
-mantendo seu dono conectado. Confirmar que:
+In Heide, without changing map, remove and rebuild **one** remote copy,
+keeping its owner connected. Confirm that:
 
-- a presença antiga foi realmente retirada;
-- a nova recebe posição, animação e ações;
-- o parceiro não é descartado após o prazo em que a tentativa antiga perdia
-  comunicação.
+- the old presence really was removed;
+- the new one receives position, animation and actions;
+- the partner is not dropped after the interval in which the old attempt lost
+  communication.
 
-Repetir na outra máquina. Se esse ciclo exigir sair para o próprio mundo,
-deixar ponteiros pendurados ou produzir apenas um fantasma visual, a proposta
-perde sua premissa.
+Repeat on the other machine. If that cycle requires leaving for one's own
+world, leaves dangling pointers or produces only a visual phantom, the
+proposal loses its premise.
 
-Se passar, fazer um único trecho entre mapas com as cópias ausentes durante a
-travessia. Corrupção mesmo nesse intervalo refuta a ideia de que remover apenas
-as cópias basta.
+If it passes, do a single leg between maps with the copies absent during the
+crossing. Corruption even in that interval refutes the idea that removing only
+the copies is enough.
 
-### Critério positivo de aceitação
+### Positive acceptance criterion
 
-Uma presença por peer após cada reconstrução, interação bilateral, retirada
-comprovada dos recursos antigos e nenhuma intervenção das guardas. O jogador
-local deve manter HP, inventário, almas, papel e estado de mundo corretos.
+One presence per peer after each rebuild, interaction both ways, proven
+removal of the old resources and no intervention from the guards. The local
+player has to keep HP, inventory, souls, role and world state correct.
 
-### Riscos e pioras
+### Risks and regressions
 
-Conserva a manipulação do streamer e suas limitações. A reconstrução parcial
-pode ser mais difícil que deixar o loader reconstruir tudo. Exige tratamento
-explícito das atualizações destinadas à presença ausente; simplesmente
-acumular e reaplicar pacotes antigos é perigoso.
+It keeps the streamer manipulation and its limits. A partial rebuild may be
+harder than letting the loader rebuild everything. It needs explicit handling
+of the updates aimed at the absent presence; simply queueing and replaying old
+packets is dangerous.
 
-A vantagem potencial é preservar boa parte da velocidade atual. Por isso ela
-fica como segunda opção e como experimento útil para a primeira.
+The potential advantage is preserving much of the current speed. That is why
+it stays as the second option and as a useful experiment for the first.
 
-## O contrato de viagem precisa mudar nas duas alternativas
+## The travel contract has to change in both alternatives
 
-Hoje o host considera assentado `!Moving()`, mas a própria interface define
-isso como "chegou **ou desistiu**". Depois do timeout, o host pode inclusive
-chamar os convidados mesmo sem ter chegado. Essa ambiguidade participa da
-orquestração, além de prejudicar os testes. Ver `DS2_BonfireInSessionHook.cpp`,
-na lógica de `s_call.Active`.
+Today the host takes `!Moving()` as settled, but the interface itself defines
+that as "arrived **or gave up**". After the timeout, the host can even call
+the guests without having arrived. That ambiguity takes part in the
+orchestration, as well as hurting the tests. See
+`DS2_BonfireInSessionHook.cpp`, in the `s_call.Active` logic.
 
-A conclusão implícita deve ser substituída por resultados distintos:
-preparando, carregando, assentando, chegou e falhou. A conclusão do grupo exige
-recibos de todos os participantes para a mesma viagem.
+The implicit completion should be replaced by distinct outcomes: preparing,
+loading, settling, arrived and failed. The group's completion requires
+receipts from every participant for the same trip.
 
-A confirmação de chegada deve juntar:
+Arrival confirmation has to combine:
 
-- contato físico atual de cada jogador, convertido em mapa de destino;
-- proximidade da fogueira e quadros de física avançando;
-- presença remota funcional em ambas as máquinas;
-- mundo autoritativo do host aplicado.
+- each player's current physics contact, converted into the destination map;
+- proximity to the bonfire and physics frames advancing;
+- a working remote presence on both machines;
+- the host's authoritative world applied.
 
-`ContinueSettle` compara `CurrentMap()`, obtido do streamer, e imprime o
-contato como diagnóstico. Para o teste proposto, é necessário comparar também
-o contato diretamente; a frase do log não deve virar uma assertion física
-independente. Ver `DS2_DeathInterceptHook.cpp`, em `ContinueSettle`.
+`ContinueSettle` compares `CurrentMap()`, taken from the streamer, and prints
+the contact as a diagnostic. For the proposed test, the contact has to be
+compared directly as well; the log line must not turn into an independent
+physics assertion. See `DS2_DeathInterceptHook.cpp`, in `ContinueSettle`.
 
-## Quando preservar a arquitetura atual
+## When to keep the current architecture
 
-Vale fazer a captura da escrita antes de investir numa reconstrução extensa.
-Ela pode revelar um erro localizado e mudar o ranking.
+It is worth capturing the write before investing in an extensive rebuild. It
+may reveal a localised bug and change the ranking.
 
-Há um obstáculo documentado: Dr0–Dr7 já foram aceitos sem disparar neste
-ambiente. `DS2_INVESTIGATION_TOOLS.md` atribui isso ao caminho
-Wine/wineserver/`ptrace` sob Yama. Portanto, "nunca tentado nesta corrupção"
-não equivale a "instrumentação disponível".
+There is a documented obstacle: Dr0–Dr7 have been accepted without firing in
+this environment. `DS2_INVESTIGATION_TOOLS.md` attributes that to the
+Wine/wineserver/`ptrace` path under Yama. So "never tried on this corruption"
+is not the same as "instrumentation available".
 
-O procedimento seria:
+The procedure would be:
 
-1. **Controle positivo fora de sessão:** observar uma escrita deliberada em
-   memória pertencente ao injector, incluindo uma thread diferente da que arma
-   o breakpoint. Exigir exceção, endereço e thread corretos.
-2. Identificar uma **instância saudável equivalente** do campo que costuma
-   corromper. Por exemplo, a vftable embutida em
-   `MapModelComponent+0x50`, após confirmar componente e proprietário.
-3. Armar a vigia antes da viagem, cobrindo as threads que podem escrever e
-   registrando lacunas de cobertura. Para `SetThreadContext`, suspender a
-   thread ao modificar seu contexto; usar tamanho e alinhamento adequados.
-4. Capturar registradores, pilha, bytes e geração do objeto num buffer
-   limitado, sem parar longamente a sessão para inspeção.
-5. Correlacionar o acerto com destruição ou liberação do objeto e do heap. Uma
-   escrita legítima num bloco já liberado aponta para um consumidor obsoleto;
-   uma escrita indevida num objeto ainda vivo aponta para o escritor.
+1. **A positive control outside a session:** observe a deliberate write into
+   memory belonging to the injector, including from a thread other than the
+   one arming the breakpoint. Require the correct exception, address and
+   thread.
+2. Identify an **equivalent healthy instance** of the field that usually
+   corrupts. For example, the vftable embedded at `MapModelComponent+0x50`,
+   after confirming the component and the owner.
+3. Arm the watchdog before the trip, covering the threads that can write and
+   recording gaps in coverage. For `SetThreadContext`, suspend the thread
+   while modifying its context; use a suitable size and alignment.
+4. Capture registers, stack, bytes and the object's generation into a bounded
+   buffer, without stopping the session for long to inspect.
+5. Correlate the hit with destruction or freeing of the object and the heap. A
+   legitimate write into an already freed block points to a stale consumer; an
+   improper write into an object still alive points to the writer.
 
-Armar no endereço **depois** da corrupção não recupera a escrita anterior.
-Tampouco se deve transportar o endereço bruto entre boots.
+Arming on the address **after** the corruption does not recover the earlier
+write. Nor should the raw address be carried between boots.
 
-Se o controle de hardware falhar, não vale gastar uma sessão esperando
-silêncio. A vigia de página existente é alternativa para janelas curtas, com
-seu custo e suas lacunas; não uma prova equivalente automática.
+If the hardware control fails, it is not worth spending a session waiting for
+silence. The existing page watchdog is an alternative for short windows, with
+its cost and its gaps; not an automatically equivalent proof.
 
-A arquitetura atual merece ser mantida se essa captura identificar um defeito
-delimitado, sua correção estabelecer a ordem correta de vida dos recursos e os
-testes comprovarem retirada completa dos mapas. Se mostrar dependências antigas
-espalhadas por vários subsistemas, isso reforça reconstruir a presença.
+The current architecture deserves to be kept if that capture identifies a
+bounded defect, its fix establishes the correct lifetime order for the
+resources, and the tests prove the maps are fully torn down. If it shows stale
+dependencies spread across several subsystems, that argues for rebuilding the
+presence.
 
-## Critério final e custo dos experimentos
+## Final criterion and the cost of the experiments
 
-As guardas podem permanecer como proteção durante os testes, mas **qualquer
-acionamento conta como falha arquitetural**, mesmo que a viagem chegue. É
-necessário ler contadores completos: várias mensagens de falha são limitadas
-em quantidade, então o log pode ficar silencioso enquanto o contador continua
-crescendo.
+The guards can stay as protection during the tests, but **any trigger counts
+as an architectural failure**, even if the trip arrives. Full counters have to
+be read: several failure messages are limited in number, so the log can go
+quiet while the counter keeps growing.
 
-Deve-se exigir uma sequência inicialmente curta e depois pelo menos os mesmos
-40 trechos reais da referência, com:
+The requirement should be a short sequence at first and then at least the same
+40 real legs as the reference, with:
 
-- chegada física dos dois em cada trecho;
-- movimento e ações replicados nos dois sentidos após a chegada;
-- passagem pelo descarregamento efetivo da origem, além dos 30 segundos de
-  retenção;
-- recursos antigos retirados e ocupação estabilizada nos retornos ao mesmo
-  destino;
-- nenhum ponto de penalidade acrescentado;
-- saída legal final, confirmando que o convidado recupera seu próprio mundo e
-  preserva o personagem.
+- physical arrival of both on each leg;
+- movement and actions replicated in both directions after arrival;
+- going through the actual unloading of the origin, past the 30 seconds of
+  retention;
+- old resources removed and occupancy stable on returns to the same
+  destination;
+- no penalty point added;
+- a final legal exit, confirming the guest gets his own world back and keeps
+  the character.
 
-Inverter host e convidado e exercitar a votação completa também fazem parte da
-aprovação. Dois jogadores aprovados não autorizam conclusão sobre três.
+Swapping host and guest and exercising the full vote are also part of passing.
+Two players passing does not authorise a conclusion about three.
 
-Os primeiros ensaios podem ser observacionais e sem custo esperado de
-desconexão. Os experimentos de reconstrução não têm essa garantia: devem usar
-cenário com baseline das duas contas e restauração verificada. Isso evita
-conservar a penalidade no save original; não transforma um crash em teste sem
-penalidade.
+The first trials can be observational and with no expected disconnect cost.
+The rebuild experiments carry no such guarantee: they should use a scenario
+with a baseline of both accounts and a verified restore. That avoids keeping
+the penalty in the original save; it does not turn a crash into a
+penalty-free test.
 
-O começo recomendado é o controle do watchpoint e o ciclo "retirar/recriar uma
-presença no mesmo mapa". São os dois experimentos que mais reduzem a incerteza:
-o primeiro distingue um defeito localizado de um problema estrutural; o
-segundo testa a capacidade central das duas arquiteturas propostas. A direção
-de implementação preferida continua sendo a reentrada coordenada pelo loader
-nativo.
+The recommended start is the watchpoint control and the "remove/recreate one
+presence on the same map" cycle. Those are the two experiments that cut the
+most uncertainty: the first tells a localised defect apart from a structural
+problem; the second tests the central capability of both proposed
+architectures. The preferred implementation direction remains re-entry
+coordinated by the game's own loader.

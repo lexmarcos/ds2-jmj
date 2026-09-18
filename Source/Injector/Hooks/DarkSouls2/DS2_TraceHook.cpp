@@ -61,7 +61,7 @@ namespace
     PVOID s_handler = nullptr;
     uintptr_t s_base = 0;
 
-    // `esd <ms> [rotulo]`: every EzState environment query the game evaluates
+    // `esd <ms> [label]`: every EzState environment query the game evaluates
     // in a window, by id, with the values it answered. Event scripts decide
     // things like "Cannot use bonfire" through these, and a query id is what
     // a patch would have to change. FUN_140456a90 is the dispatcher (a
@@ -113,7 +113,7 @@ namespace
 
     // The outer dispatcher's ids as they are; the inner one's with the top
     // bit set, so the two stay apart in the report.
-    // `texto <ms> [rotulo]`: every text the game looks up in a window
+    // `texto <ms> [label]`: every text the game looks up in a window
     // (FUN_140503620(category, id)), with who asked. A prompt on screen is a
     // text looked up every frame, and its caller is where to start.
     constexpr size_t kTextLookupOffset = 0x503620;
@@ -722,13 +722,13 @@ namespace
     }
 
     // Requests, one per line:
-    //   bp <hex offset from the module base> [deref <registrador>[+<hex>] <bytes>]
+    //   bp <hex offset from the module base> [deref <register>[+<hex>] <bytes>]
     //   clear
     //   report
     //   wp <hex absolute address> <decimal length> [seconds, default 3, max 20]
     //   wpr <same>   (reads too)
     //   wpclear
-    //   esd <ms> [rotulo]   EzState queries evaluated in the window, by id
+    //   esd <ms> [label]   EzState queries evaluated in the window, by id
     //
     // The deref is what makes an argument readable. Half the interesting
     // values in this binary are behind a pointer in rcx or rdx — a handle, a
@@ -810,7 +810,7 @@ namespace
             }
             else if (Kind == "esd")
             {
-                // esd <decimal ms, max 20000> [rotulo]
+                // esd <decimal ms, max 20000> [label]
                 int Ms = 1500;
                 std::string Label;
                 Parts >> Ms >> Label;

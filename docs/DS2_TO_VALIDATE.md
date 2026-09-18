@@ -374,225 +374,232 @@ because an accidental second death **in the invader's own world** sat
 between the duel and the test. The fix was to run the loop again with
 nothing in between.
 
-### A revanche por red sign, e o que o servidor tem sem entregar nada
+### The red sign rematch, and what the server has without delivering anything
 
-`DS2_AutoRematch` e o gatilho `debug_summon.req` estão no servidor e
-funcionam no que prometem: o par é lembrado e o push é reenviado. Mas
-**sozinhos não formam sessão nenhuma** — está medido em
-[DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md). A flag nasce
-desligada e deve continuar assim até existir a metade do cliente; caso
-contrário ela vira a mesma armadilha que o `debug_invade.req` virou.
+`DS2_AutoRematch` and the `debug_summon.req` trigger are on the server and do
+what they promise: the pair is remembered and the push is sent again. But
+**on their own they form no session at all** — it is measured in
+[DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md). The flag is born
+off and should stay that way until the client half exists; otherwise it
+becomes the same trap that `debug_invade.req` became.
 
-Em aberto, em ordem de quanto bloqueiam:
+Open, in order of how much they block:
 
-- ~~O `SignHandle` sobrevive a uma placa nova?~~ **Não**, e o hook já
-  resolve: ele lê o handle novo no parâmetro de saída da função que
-  registra a placa. A revanche por red sign funciona ponta a ponta.
-- **O hook invoca qualquer placa que chegue**, não só a do par. Com dois
-  jogadores dá no mesmo; com três, está errado. Falta ler o campo do
-  item que identifica o dono.
-- **Qual índice da tabela em `0x1410c0050` é cada papel.** Zerar todos
-  trava a morte; para o co-op seamless é preciso saber qual entrada
-  mexer, e o tipo vem de `rcx+0xe0` num objeto transitório.
-- ~~A Red Sign Soapstone pode ser usada hollow?~~ **Respondido em 12/09:
-  não.** Hollow, o X não coloca placa; com uma Human Effigy, no mesmo
-  ponto e sem andar, a placa sai. Vale para os dois itens online.
-- **O host hollow não vê placa** foi medido uma vez só, com o controle
-  no mesmo ponto (efígie, prompt aparece). Vale repetir num outro lugar
-  antes de virar regra.
+- ~~Does the `SignHandle` survive a new sign?~~ **No**, and the hook already
+  handles it: it reads the new handle from the output parameter of the
+  function that registers the sign. The red sign rematch works end to end.
+- **The hook summons any sign that arrives**, not just the pair's. With two
+  players that comes to the same thing; with three it is wrong. The item
+  field that identifies the owner still has to be read.
+- **Which index of the table at `0x1410c0050` is each role.** Zeroing them
+  all wedges death; for seamless co-op it is necessary to know which entry
+  to touch, and the type comes from `rcx+0xe0` in a transient object.
+- ~~Can the Red Sign Soapstone be used hollow?~~ **Answered 12/09: no.**
+  Hollow, X places no sign; with a Human Effigy, at the same spot and with no
+  walking, the sign goes down. It holds for both online items.
+- **A hollow host does not see a sign** was measured only once, with the
+  control at the same spot (effigy, the prompt appears). Worth repeating
+  somewhere else before it becomes a rule.
 
-### O warp, e o co-op seamless
+### The warp, and seamless co-op
 
-O caminho do warp está mapeado e o hook existe
-([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)). O que ele entrega é
-**onde o jogador aterrissa**, não a sessão: o
-`RequestNotifyLeaveSession` continua saindo e a sessão continua
-acabando. Em aberto:
+The warp path is mapped and the hook exists
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md)). What it delivers is **where
+the player lands**, not the session: `RequestNotifyLeaveSession` still goes
+out and the session still ends. Open:
 
-- **A sessão pode sobreviver a uma morte?** O jogo nunca carrega área
-  dentro do mundo do host para um convidado, então isto pode
-  simplesmente não existir. É a pergunta que decide se o co-op seamless
-  de verdade é possível ou se o caminho é morrer e se reencontrar pela
-  revanche.
-- **Que outros motivos de warp existem** além de 1 (fogueira) e 4 (fim
-  ou começo de sessão), e o que o portão em `0x140248940` cobra de quem
-  não é nenhum dos dois. O `DS2_Seamless.log` responde sozinho com uso.
-- ~~O registro de renascimento de um convidado ainda aponta para a
-  fogueira dele enquanto ele é fantasma?~~ **Sim**: o redirecionamento
-  de um fantasma de co-op devolveu `mapa=0a1f0000 ponto=00007ba7`, que é
-  o mesmo ponto de uma morte comum dele no próprio mundo.
-- ~~A morte do host com fantasma dentro~~ **medida em 12/09**: o host faz
-  uma morte comum (motivo 1, para a própria fogueira) e o convidado passa
-  pelo mesmo `+0x2c3bde` com a mesma forma posição de quando é ele quem
-  morre. Um hook só cobre os dois casos.
-- **Os três bytes de param** (`+0x2c/+0x2d/+0x2e` da linha do papel) só
-  foram lidos por dedução do comportamento. Falta ler a linha na memória
-  e conferir papel por papel, e falta saber o que é o motivo de fim 4,
-  que devolve `2` sem consultar a linha.
-- **Quando a placa do convidado não está em cima da fogueira dele**, o
-  redirecionamento deveria mudar o lugar de pouso visivelmente. As duas
-  medições foram feitas com a placa no mesmo ponto da fogueira, então a
-  troca está provada no pedido, não na tela.
+- **Can the session survive a death?** The game never loads an area inside
+  the host's world for a guest, so this may simply not exist. It is the
+  question that decides whether real seamless co-op is possible or whether
+  the path is dying and meeting again through the rematch.
+- **What other warp reasons exist** besides 1 (bonfire) and 4 (end or start
+  of a session), and what the gate at `0x140248940` charges anyone who is
+  neither. `DS2_Seamless.log` answers that on its own with use.
+- ~~Does a guest's respawn record still point at its own bonfire while it is
+  a phantom?~~ **Yes**: the redirection of a co-op phantom returned
+  `mapa=0a1f0000 ponto=00007ba7`, which is the same point as an ordinary
+  death of its own in its own world.
+- ~~The host's death with a phantom inside~~ **measured 12/09**: the host
+  does an ordinary death (reason 1, to its own bonfire) and the guest goes
+  through the same `+0x2c3bde` with the same position shape as when it is
+  the one dying. One hook covers both cases.
+- **The three param bytes** (`+0x2c/+0x2d/+0x2e` of the role's row) have only
+  been read by deduction from the behaviour. The row still has to be read in
+  memory and checked role by role, and it is still unknown what end reason 4
+  is, which returns `2` without consulting the row.
+- **When the guest's sign is not on top of its bonfire**, the redirection
+  should visibly change the landing place. Both measurements were made with
+  the sign at the same spot as the bonfire, so the swap is proven in the
+  request, not on screen.
 
-### A morte segurada (`DS2_DeathInterceptHook`)
+### The held death (`DS2_DeathInterceptHook`)
 
-Medido só solo, só com o Samuel, em Heide, em 13/09
-([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A morte medida, e segurada").
-Em aberto:
+Measured solo only, only with Samuel, in Heide, on 13/09
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "Death measured, and
+held"). Open:
 
-- **Só duas das dez fontes de `+0x759` foram exercitadas**: HP zerado e queda.
-  Dano letal de inimigo (`FUN_14013a9b0`), as três de `FUN_14013cc30` (entre
-  elas o evento de animação `0x19`, que agarrões usam), `+0x145f3f` (causa
-  `0x6e`), `+0x31b753`, `+0x37046b` (aterrissagem) e `+0xd1c7f8` não. As de
-  `FUN_14013cc30` ligam o byte **dentro** do consumidor e passariam pela
-  checagem; o log diz `SEM +0x759 ANTES` quando isso acontecer.
-- **A morte instantânea** (`FUN_14013c500`, tipos 1 e 2) é só registrada. Não
-  apareceu nenhuma vez: nem na queda nem na morte por HP.
-- **Um personagem de pé com HP zerado por um quadro**: o hook devolve o HP no
-  mesmo quadro em que o byte aparece, mas o que roda entre `FUN_14016a650` e o
-  controlador naquele quadro vê HP 0. Ninguém olhou o que isso dispara.
-- **Com sessão**: medido em 14/09 — o outro lado via a morte pela replicação
-  do HP, e cancelar só no cliente que morre não bastava. A recusa da cópia está
-  na seção do passo 6, abaixo.
-- **A queda desfeita foi medida num volume só**: a água de Heide, bit 51. Os
-  volumes que ligam o bit 52 (tipos 3, 4, 7, 8), a morte por dano ao aterrissar
-  (`FUN_140372c00`, causas `0xa0`/`0x3c`) e o tipo 10, que só pede a câmera,
-  não foram exercitados.
-- **A volta para "a última posição no chão"**, usada quando a fogueira do
-  registro não está no mapa carregado, nunca rodou. Cair perto da beira pode
-  pôr o personagem de volta na beira.
-- **Ficar dentro de um volume de morte sem estar no ar** (se algum mapa tiver
-  isso) liga a câmera de queda sem nenhuma morte para o hook recusar, e a câmera
-  ficaria presa.
-- **A orientação não é escrita** no teleporte: o personagem chega à fogueira
-  virado para onde estava.
+- **Only two of the ten sources of `+0x759` have been exercised**: zeroed HP
+  and a fall. Lethal enemy damage (`FUN_14013a9b0`), the three in
+  `FUN_14013cc30` (among them animation event `0x19`, which grab attacks use),
+  `+0x145f3f` (cause `0x6e`), `+0x31b753`, `+0x37046b` (landing) and
+  `+0xd1c7f8` have not. The ones in `FUN_14013cc30` set the byte **inside**
+  the consumer and would slip past the check; the log says `SEM +0x759 ANTES`
+  when that happens.
+- **Instant death** (`FUN_14013c500`, types 1 and 2) is only logged. It has
+  not shown up once: neither in the fall nor in the death by HP.
+- **A character standing with zeroed HP for one frame**: the hook gives the
+  HP back on the same frame the byte appears, but whatever runs between
+  `FUN_14016a650` and the controller in that frame sees HP 0. Nobody has
+  looked at what that sets off.
+- **With a session**: measured 14/09 — the other side saw the death through
+  HP replication, and cancelling only on the client that dies was not enough.
+  The copy's refusal is in the step 6 section, below.
+- **The undone fall was measured in a single volume**: Heide's water, bit 51.
+  The volumes that set bit 52 (types 3, 4, 7, 8), death by landing damage
+  (`FUN_140372c00`, causes `0xa0`/`0x3c`) and type 10, which only asks for
+  the camera, have not been exercised.
+- **The return to "the last position on the ground"**, used when the record's
+  bonfire is not in the loaded map, has never run. Falling near an edge may
+  put the character back on the edge.
+- **Standing inside a death volume without being in the air** (if any map has
+  that) turns on the falling camera with no death for the hook to refuse, and
+  the camera would be stuck.
+- **Orientation is not written** in the teleport: the character arrives at the
+  bonfire facing wherever it was facing.
 
-### O renascer do passo 5 e a sessão do passo 6
+### Step 5's respawn and step 6's session
 
-Medido em Heide, com o Samuel e o Chico, solo e em sessão
-([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "Renascer pagando a morte" e
-"Com sessão"). Resolvido em 14/09: o contador de mortes, a checagem ofuscada
-do hollow (é a isenção do fantasma), "YOU DIED" e a cobrança de fantasma. Em
-aberto:
+Measured in Heide, with Samuel and Chico, solo and in a session
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "Respawning and paying for the
+death" and "With a session"). Resolved 14/09: the death counter, the
+obfuscated hollow check (it is the phantom's exemption), "YOU DIED" and the
+phantom's bill. Open:
 
-- **Usos de magia e estados** (veneno, maldição, etc.) não são restaurados; só
-  o Estus e o HP. O descanso na fogueira os restaura por um despachante de
-  SpEffect cujos alvos são saltos para código ofuscado (`0x14014c183` é a
-  chamada que recarrega o Estus, cercada de outras); `ItemInventory2SpellList`
-  não tem método de recarga à vista. Nenhum dos dois personagens tem magia para
-  medir com um vigia de escrita.
-- **A mancha online** não sai: o job roda e não envia, porque o gravador de
-  fantasma nunca grava o quadro com o personagem morto (`0x1000`). Chave
-  `mancha_online` desligada.
-- **A cópia do outro jogador**: a recusa foi medida com o byte de morte ligado
-  à mão. A corrida natural — o HP 0 saindo pela rede antes de ser devolvido —
-  aconteceu uma vez antes da correção e nenhuma das sete vezes depois; não foi
-  vista sendo recusada.
-- **A recusa vale para qualquer `PlayerCtrl` que não seja o local.** A cópia de
-  um jogador remoto é tipo 2 em `chr+0x54`; se um fantasma de NPC for
-  `PlayerCtrl`, ficaria imortal nos modos `cancel`/`respawn`. Não medido.
-- **Uma morte de verdade do outro lado** (a máquina dele sem o hook, ou em
-  `observe`) é recusada na cópia do lado de cá enquanto `copias` estiver
-  ligada: o "vanquished" e o `RequestNotifyKillEnemy` somem. A sessão ainda
-  termina pelo lado de lá.
-- **O pecado** (`FUN_140202ae0`): a morte tipo 1 o *reduz* em sessão quando
-  `FUN_14018fc90` acha certo membro na sessão; não é tocado.
-- **O som da morte** (`FUN_1401905c0`, BGM 2) e o evento `0x25` de
-  `FUN_14037d9f0` ficaram de fora.
-- **O banner e o HUD**: `FUN_1404fffb0` também zera `+0x31c` e manda
-  `FUN_140507360` refazer quatro objetos do HUD que não foram lidos (uma barra
-  de chefe, por exemplo). Medido fora de luta.
-- **Fogueira fora do mapa carregado**: a volta para "a última posição no chão"
-  num renascer por HP deixaria o personagem onde morreu, pagando a morte.
-- ~~**O convidado usa o registro da própria fogueira.**~~ Resolvido no passo 7
-  (abaixo).
+- **Spell uses and states** (poison, curse, etc.) are not restored; only the
+  Estus and the HP. Resting at a bonfire restores them through a SpEffect
+  dispatcher whose targets are jumps into obfuscated code (`0x14014c183` is
+  the call that refills the Estus, surrounded by others);
+  `ItemInventory2SpellList` has no refill method in sight. Neither character
+  has any spells to measure with a write watcher.
+- **The online bloodstain** does not go out: the job runs and sends nothing,
+  because the phantom recorder never records the frame with the character
+  dead (`0x1000`). Switch `mancha_online` off.
+- **The other player's copy**: the refusal was measured with the death byte
+  set by hand. The natural race — HP 0 going out over the network before
+  being given back — happened once before the fix and none of the seven times
+  after it; it has not been seen being refused.
+- **The refusal holds for any `PlayerCtrl` that is not the local one.** A
+  remote player's copy is type 2 in `chr+0x54`; if an NPC phantom were a
+  `PlayerCtrl`, it would be immortal in the `cancel`/`respawn` modes. Not
+  measured.
+- **A real death on the other side** (that machine without the hook, or in
+  `observe`) is refused on the copy over here while `copias` is on: the
+  "vanquished" and the `RequestNotifyKillEnemy` disappear. The session still
+  ends from that side.
+- **Sin** (`FUN_140202ae0`): a type 1 death *reduces* it in a session when
+  `FUN_14018fc90` finds a certain member in the session; it is not touched.
+- **The death sound** (`FUN_1401905c0`, BGM 2) and event `0x25` of
+  `FUN_14037d9f0` were left out.
+- **The banner and the HUD**: `FUN_1404fffb0` also zeroes `+0x31c` and has
+  `FUN_140507360` rebuild four HUD objects that have not been read (a boss
+  bar, for instance). Measured outside a fight.
+- **Bonfire outside the loaded map**: the return to "the last position on the
+  ground" in a respawn by HP would leave the character where it died, paying
+  for the death.
+- ~~**The guest uses its own bonfire's record.**~~ Resolved in step 7
+  (below).
 
-### A fogueira do host (passo 7)
+### The host's bonfire (step 7)
 
-Medido em 14/09 com dois jogadores em Heide, as duas fogueiras no mesmo mapa
-([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A fogueira do host"). Em
-aberto:
+Measured 14/09 with two players in Heide, both bonfires in the same map
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "The host's bonfire"). Open:
 
-- **Três jogadores ou mais.** O host é quem o jogo marca (`+0xad` do membro), e
-  um convidado entrando não anuncia mais nada; com duas contas não dá para ver
-  um segundo convidado recebendo o anúncio, nem um terceiro entrando.
-- **O registro do host mudando durante a sessão** (acender ou descansar numa
-  fogueira com um fantasma presente, se o jogo deixar): o anúncio sai na hora
-  em que o registro muda, mas isso não foi exercitado.
-- **Registro de tipo 1 ou 2** (ponto de evento, "player start" do mapa): a
-  procura é por id de fogueira, e esses caem na fogueira do próprio registro.
-  Só o tipo 0 foi visto.
-- **O host numa tela de carregamento.** Sem quadros, o host para de anunciar em
-  2 s e o último anúncio vale por 30 s; um convidado que morra depois disso vai
-  para a própria fogueira.
-- **Um jogador sem o mod na sessão** recebe os anúncios no canal 7 e nunca os
-  lê; ficam na fila da Steam (24 bytes a cada 2 s). Não medido.
-- **A fogueira do host fora do mapa carregado** passou a ser carregada no passo
-  8 (abaixo).
+- **Three players or more.** The host is the one the game marks (`+0xad` of
+  the member), and a guest joining announces nothing more; with two accounts
+  there is no way to see a second guest receiving the announcement, nor a
+  third joining.
+- **The host's record changing during the session** (lighting or resting at a
+  bonfire with a phantom present, if the game allows it): the announcement
+  goes out the moment the record changes, but that has not been exercised.
+- **A type 1 or 2 record** (event point, the map's "player start"): the search
+  is by bonfire id, and those fall back to their own record's bonfire. Only
+  type 0 has been seen.
+- **The host on a loading screen.** With no frames, the host stops announcing
+  in 2 s and the last announcement is good for 30 s; a guest that dies after
+  that goes to its own bonfire.
+- **A player without the mod in the session** receives the announcements on
+  channel 7 and never reads them; they sit in Steam's queue (24 bytes every
+  2 s). Not measured.
+- **The host's bonfire outside the loaded map** started being loaded in step
+  8 (below).
 
-### A fogueira de outro mapa (passo 8)
+### The bonfire in another map (step 8)
 
-Medido em 14/09 com dois jogadores, entre Heide e Majula, nas duas direções,
-sozinho e em sessão ([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A fogueira
-de outro mapa"). Em aberto:
+Measured 14/09 with two players, between Heide and Majula, in both
+directions, solo and in a session
+([DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A bonfire on another map").
+Open:
 
-- **Morte por queda com a fogueira em outro mapa.** O caminho é o mesmo do HP
-  (o renascer segura o personagem na última posição no chão enquanto o mapa
-  chega), mas só mortes por HP foram medidas nessa condição.
-- **Outros pares de mapas.** Só Heide ↔ Majula. Um mapa que use o deslocamento
-  do mundo (`ctx+0x2530`) ao entrar não foi exercitado, e um que demore mais de
-  1800 quadros (30 s) para chegar ao estado 5 desiste e deixa o personagem na
-  última posição no chão, já cobrado.
-- **Pisar no mapa errado.** Numa volta manual Majula → Heide com o foco solto
-  cedo, o Samuel pousou numa pedra de Majula na fogueira de Heide. O renascer
-  manda de novo para a fogueira a cada 90 quadros quando isso acontece, mas nos
-  nove renasceres em outro mapa medidos o personagem pisou no mapa certo em até
-  10 quadros, e o reenvio nunca rodou. Majula inteiro, sozinho, não pôs a pedra
-  ali.
-- **A manutenção do mapa do outro jogador.** Por que o jogo do Chico fechou na
-  primeira sessão não foi lido — o `DS2_Crash.log` veio depois. A manutenção
-  inteira passou numa sessão (duas mortes), e a por partes, a que está no build,
-  noutra (duas mortes). Uma cópia que chega a um mapa em cima de um objeto
-  (tipo 1) mantém todas as partes até pisar numa parte. São 8 mapas mantidos no
-  máximo, por índice.
-- **A cópia andando dentro do mapa mantido.** A manutenção guarda só o conjunto
-  da parte sob a cópia, trocado a cada parte nova, sem a soma das partes
-  vizinhas que o streamer faria para um jogador ali — e na fogueira de Majula
-  esse conjunto é um bit só. Nas duas mortes em sessão as cópias estavam
-  paradas.
-- **Memória.** Nem a manutenção inteira nem a por partes teve o custo medido.
-- **Andar de volta entre mapas com um fantasma.** A névoa de fantasma entre
-  áreas continua lá (`--remove-fog` é o experimento); o passo 8 só leva de um
-  mapa a outro no renascer.
-- **Três jogadores ou mais**: dois mapas mantidos para duas cópias, e um
-  convidado renascendo no mapa de um terceiro. Não testável com duas contas.
-- **Durante uma luta de chefe, ou com a névoa do chefe fechada**, a fogueira de
-  outro mapa não foi tentada.
-- **O HP do Chico** ficou em 853 de 854 depois de cada renascer em outro mapa,
-  com a fogueira acima e abaixo da morte. Não investigado.
-- **Teleporte e controlador de queda no mesmo mapa.** O teleporte agora move a
-  posição de onde a queda é medida (`*(*(chr+0xe0)+0xb0)+0x20`); antes disso, um
-  renascer numa fogueira bem abaixo da morte no mesmo mapa podia contar como
-  queda. Nenhum caso assim foi medido, nem antes nem depois.
+- **Death by falling with the bonfire in another map.** The path is the same
+  as the HP one (the respawn holds the character at the last position on the
+  ground while the map arrives), but only deaths by HP have been measured in
+  that condition.
+- **Other map pairs.** Only Heide ↔ Majula. A map that uses the world offset
+  (`ctx+0x2530`) when entering has not been exercised, and one that takes
+  more than 1800 frames (30 s) to reach state 5 gives up and leaves the
+  character at the last position on the ground, already charged.
+- **Stepping on the wrong map.** On a manual trip back Majula → Heide with
+  the focus released early, Samuel landed on a Majula rock at Heide's
+  bonfire. The respawn sends it to the bonfire again every 90 frames when
+  that happens, but in the nine respawns in another map that were measured
+  the character stepped on the right map within 10 frames, and the resend
+  never ran. All of Majula, solo, did not put the rock there.
+- **Keeping the other player's map.** Why Chico's game closed in the first
+  session was never read — `DS2_Crash.log` came later. Keeping the whole map
+  passed in one session (two deaths), and keeping it by parts, which is what
+  is in the build, in another (two deaths). A copy that arrives at a map on
+  top of an object (type 1) keeps every part until it steps on a part. It is
+  8 maps kept at most, by index.
+- **The copy walking inside the kept map.** The keeping holds only the set of
+  the part under the copy, swapped at each new part, without the sum of the
+  neighbouring parts the streamer would do for a player there — and at
+  Majula's bonfire that set is a single bit. In the two deaths in a session
+  the copies were standing still.
+- **Memory.** Neither keeping the whole map nor keeping it by parts has had
+  its cost measured.
+- **Walking back between maps with a phantom.** The phantom fog between areas
+  is still there (`--remove-fog` is the experiment); step 8 only goes from one
+  map to another in the respawn.
+- **Three players or more**: two maps kept for two copies, and a guest
+  respawning in a third one's map. Not testable with two accounts.
+- **During a boss fight, or with the boss fog closed**, the bonfire in another
+  map has not been tried.
+- **Chico's HP** stayed at 853 of 854 after each respawn in another map, with
+  the bonfire above and below the death. Not investigated.
+- **Teleport and the fall controller in the same map.** The teleport now
+  moves the position the fall is measured from (`*(*(chr+0xe0)+0xb0)+0x20`);
+  before that, a respawn at a bonfire well below the death in the same map
+  could count as a fall. No such case was measured, before or after.
 
-## O login que resolve o hostname oficial, depois de um reboot
+## The login that resolves the official hostname, after a reboot
 
-Medido em 13/09, no primeiro lançamento depois de reiniciar a máquina: o jogo
-mostrou "The DARK SOULS II service is not available" e **nunca conectou ao
-servidor local**. Com `ss` amostrado a cada 10 ms, as tentativas eram para
-`44.235.83.177:50050` e `44.235.102.125:50050` — que é exatamente o que
-`frpg2-steam64-ope-login.fromsoftware-game.net` resolve —, ou seja, a porta já
-trocada pelo injector e o **hostname oficial**. Ao mesmo tempo, a string UTF-16
-do módulo (`0x1410d4ab0`) já dizia `127.0.0.1`, e havia cópias ASCII do
-hostname oficial no heap (uma com o ponto final de FQDN).
+Measured 13/09, on the first launch after restarting the machine: the game
+showed "The DARK SOULS II service is not available" and **never connected to
+the local server**. With `ss` sampled every 10 ms, the attempts went to
+`44.235.83.177:50050` and `44.235.102.125:50050` — which is exactly what
+`frpg2-steam64-ope-login.fromsoftware-game.net` resolves to —, that is, the
+port already swapped by the injector and the **official hostname**. At the
+same time, the module's UTF-16 string (`0x1410d4ab0`) already said `127.0.0.1`,
+and there were ASCII copies of the official hostname on the heap (one with the
+FQDN trailing dot).
 
-No título, antes de apertar START, essas cópias ASCII não existem: elas são
-feitas no login. Relançar o jogo resolveu na hora, e o login seguinte foi para
-`127.0.0.1`. O que fez aquele processo usar o nome antigo não foi descoberto.
-Duas condições estavam presentes e podem importar: a Steam da conta tinha
-acabado de ser aberta pelo próprio jogo (código de saída 53, `steam://run`), e
-o servidor tinha subido antes de a Steam logar. Para o loader isto importa: um
-jogador veria o mesmo erro e não saberia que é só relançar.
+At the title, before pressing START, those ASCII copies do not exist: they are
+made at login. Relaunching the game fixed it immediately, and the next login
+went to `127.0.0.1`. What made that process use the old name was not
+discovered. Two conditions were present and may matter: that account's Steam
+had just been opened by the game itself (exit code 53, `steam://run`), and the
+server had come up before Steam logged in. For the loader this matters: a
+player would see the same error and would not know it is just a relaunch.
 
 ## Not started
 

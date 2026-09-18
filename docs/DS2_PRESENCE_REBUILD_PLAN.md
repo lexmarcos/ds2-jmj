@@ -1,61 +1,62 @@
-# Reconstruir a presença: o que existe, o que não existe, e o plano
+# Rebuilding presence: what exists, what does not, and the plan
 
-Levantamento feito em 16/09 por um agente Fable, em Ghidra `-readOnly` e
-`objdump`, sem executar nada nos jogos. Versão 1.03 Calibrations 2.02.
+Survey made 16/09 by a Fable agent, in Ghidra `-readOnly` and `objdump`,
+without running anything in the games. Version 1.03 Calibrations 2.02.
 
-Este documento é a resposta a `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`, e corrige
-a premissa central dele. Leia os dois juntos.
+This document is the answer to `DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`, and it
+corrects that document's central premise. Read the two together.
 
-## O que muda em relação ao parecer
+## What changes with respect to the review
 
-O parecer dizia que **não existe primitiva comprovada para retirar a presença
-de um jogador sem sair da sessão**, e chamava isso de primeiro trabalho de
-engenharia reversa. Ela **existe**, é nativa e é por jogador.
+The review said that **there is no proven primitive for removing a player's
+presence without leaving the session**, and called that the first piece of
+reverse engineering to do. It **does** exist, it is native, and it is per
+player.
 
-O que **não** existe é a **reconstrução** pelo caminho nativo fora dos estados
-de entrada: o pacote de dados do jogador (`0xd`) só é aceito pelo host em
-estado `0xe` e pelo convidado em `0xc`; em `0x10`/`7` a sessão veta. Portanto a
-"reentrada coordenada pelo carregamento nativo" **na forma pura não está
-disponível** sem refazer o handshake que o M2 bateu nove vezes.
+What does **not** exist is the **rebuild** through the native path outside the
+entry states: the player data packet (`0xd`) is only accepted by the host in
+state `0xe` and by the guest in `0xc`; in `0x10`/`7` the session vetoes it. So
+the "re-entry coordinated by the native loading" **is not available in its pure
+form** without redoing the handshake that M2 banged on nine times.
 
-O que está disponível é um **híbrido**: retirada nativa mais reconstrução feita
-pela mod, com o blob do jogador capturado na entrada.
+What is available is a **hybrid**: native removal plus a rebuild done by the
+mod, with the player blob captured at the join.
 
-Isso inverte o ranking do parecer: **alternativa 2 primeiro** (retirar as cópias
-antes da travessia, manter o transporte atual que já fez 40 trechos limpos,
-recriar na liberação da barreira), e a alternativa 1 (warps nativos) só como
-escalada.
+That inverts the review's ranking: **alternative 2 first** (remove the copies
+before the crossing, keep the current transport that has already done 40 clean
+legs, recreate them when the barrier is released), and alternative 1 (native
+warps) only as an escalation.
 
-## O registro de presenças remotas
+## The remote presence registry
 
-`R = *(*0x141616cf8 + 0x20)`, 0x2500 bytes, construído por `FUN_14051ad90`.
+`R = *(*0x141616cf8 + 0x20)`, 0x2500 bytes, built by `FUN_14051ad90`.
 
-| campo | o que é |
+| field | what it is |
 | --- | --- |
-| `R+0x08` | quantas entradas ativas vivas; com zero, `FUN_14051d9b0` desliga o sync |
-| `R+0x174` | net id deste jogador |
-| `R+0x1a8 .. +0x5b8` | 5 **entradas ativas** de 0xd0 bytes |
-| `R+0x5c0 .. +0x2500` | 5 **slots pendentes** de 0x640 bytes |
+| `R+0x08` | how many live active entries; with zero, `FUN_14051d9b0` turns the sync off |
+| `R+0x174` | this player's net id |
+| `R+0x1a8 .. +0x5b8` | 5 **active entries** of 0xd0 bytes |
+| `R+0x5c0 .. +0x2500` | 5 **pending slots** of 0x640 bytes |
 
-Entrada ativa `E`: `+0x00` membro Steam, `+0x40` o `PlayerCtrl` da cópia,
-`+0x48` estado (0 livre, 2 viva, 3 saindo), `+0x4c` papel, `+0x6a` net id,
-`+0x78` cronômetro da saída, `+0x8c` nome.
+Active entry `E`: `+0x00` Steam member, `+0x40` the copy's `PlayerCtrl`,
+`+0x48` state (0 free, 2 alive, 3 leaving), `+0x4c` role, `+0x6a` net id,
+`+0x78` the leaving timer, `+0x8c` name.
 
-Slot pendente `S`: `+0x00` membro Steam, `+0x40` o **blob de 0x5f0 bytes** do
-jogador, `+0x630` flag, `+0x631` liberado para nascer.
+Pending slot `S`: `+0x00` Steam member, `+0x40` the player's **0x5f0-byte
+blob**, `+0x630` flag, `+0x631` released to be born.
 
-## As primitivas
+## The primitives
 
-| passo | função | pré-condição que importa |
+| step | function | the precondition that matters |
 | --- | --- | --- |
-| registrar | `FUN_14051b0e0(R, membro, blob, flag)` | o `membro` tem que vir da lista **viva** (`FUN_140520040`), não de uma cópia de 0x40 bytes |
-| liberar | `FUN_14051c4d0(R, steamid)` | só o papel `0xe` precisa disso para nascer |
-| nascer | `FUN_14051dbb0(R)` → `FUN_14051ce20(R, S)` | **se já existe entrada ativa para aquele id, sobrescreve `E+0x40` sem destruir o antigo**: é o modo de falha padrão, duplicação e órfão no `CharacterManager` |
-| **retirar** | **`FUN_14051c820(E)`** | inicia o fade de 0.5 s e põe `E+0x48 = 3`; não toca sessão nem manda nada ao servidor |
-| destruir | `FUN_14051c940` estado 3 → `FUN_14051d2a0(R, E)` | chama `FUN_140359890` no `CharacterManager`; a destruição real é **adiada** por uma lista, então "entrada em estado 0" não é "personagem destruído" |
-| reset total | `FUN_140513340` → `FUN_14051bff0(R)` | é o que o **warp** chama: destrói todas as presenças sem encerrar sessão nenhuma |
+| register | `FUN_14051b0e0(R, membro, blob, flag)` | the `membro` has to come from the **live** list (`FUN_140520040`), not from a 0x40-byte copy |
+| release | `FUN_14051c4d0(R, steamid)` | only role `0xe` needs this in order to be born |
+| be born | `FUN_14051dbb0(R)` → `FUN_14051ce20(R, S)` | **if an active entry already exists for that id, it overwrites `E+0x40` without destroying the old one**: that is the default failure mode, duplication and an orphan in the `CharacterManager` |
+| **remove** | **`FUN_14051c820(E)`** | starts the 0.5 s fade and sets `E+0x48 = 3`; it touches no session and sends nothing to the server |
+| destroy | `FUN_14051c940` state 3 → `FUN_14051d2a0(R, E)` | calls `FUN_140359890` in the `CharacterManager`; the real destruction is **deferred** through a list, so "entry in state 0" is not "character destroyed" |
+| full reset | `FUN_140513340` → `FUN_14051bff0(R)` | this is what the **warp** calls: it destroys every presence without ending any session |
 
-Prólogos para os bytes esperados:
+Prologues for the expected bytes:
 
     +0x51c820  40 53 48 83 ec 20 8b 41 48 48 8b d9
     +0x51b0e0  48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18
@@ -71,63 +72,65 @@ Prólogos para os bytes esperados:
     +0x359890  48 85 d2 0f 84 43 02 00 00 55 41 56
     +0x513340  40 53 48 83 ec 20 48 8b 05 ab 39 10 01 48 8b d9
 
-## Por que a retirada parece neutra para a sessão
+## Why the removal looks neutral to the session
 
-Nenhuma das duas máquinas de sessão lê o registro: o handler do estado 7 do
-convidado (`FUN_1402c3830`) só olha `+0x120` e `+0x1cc`; o do `0x10` do host
-(`FUN_1402bed10`) descreve a entrada uma vez e tenta de novo no quadro seguinte
-se ela sumiu. **Isto é leitura, não medição** — o experimento abaixo é que
-decide.
+Neither session machine reads the registry: the guest's state 7 handler
+(`FUN_1402c3830`) only looks at `+0x120` and `+0x1cc`; the host's `0x10`
+(`FUN_1402bed10`) describes the entry once and tries again on the next frame
+if it is gone. **This is reading, not measurement** — the experiment below is
+what decides.
 
-## Riscos nomeados
+## Named risks
 
-- **Watchdog de 300 s no host** (`FUN_1402be090`, `DAT_1410d7b40 = 300.0f`): o
-  aviso de warp arma um bit sem renovar o cronômetro, então um warp do host
-  muito depois do início pode encerrar a sessão. É a parede provável da
-  alternativa 1. Mede-se sem custo pelo caminho legal de hoje.
-- **Duplicação ao recriar**, acima.
-- **Quem envia o `0xd`** não foi achado estaticamente; mede-se com
-  `bp 520810` numa invocação normal.
+- **300 s watchdog on the host** (`FUN_1402be090`, `DAT_1410d7b40 = 300.0f`):
+  the warp notice sets a bit without renewing the timer, so a host warp long
+  after the start can end the session. It is the likely wall for alternative 1.
+  It can be measured at no cost through today's legal path.
+- **Duplication when recreating**, above.
+- **Who sends the `0xd`** was not found statically; it can be measured with
+  `bp 520810` on a normal summon.
 
-## O plano, em fases
+## The plan, in phases
 
-**A — instrumentar, sem custo.** Um `DS2_PresenceHook` só de observação sobre
-registrar, nascer, retirar, destruir e reset, mais `status` das 5 entradas e
-dos 5 slots. Rodar uma invocação normal, uma viagem pelo caminho legal e um
-`session end`, e ler os sinais positivos de cada passo.
+**A — instrument, at no cost.** A `DS2_PresenceHook` that only observes
+register, be born, remove, destroy and reset, plus a `status` of the 5 entries
+and the 5 slots. Run a normal summon, a travel through the legal path and a
+`session end`, and read the positive signal of each step.
 
-**B — o experimento que decide.** Com baseline dos dois saves: o host retira a
-cópia do convidado, segura 60 s (a sessão tem que continuar verificada, sem
-`Leave*` no servidor, sem ponto de penalidade), recria, e a cópia tem que
-**se mexer quando o dono anda**. Repetir invertido, depois os dois ao mesmo
-tempo, e só então um trecho com as cópias ausentes durante a travessia, lendo
-os contadores de falha antes e depois.
+**B — the experiment that decides.** With a baseline of both saves: the host
+removes the guest's copy, holds for 60 s (the session has to stay verified,
+with no `Leave*` on the server and no penalty point), recreates it, and the
+copy has to **move when its owner walks**. Repeat it the other way round, then
+both at the same time, and only then a leg with the copies absent during the
+crossing, reading the failure counters before and after.
 
-**C — alternativa 2.** Votação aprovada, cada máquina retira as cópias, viaja
-pelo transporte atual, e recria na liberação da barreira, antes de a cortina
-descer. Régua: 40 trechos com os dois chegando, cópias recriadas e se movendo,
-**contadores de falha inalterados** (qualquer disparo é falha arquitetural),
-pontos iguais, sessão verificada o tempo todo, saída legal no fim.
+**C — alternative 2.** Vote approved, each machine removes the copies, travels
+through the current transport, and recreates them when the barrier is
+released, before the curtain comes down. The bar: 40 legs with both arriving,
+copies recreated and moving, **failure counters unchanged** (any trip is an
+architectural failure), equal points, the session verified the whole time, a
+legal exit at the end.
 
-**D — alternativa 1, só se C ainda acusar falhas com as cópias ausentes.**
-Warps nativos nos dois lados, com o watchdog neutralizado e o warp do convidado
-construído à mão. Sai o transporte inteiro; a barreira e o contrato ficam.
+**D — alternative 1, only if C still trips failures with the copies absent.**
+Native warps on both sides, with the watchdog neutralised and the guest's warp
+built by hand. The whole transport goes; the barrier and the contract stay.
 
-## O que preservar em qualquer caminho
+## What to preserve in any path
 
-O contrato `Idle/Moving/Arrived/Failed`, com `Arrived` escrito só quando o mapa
-alcançado é o de destino e nunca por tempo (a frase "só por contato físico"
-estava forte demais: quem decide é o mapa da parte que o streamer registrou sob
-o jogador, e o contato entra em diagnóstico e retenção — ver a correção de
-16/09 em `DS2_SEAMLESS_COOP_TASKS.md`); a
-barreira e a `TravelRelease`; host primeiro; o `DropDeadRigidBody` (que vira um
-**medidor**: deve parar de disparar para cópias); todas as guardas `__try` como
-rede, com a regra de que disparo é falha arquitetural; as provas de tipo; o
-`keep` que soma e nunca encolhe.
+The `Idle/Moving/Arrived/Failed` contract, with `Arrived` written only when the
+map reached is the destination one and never by time (the phrase "only by
+physical contact" was too strong: what decides is the map of the part the
+streamer registered under the player, and the contact goes into diagnostics and
+the hold — see the 16/09 correction in `DS2_SEAMLESS_COOP_TASKS.md`); the
+barrier and the `TravelRelease`; host first; the `DropDeadRigidBody` (which
+becomes a **meter**: it should stop firing for copies); every `__try` guard as
+a net, with the rule that a trip is an architectural failure; the type proofs;
+the `keep` that adds up and never shrinks.
 
-## O que refutaria a direção
+## What would refute the direction
 
-A sessão cair depois da retirada; a cópia recriada não se mexer; queda dentro
-da retirada ou logo depois; duas presenças do mesmo jogador; e o mais
-importante para nós: **falha nos guardas mesmo com as cópias ausentes**, que
-provaria que o problema é o jogador local carregado entre mapas, e não a cópia.
+The session dropping after the removal; the recreated copy not moving; a crash
+inside the removal or right after it; two presences of the same player; and the
+most important one for us: **failures in the guards even with the copies
+absent**, which would prove that the problem is the local player carried
+between maps, and not the copy.

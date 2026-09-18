@@ -91,171 +91,179 @@ the game when the character moved. A second thread can reach an address between
 the first restoring the byte and the handler running, so the handler owns an
 address whether or not it is still armed - without that it died immediately.
 
-## Onde o jogador está, e como levá-lo a algum lugar
+## Where the player is, and how to take them somewhere
 
-`DS2_NavHook` publica a posição do jogador local em `DS2_Nav.txt`, ao lado da
-DLL, reescrito inteiro a cada 50 ms:
+`DS2_NavHook` publishes the local player's position in `DS2_Nav.txt`, next to
+the DLL, rewritten whole every 50 ms:
 
-    <x> <y> <z> <facing x> <facing z> <ponteiro> <amostra>
+    <x> <y> <z> <facing x> <facing z> <pointer> <sample>
 
-A cadeia é a mesma que o próprio jogo usa quando um convidado entra no mundo do
-host e precisa dizer onde está (`FUN_1402c2a80`):
+The chain is the same one the game itself uses when a guest enters the host's
+world and has to say where it is (`FUN_1402c2a80`):
 
-    jogador  = *(*(*(0x1416148f0) + 0xa8) + 0xc0)
-    posição  = jogador + 0xa8      três floats, x y z
-    direção  = jogador + 0xbc e + 0xc4, normalizada
+    player    = *(*(*(0x1416148f0) + 0xa8) + 0xc0)
+    position  = player + 0xa8      three floats, x y z
+    facing    = player + 0xbc and + 0xc4, normalised
 
-**Há mais duas triplas de posição logo antes de `+0xa8`** e elas não seguem o
-personagem — dá para escolher a errada e ficar com um valor que nunca muda.
-A boa foi achada andando e relendo; é o único teste que separa as três.
+**There are two more position triples just before `+0xa8`** and they do not
+follow the character — you can pick the wrong one and end up with a value
+that never changes. The right one was found by walking and re-reading; it is
+the only test that tells the three apart.
 
-O **contador de amostra** no fim não é enfeite. Um leitor não distingue um
-personagem parado de um arquivo que parou de ser escrito, e essa diferença é
-exatamente "a caminhada chegou" contra "a caminhada travou". Custou um
-diagnóstico errado: a primeira tentativa relatou `travou depois de 6 passos,
-ainda a 1,8 m` com o personagem **em cima do alvo**, lendo uma posição de três
-passos antes. O publicador escreve por `rename`, o `rename` falha às vezes sob
-Wine enquanto o leitor tem o arquivo aberto, e engolir esse erro deixa a
-amostra velha no lugar parecendo atual.
+The **sample counter** at the end is not decoration. A reader cannot tell a
+character standing still from a file that stopped being written, and that
+difference is exactly "the walk arrived" against "the walk got stuck". It
+cost one wrong diagnosis: the first attempt reported `travou depois de 6
+passos, ainda a 1,8 m` with the character **on top of the target**, reading a
+position from three steps earlier. The publisher writes through `rename`,
+`rename` sometimes fails under Wine while the reader has the file open, and
+swallowing that error leaves the old sample in place looking current.
 
-O **ponteiro não serve para distinguir as instâncias**: sem ASLR, as duas
-cópias do jogo caem no mesmo endereço de heap e publicam o mesmo valor. Duas
-leituras idênticas nos dois arquivos são um resultado plausível, não um bug —
-foi assim que se descobriu que a caminhada tinha chegado.
+The **pointer is no use for telling the instances apart**: with no ASLR, the
+game's two copies land at the same heap address and publish the same value.
+Two identical readings in the two files are a plausible result, not a bug —
+that is how it was discovered that the walk had arrived.
 
-Com isso o harness anda sozinho:
+With that the harness walks on its own:
 
 ```
 ds2os-dev where
 ds2os-dev goto --instance 1 --to-instance 2
 ```
 
-`--to-instance` é "vá para onde o outro está", que na prática é "pise na placa
-dele": o convidado põe a placa onde está parado, e os dois mundos usam as
-mesmas coordenadas, então não é preciso descobrir a posição da placa em lugar
-nenhum.
+`--to-instance` is "go to where the other one is", which in practice is "step
+on its sign": the guest places the sign where it is standing, and the two
+worlds use the same coordinates, so the sign's position never has to be found
+anywhere.
 
-O stick é **relativo à câmera**, e a câmera gira junto com o personagem, então
-não existe um mapeamento fixo para aprender uma vez. Cada passo mede o
-deslocamento que produziu: o ângulo entre o que foi pedido e o que aconteceu é
-a guinada da câmera, suavizada no passo seguinte. Cair e travar são relatados,
-não combatidos — um teste que dependia da caminhada falha dizendo o que houve
-em vez de estourar o tempo.
+The stick is **relative to the camera**, and the camera turns with the
+character, so there is no fixed mapping to learn once. Each step measures the
+displacement it produced: the angle between what was asked and what happened
+is the camera's yaw, smoothed into the next step. Falling and getting stuck
+are reported, not fought — a test that depended on the walk fails saying what
+happened instead of timing out.
 
-Três coisas que custaram caro para descobrir, e que valem para qualquer coisa
-que dirija o jogo:
+Three things that were expensive to find out, and that hold for anything
+driving the game:
 
-- **O foco tem que ser reafirmado a cada vez.** Não basta a janela já estar
-  ativa: o jogo para de aceitar o controle virtual se o foco não for reclamado
-  de novo. Um atalho que devolvia cedo quando `_NET_ACTIVE_WINDOW` já apontava
-  para a janela fez toda caminhada andar no primeiro passo e congelar depois —
-  e isso se parece exatamente com terreno bloqueado. Foram gastas horas
-  culpando a fogueira.
-- **O eixo Y do controle chega ao mundo invertido.** O mapeamento é uma rotação
-  **composta com um espelho**, e um espelho não é absorvível por uma estimativa
-  que só sabe girar: errar isso faz o personagem andar firme para longe do alvo
-  enquanto a estimativa persegue o próprio rabo. Medido, não chutado: stick
-  para a direita deu ângulo −164,8° no mundo e stick para a frente −82,2°, e
-  frente só é +90° de direita sob essa leitura.
-- **O personagem gira antes de andar.** Um burst que acaba durante a virada não
-  cobre chão nenhum — um de 700 ms depois de noventa graus mediu deslocamento
-  zero. Por isso os passos são de 1,2 s, crescem quando rendem pouco, e só
-  passos que cobriram mais de meio metro têm direito de ensinar a estimativa.
+- **Focus has to be reasserted every time.** It is not enough for the window
+  to already be active: the game stops accepting the virtual pad if focus is
+  not claimed again. A shortcut that returned early when `_NET_ACTIVE_WINDOW`
+  already pointed at the window made every walk move on the first step and
+  freeze afterwards — and that looks exactly like blocked terrain. Hours were
+  spent blaming the bonfire.
+- **The pad's Y axis reaches the world inverted.** The mapping is a rotation
+  **composed with a mirror**, and a mirror cannot be absorbed by an estimate
+  that only knows how to rotate: getting it wrong makes the character walk
+  steadily away from the target while the estimate chases its own tail.
+  Measured, not guessed: stick right gave an angle of −164.8° in the world
+  and stick forward −82.2°, and forward is only +90° from right under that
+  reading.
+- **The character turns before walking.** A burst that ends during the turn
+  covers no ground at all — one of 700 ms after ninety degrees measured zero
+  displacement. That is why steps are 1.2 s, grow when they yield little, and
+  only steps that covered more than half a metre are allowed to teach the
+  estimate.
 
-O que ela **não** faz: desviar de obstáculo. Ela varre as oito direções quando
-para de sair do lugar, o que resolve encavalar, mas não contorna geometria. Na
-prática chega a 2 m do alvo em terreno com degraus, que é folga de sobra para
-pisar numa placa, e é por isso que o raio padrão é 2 m.
+What it does **not** do: avoid obstacles. It sweeps the eight directions when
+it stops making headway, which solves snagging, but it does not go around
+geometry. In practice it gets within 2 m of the target on terrain with steps,
+which is plenty of slack for stepping on a sign, and that is why the default
+radius is 2 m.
 
-## `DS2_Bonfire.req`: a viagem sem sessão
+## `DS2_Bonfire.req`: travel with no session
 
-`ir <mapa hex> <fogueira hex>` leva o jogador local àquela fogueira do jeito
-que a viagem em grupo leva — mapa segurado ao lado do atual, foco na célula da
-fogueira, teleporte, sem warp e sem tocar na sessão. Existe para medir a
-viagem **sozinho**, que é o controle: com um cliente só, nenhuma queda custa
-ponto de desconexão ilegal.
+`ir <map hex> <bonfire hex>` takes the local player to that bonfire the way
+the group travel does — the map held beside the current one, focus on the
+bonfire's cell, teleport, no warp and without touching the session. It exists
+to measure the travel **alone**, which is the control: with a single client,
+no fall costs an illegal disconnect point.
 
 ```
 ir 0a1f0000 7ba7      # Heide's Ruin
 ir 0a040000 122a      # The Far Fire
 ```
 
-O log é o `DS2_Bonfire.log`, e o `DS2_Death.log` mostra o carregamento e o
-pouso ("viagem: o mapa ... carregou em N quadros").
+The log is `DS2_Bonfire.log`, and `DS2_Death.log` shows the load and the
+landing ("viagem: o mapa ... carregou em N quadros").
 
-## O breakpoint que segue um ponteiro
+## The breakpoint that follows a pointer
 
-`DS2_Trace.req` aceita, desde 12/09:
-
-```
-bp <deslocamento hex>
-bp <deslocamento hex> deref <registrador>[+<hex>] <bytes>
-```
-
-Registradores: `rcx rdx r8 r9 rax rbx rsi rdi`; no máximo 64 bytes.
-
-Isto existe porque **metade do que interessa neste binário está atrás de um
-ponteiro**, e o ponteiro morre antes de qualquer sonda conseguir responder. O
-ponto de entrada do summon recebe um `SignHandle` por endereço; o objeto que
-decide se uma morte desfaz a sessão guarda o tipo em `+0xe0` e é reciclado em
-segundos. Tentar ler esses endereços depois, com `DS2_MemProbe.req`, devolve
-memória já reaproveitada — foi medido, e a leitura tardia deu um ponteiro de
-heap onde deveria haver um byte de tipo.
-
-Exemplos reais:
+`DS2_Trace.req` accepts, since 12/09:
 
 ```
-bp 2a14c0 deref rdx 4        # o SignHandle que o host invocou
-bp 190950 deref rcx+e0 1     # o tipo que decide se a morte encerra as sessões
+bp <hex offset>
+bp <hex offset> deref <register>[+<hex>] <bytes>
 ```
 
-A leitura é protegida: um registrador pode apontar para qualquer coisa, e uma
-falha dentro de um handler vetorizado leva o jogo junto. Endereço ilegível sai
-como `[rcx=... ilegivel]` em vez de virar crash.
+Registers: `rcx rdx r8 r9 rax rbx rsi rdi`; at most 64 bytes.
 
-### Rearmar o mesmo endereço exige `clear`
+This exists because **half of what is interesting in this binary is behind a
+pointer**, and the pointer dies before any probe can answer. The summon's
+entry point receives a `SignHandle` by address; the object that decides
+whether a death undoes the session keeps the type at `+0xe0` and is recycled
+within seconds. Trying to read those addresses afterwards, with
+`DS2_MemProbe.req`, returns memory that has already been reused — it was
+measured, and the late reading gave a heap pointer where a type byte should
+have been.
 
-O tracer guarda todo endereço que já armou, e `Arm` desiste silenciosamente se
-o endereço já está no mapa. Mandar `bp 2a14c0` uma segunda vez **parece
-funcionar** — o log responde `=== armados 1 enderecos ===` — e não arma nada.
-Custou uma rodada inteira de duelo até o hit que não veio explicar isso.
+Real examples:
 
-Para medir a mesma função duas vezes:
+```
+bp 2a14c0 deref rdx 4        # the SignHandle the host summoned
+bp 190950 deref rcx+e0 1     # the type that decides if death ends sessions
+```
+
+The read is guarded: a register can point anywhere, and a fault inside a
+vectored handler takes the game with it. An unreadable address comes out as
+`[rcx=... ilegivel]` instead of turning into a crash.
+
+### Rearming the same address needs `clear`
+
+The tracer keeps every address it has ever armed, and `Arm` gives up silently
+if the address is already in the map. Sending `bp 2a14c0` a second time
+**looks like it works** — the log answers `=== armados 1 enderecos ===` —
+and arms nothing. It cost a whole duel round until the hit that never came
+explained it.
+
+To measure the same function twice:
 
 ```
 clear
 bp 2a14c0 deref rdx 4
 ```
 
-### O endereço tem que ser o início de uma instrução
+### The address has to be the start of an instruction
 
-`bp` escreve `0xCC` no byte pedido, sem conferir se é o começo de uma
-instrução. Armado no meio de uma (`bp 26bdab`, dentro de um `movsd` de 5 bytes,
-em 14/09), só não derrubou o jogo porque o salto anterior desviou antes; o
-primeiro fluxo que passasse por ali executaria uma instrução cortada. Confira o
-endereço num objdump da faixa antes de armar, e mande `clear` se errou.
+`bp` writes `0xCC` at the byte asked for, without checking whether it is the
+start of an instruction. Armed in the middle of one (`bp 26bdab`, inside a
+5-byte `movsd`, on 14/09), it only failed to bring the game down because the
+previous jump branched away first; the first flow to pass through there would
+have executed a cut instruction. Check the address in an objdump of the range
+before arming, and send `clear` if you got it wrong.
 
-### A hora de cada alcance
+### The time of each hit
 
-A linha do alcance não tem hora. Para medir quanto tempo separa dois pontos
-(a mancha online: a chamada no quadro da morte, o job cinco segundos depois),
-carimbe o log por fora enquanto ele cresce:
+The hit line has no time. To measure how long separates two points (the
+online bloodstain: the call on the death's frame, the job five seconds
+later), stamp the log from outside while it grows:
 
 ```
 tail -n0 -F DS2_Trace.log | while IFS= read -r l; do echo "$(date +%T.%3N) $l"; done
 ```
 
-## A vigia de escrita: quem grava este endereço
+## The write watch: who writes this address
 
-`DS2_Trace.req` aceita, desde 13/09:
+`DS2_Trace.req` accepts, since 13/09:
 
 ```
-wp <endereço absoluto em hex> <bytes> [segundos, padrão 3, máximo 20]
+wp <hex absolute address> <bytes> [seconds, default 3, max 20]
 wpclear
 ```
 
-e responde, quando o prazo acaba, com **cada instrução distinta** que escreveu
-no intervalo, quantas vezes, os registradores do primeiro acerto e a pilha:
+and answers, when the deadline runs out, with **each distinct instruction**
+that wrote in that interval, how many times, the registers of the first hit
+and the stack:
 
 ```
 === vigia de escrita em 00007fffe3649ad0 encerrada (prazo): 5040 faltas na pagina, 2 instrucoes ===
@@ -263,66 +271,65 @@ no intervalo, quantas vezes, os registradores do primeiro acerto e a pilha:
   escreveu em +0x36df42 (180x) rax=00007fffe3649a40 ... rsi=00007fffe3650fc0 ... pilha: +0x370c0e ...
 ```
 
-Uma escrita por quadro aparece com ~60 acertos por segundo, e o registrador
-que aponta para a origem do valor costuma estar entre os de cima — foi assim
-que a posição do personagem foi seguida, em quatro passos, até o corpo do
-Havok.
+A write once per frame shows up at ~60 hits per second, and the register
+pointing at the value's source is usually among the top ones — that is how
+the character's position was followed, in four steps, to the Havok body.
 
-**Não é um watchpoint de hardware, e isso é de propósito.** Sob o Wine, os
-registradores de depuração de outra thread são gravados pelo wineserver via
-`ptrace`, e com `/proc/sys/kernel/yama/ptrace_scope = 1` (o valor desta
-máquina) esse attach é recusado e a gravação se perde sem erro. A vigia usa
-proteção de página: a página do alvo fica só-leitura, toda escrita nela falta
-com o endereço exato da instrução, e a página é liberada por uma instrução com
-o trap flag antes de ser protegida de novo.
+**It is not a hardware watchpoint, and that is on purpose.** Under Wine,
+another thread's debug registers are written by the wineserver through
+`ptrace`, and with `/proc/sys/kernel/yama/ptrace_scope = 1` (this machine's
+value) that attach is refused and the write is lost with no error. The watch
+uses page protection: the target's page is made read-only, every write to it
+faults with the instruction's exact address, and the page is released for one
+instruction with the trap flag before being protected again.
 
-O custo é que **toda** escrita na página de 4 KB falta, não só as do alvo —
-numa página de heap ao lado do `PlayerCtrl`, 5 a 15 mil faltas em 3 segundos.
-O jogo aguenta isso, mas por isso toda vigia tem prazo. Ela recusa páginas que
-não sejam de dados graváveis e convive com o single-step do
-`DS2_ForceMultiPlayZoneHook`.
+The cost is that **every** write to the 4 KB page faults, not only the
+target's — on a heap page next to `PlayerCtrl`, 5,000 to 15,000 faults in 3
+seconds. The game survives that, but it is why every watch has a deadline. It
+refuses pages that are not writable data and coexists with
+`DS2_ForceMultiPlayZoneHook`'s single-step.
 
-**Até 13/09 ela podia derrubar o jogo ao ser levantada.** Uma escrita que falta
-com a página ainda só-leitura pode chegar ao handler depois que a thread de
-pedidos desarmou; o handler via a vigia desligada, passava a falta adiante, e o
-processo morria com `0xC0000005`. Aconteceu numa página do
-`IngameCameraOperator` com 24 mil faltas por segundo, no instante exato em que
-a vigia encerrou. Agora a página da última vigia fica guardada, e uma escrita que
-falta nela com a página já gravável é só repetida. A DLL anterior ao commit
-`trace: a vigia de escrita nao derruba mais o jogo` ainda tem a corrida.
+**Until 13/09 it could bring the game down when it was lifted.** A write that
+faults while the page is still read-only can reach the handler after the
+request thread has disarmed; the handler saw the watch off, passed the fault
+on, and the process died with `0xC0000005`. It happened on an
+`IngameCameraOperator` page at 24,000 faults per second, at the exact instant
+the watch ended. Now the last watch's page is kept, and a write that faults on
+it with the page already writable is simply retried. The DLL from before the
+commit `trace: a vigia de escrita nao derruba mais o jogo` still has the race.
 
-### Quem **lê** este endereço: `wpr`
+### Who **reads** this address: `wpr`
 
 ```
-wpr <endereço absoluto em hex> <bytes> [segundos, padrão 3, máximo 20]
+wpr <hex absolute address> <bytes> [seconds, default 3, max 20]
 ```
 
-A mesma vigia com a página **inacessível** em vez de só-leitura: leituras e
-escritas do alvo aparecem, `leu em` ou `escreveu em`. Serve para achar quem
-consulta uma flag quando todo mundo passa por um getter que a listagem não
-mostra. Faltas de leitura em outras páginas continuam indo para o jogo antes do
-lock, como as do passeio pela pilha.
+The same watch with the page **inaccessible** instead of read-only: reads and
+writes of the target both show up, `leu em` or `escreveu em`. It is for
+finding who consults a flag when everybody goes through a getter the listing
+does not show. Read faults on other pages still go to the game before the
+lock, like the ones from the stack walk.
 
-Custa mais: numa página de heap ao lado do personagem, 850 mil faltas em 20 s,
-e o jogo aguentou. **Zero instruções não prova nada sem o controle**: em 14/09 o
-estado de hollow não teve leitor nenhum em 20 s, e o controle — o HP
-(`chr+0x168`), 9 instruções em 5 s — mostrou que a vigia estava vendo. Quem
-lia era o nível, em `PlayerParam+0x1ac`.
+It costs more: on a heap page next to the character, 850,000 faults in 20 s,
+and the game survived. **Zero instructions proves nothing without the
+control**: on 14/09 the hollow state had no reader at all in 20 s, and the
+control — HP (`chr+0x168`), 9 instructions in 5 s — showed the watch was
+seeing. What was reading it was the level, at `PlayerParam+0x1ac`.
 
-## A telemetria de posição não acompanha teleporte
+## The position telemetry does not follow a teleport
 
-`DS2_Nav.txt` (e portanto `where` e o `goto`) lê a posição de
-`*(*(*(ctx)+0xa8)+0xc0)+0xa8`, um bloco de dados sem vtable. Ele acompanha a
-caminhada, mas **não** acompanha uma posição escrita no corpo físico: depois de
-um teleporte de 69 m ele continuou mostrando a fogueira de onde o personagem
-saiu, enquanto o servidor e a tela já mostravam o destino. A posição viva é a
-translação do `PlayerCtrl` (`ctx+0xd0`, campo `+0x90`), que é o que o getter
-virtual `+0x148` do jogo devolve.
+`DS2_Nav.txt` (and therefore `where` and `goto`) reads the position from
+`*(*(*(ctx)+0xa8)+0xc0)+0xa8`, a data block with no vtable. It follows the
+walk, but it does **not** follow a position written into the physical body:
+after a 69 m teleport it kept showing the bonfire the character had left,
+while the server and the screen already showed the destination. The live
+position is the `PlayerCtrl`'s translation (`ctx+0xd0`, field `+0x90`), which
+is what the game's virtual getter `+0x148` returns.
 
-## O canal do co-op: `DS2_Channel.req`
+## The co-op channel: `DS2_Channel.req`
 
-`DS2_CoopChannelHook` (passo 7, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md),
-"A fogueira do host") responde `status` em `DS2_Channel.log`:
+`DS2_CoopChannelHook` (step 7, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md),
+"The host's bonfire") answers `status` in `DS2_Channel.log`:
 
 ```text
 === canal 7: polls=4657 estranhos=0 enviados=22 falhas=0 recebidos=0 recusados=0 eu=011000010afd1a3a ===
@@ -331,37 +338,39 @@ virtual `+0x148` do jogo devolve.
     do host: nada recebido
 ```
 
-- `polls` conta as chamadas ao poll da sessão; parado em sessão quer dizer que
-  o jogo não está consultando a sessão. `estranhos` é o detour chamado com um
-  objeto que não é `SteamSessionLight`.
-- `enviados`/`falhas` são os `SendP2PPacket` do host; `recebidos`/`recusados`,
-  os pacotes lidos no canal 7. Um host só envia, um convidado só recebe.
-- `sessao` lista os membros como o jogo os guarda, com `(host)` onde a marca
-  `+0xad` está ligada. Fora de sessão não há objeto e a linha some.
-- `local` é o que a thread do jogo publicou no último quadro; "ha" acima de 2 s
-  quer dizer carregamento, e o host para de anunciar.
-- `do host` é o último anúncio guardado; o renascer só o usa com menos de 30 s
-  e vindo de quem ainda é host.
+- `polls` counts the calls to the session poll; stuck while in a session
+  means the game is not consulting the session. `estranhos` is the detour
+  called with an object that is not a `SteamSessionLight`.
+- `enviados`/`falhas` are the host's `SendP2PPacket`; `recebidos`/`recusados`,
+  the packets read on channel 7. A host only sends, a guest only receives.
+- `sessao` lists the members as the game keeps them, with `(host)` where the
+  `+0xad` mark is set. Out of a session there is no object and the line
+  disappears.
+- `local` is what the game thread published on the last frame; a "ha" above
+  2 s means loading, and the host stops announcing.
+- `do host` is the last announcement kept; the respawn only uses it under
+  30 s old and from someone who is still the host.
 
-Fora do `status`, o log escreve uma linha quando os membros mudam, quando o
-anúncio muda (host) e quando o anúncio recebido muda (convidado).
+Outside `status`, the log writes a line when the members change, when the
+announcement changes (host) and when the received announcement changes
+(guest).
 
-## O carregamento por partes: `DS2_Backread.req`
+## Loading by parts: `DS2_Backread.req`
 
-`DS2_BackreadHook` (passo 8, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A
-fogueira de outro mapa") carrega um mapa ao lado do atual sem warp, e aceita um
-comando por linha:
+`DS2_BackreadHook` (step 8, [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), "A
+bonfire on another map") loads a map beside the current one without a warp,
+and accepts one command per line:
 
 ```
-load <mapa hex> [<máscara hex> x4]   força o mapa com essas partes (todas, por padrão); um mapa por vez
-focus <mapa hex> <x> <y> <z>         o streamer busca as partes a partir da célula dessa posição
-unfocus                              volta à célula do jogador
-clear                                solta o mapa pedido
-keep <índice> <ms> [<máscara hex> x4]  o que a cópia de outro jogador faz: força o mapa desse índice por um tempo
-status                               os mapas carregados ou forçados: estado, byte de forçar e as sete máscaras
+load <map hex> [<mask hex> x4]       forces the map with those parts (all, by default); one map at a time
+focus <map hex> <x> <y> <z>          the streamer fetches the parts from that position's cell
+unfocus                              back to the player's cell
+clear                                lets the requested map go
+keep <index> <ms> [<mask hex> x4]    what another player's copy does: forces that index's map for a while
+status                               the maps loaded or forced: state, force byte and the seven masks
 ```
 
-As respostas vão para `DS2_Backread.log`, e o renascer escreve ali também:
+The answers go to `DS2_Backread.log`, and the respawn writes there too:
 
 ```text
 13:31:43.984  === pedido: mapa 0a040000 partes ffffffffffffffffffffffffffffffff ===
@@ -372,93 +381,96 @@ As respostas vão para `DS2_Backread.log`, e o renascer escreve ali também:
 13:33:08.712  mapa 0a1f0000 nao e mais de ninguem; solto
 ```
 
-Os mapas medidos: Majula é `0a040000`, índice 1; Heide é `0a1f0000`, índice
-12. Uma célula -2 no foco é uma exceção dentro da busca do jogo; -1 é sem mapa
-de navegação ainda, ou sem célula a 10 unidades do ponto. Enquanto não houver
-célula, o foco tenta de novo a cada 15 quadros e o streamer segue com a do
-jogador.
+The maps measured: Majula is `0a040000`, index 1; Heide is `0a1f0000`, index
+12. A cell of -2 in the focus is an exception inside the game's search; -1 is
+no navigation map yet, or no cell within 10 units of the point. While there
+is no cell, the focus tries again every 15 frames and the streamer carries on
+with the player's.
 
-**Levar um personagem a outro mapa sem warp**, na ordem que funcionou:
+**Taking a character to another map with no warp**, in the order that worked:
 
-1. `load <mapa>` e esperar `estado 4 -> 5`;
-2. `focus <mapa> x y z` no ponto de chegada, e esperar a linha da célula;
-3. teleportar para o ponto (a receita de "Teleporte sem warp" em
-   DS2_SEAMLESS_COOP.md), um pouco acima do chão;
-4. `unfocus` e `clear` só depois de o personagem estar de pé lá. Soltar antes
-   deixou o Samuel numa pedra de Majula no ponto da fogueira de Heide.
+1. `load <map>` and wait for `estado 4 -> 5`;
+2. `focus <map> x y z` at the arrival point, and wait for the cell's line;
+3. teleport to the point (the "Teleport without a warp" recipe in
+   DS2_SEAMLESS_COOP.md), a little above the ground;
+4. `unfocus` and `clear` only after the character is standing there. Letting
+   go earlier left Samuel on a Majula rock at the point of Heide's bonfire.
 
-O byte de forçar e as máscaras são memória viva de objetos refeitos a cada
-carga: um warp apaga tudo, e o pedido vale só até lá.
+The force byte and the masks are live memory of objects rebuilt on every
+load: a warp wipes everything, and the request is only good until then.
 
-## Onde o jogo quebra: `DS2_Crash.log`
+## Where the game breaks: `DS2_Crash.log`
 
-`DS2_CrashHook` fica sempre ligado no DS2. Um handler vetorizado anota uma
-violação de acesso, instrução ilegal, instrução privilegiada ou estouro de
-pilha **com a instrução dentro da imagem do jogo**: o offset, o endereço lido
-ou escrito, os registradores e até 24 endereços de retorno do jogo achados nas
-256 palavras de cima da pilha. Depois deixa a exceção seguir. Escreve sem heap,
-no máximo 32 por boot, e cada boot abre com
+`DS2_CrashHook` is always on in DS2. A vectored handler records an access
+violation, an illegal instruction, a privileged instruction or a stack
+overflow **with the instruction inside the game's image**: the offset, the
+address read or written, the registers and up to 24 of the game's return
+addresses found in the top 256 words of the stack. Then it lets the exception
+carry on. It writes without the heap, at most 32 per boot, and every boot
+opens with
 
 ```text
 === ds2os: vigia de excecoes no jogo ===
 ```
 
-Um log só com essa linha, num jogo que fechou, quer dizer que a falta não foi
-numa instrução do jogo — ou que o processo morreu sem exceção. As leituras
-protegidas dos hooks nunca aparecem ali: a instrução delas é da DLL.
+A log with only that line, on a game that closed, means the fault was not on
+a game instruction — or that the process died without an exception. The
+hooks' guarded reads never show up there: their instruction belongs to the
+DLL.
 
-## As consultas de EzState: `esd` no `DS2_Trace.req`
+## The EzState queries: `esd` in `DS2_Trace.req`
 
 ```
-esd <ms> [rotulo]
+esd <ms> [label]
 ```
 
-Liga por `<ms>` (até 20000) um registro de toda consulta de ambiente de
-EzState que o jogo avalia, nos dois avaliadores: o despachante
-`FUN_140456a90` (marcado `e`) e o interno `FUN_14045c6a0`, que os scripts de
-evento de mapa chamam direto (marcado `i`). No fim da janela o
-`DS2_Trace.log` recebe uma linha por id:
+Turns on, for `<ms>` (up to 20000), a record of every EzState environment
+query the game evaluates, in both evaluators: the dispatcher `FUN_140456a90`
+(marked `e`) and the inner `FUN_14045c6a0`, which the map event scripts call
+directly (marked `i`). At the end of the window `DS2_Trace.log` gets one line
+per id:
 
     esd sozinho e 0001fcfd (130301) x150: 000011e4/2
 
-o id em hex e decimal, quantas vezes foi consultado e até quatro respostas
-distintas (`valor/tipo`; tipo 2 é número). Serve para achar a consulta que um
-script usa para decidir algo: rode a mesma ação com e sem a condição, com
-rótulos diferentes, e compare. Os detours ficam instalados sempre; fora da
-janela custam uma leitura atômica por consulta.
+the id in hex and decimal, how many times it was queried and up to four
+distinct answers (`valor/tipo`; type 2 is a number). It is for finding the
+query a script uses to decide something: run the same action with and without
+the condition, with different labels, and compare. The detours stay installed
+all the time; outside the window they cost one atomic read per query.
 
-Medido 15/09: descansar na fogueira com e sem sessão deu as mesmas quatro
-consultas, então aquela trava não passa por aqui.
+Measured 15/09: resting at the bonfire with and without a session gave the
+same four queries, so that lock does not go through here.
 
-## A varredura de breakpoints, com a lista vinda do Ghidra
+## The breakpoint sweep, with the list coming from Ghidra
 
-O `pdata.py` mencionado acima não existe mais. `Entries.java`, em
-`/home/suel/tools/scripts`, faz o mesmo trabalho lendo a lista de funções do
-próprio Ghidra e imprimindo os **deslocamentos de módulo**, um por linha:
+The `pdata.py` mentioned above no longer exists. `Entries.java`, in
+`/home/suel/tools/scripts`, does the same job by reading Ghidra's own
+function list and printing the **module offsets**, one per line:
 
 ```
-analyzeHeadless ... -postScript Entries.java <saida> 0x140270000 0x1402a0000
+analyzeHeadless ... -postScript Entries.java <output> 0x140270000 0x1402a0000
 ```
 
-O método, confirmado em 12/09 achando o que o botão A numa placa de invocação
-alcança:
+The method, confirmed on 12/09 by finding what the A button on a summon sign
+reaches:
 
-1. `head -520 <saida> | sed 's/^/bp /' > <install>/DS2_Trace.req`
-   (acima de ~600 o jogo fica instável, e 3229 já matou o processo)
-2. deixe o jogo parado uns quinze segundos: o que roda por quadro dispara e se
-   desarma sozinho
-3. **apague o `DS2_Trace.log`** — é o que separa o ruído do que você quer
-4. aperte o botão
-5. o que aparecer no log novo é o que a ação alcançou
+1. `head -520 <output> | sed 's/^/bp /' > <install>/DS2_Trace.req`
+   (above ~600 the game gets unstable, and 3229 has killed the process)
+2. leave the game idle for about fifteen seconds: what runs per frame fires
+   and disarms itself
+3. **wipe `DS2_Trace.log`** — that is what separates the noise from what you
+   want
+4. press the button
+5. whatever shows up in the new log is what the action reached
 
-Na prática o primeiro toque (abrir o diálogo "Summon this dark spirit?") deixou
-duas funções: uma é alocador de pool, o que por si só diz que o toque
-**alocou** alguma coisa. O confirme deixou onze, com as pilhas inteiras.
+In practice the first touch (opening the "Summon this dark spirit?" dialog)
+left two functions: one is a pool allocator, which on its own says the touch
+**allocated** something. The confirm left eleven, with their full stacks.
 
-Vale saber o que o ruído parece: `FUN_140279d50` é inicialização de free-list,
-e `FUN_140276050`/`FUN_140276110` são invólucros de envio de pedido — pegam um
-subsistema, pedem um id ao objeto pelo slot virtual `+0x58` e repassam. Um
-alvo de verdade tem os campos do pedido nas mãos.
+It is worth knowing what the noise looks like: `FUN_140279d50` is free-list
+initialisation, and `FUN_140276050`/`FUN_140276110` are request-send wrappers
+— they take a subsystem, ask the object for an id through virtual slot
+`+0x58` and pass it on. A real target has the request's fields in hand.
 
 ## Reading the binary
 

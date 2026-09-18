@@ -1,173 +1,174 @@
-# Seamless Co-op no DS2: o desenho
+# Seamless Co-op in DS2: the design
 
-Este documento é o **enunciado**, não o relatório. Ele diz o que o mod deve
-ser; o que já foi medido do jogo está em
-[DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), e o que falta construir, em
-ordem, está em [DS2_SEAMLESS_COOP_TASKS.md](DS2_SEAMLESS_COOP_TASKS.md).
+This document is the **brief**, not the report. It says what the mod should
+be; what has already been measured from the game is in
+[DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md), and what is left to build, in
+order, is in [DS2_SEAMLESS_COOP_TASKS.md](DS2_SEAMLESS_COOP_TASKS.md).
 
-As decisões abaixo são do dono do projeto, registradas em 12/09. Onde eu
-acrescentei alguma coisa, está marcado como **nota de engenharia** — isso é
-observação minha sobre custo ou risco, e não muda a decisão.
+The decisions below are the project owner's, recorded on 12/09. Where I added
+something, it is marked as an **engineering note** — that is my own
+observation about cost or risk, and it does not change the decision.
 
-## O princípio
+## The principle
 
-> **O host define o estado do mundo da sessão, mas cada jogador continua com
-> seu próprio personagem e seu próprio save.**
+> **The host defines the session's world state, but each player keeps their
+> own character and their own save.**
 
-Não existe save compartilhado. O convidado entra no mundo do host com o
-personagem dele — mesmas armas, magias, atributos, itens, almas, nível, Soul
-Memory — e o que muda é só **em qual mundo ele está jogando naquele momento**.
+There is no shared save. The guest enters the host's world with his own
+character — same weapons, spells, stats, items, souls, level, Soul Memory —
+and the only thing that changes is **which world he is playing in at that
+moment**.
 
-A diferença para o multiplayer original é essa: o segundo jogador deixa de ser
-um fantasma temporário e passa a ser um personagem persistente participando da
-mesma campanha.
+That is the difference from the original multiplayer: the second player stops
+being a temporary phantom and becomes a persistent character taking part in
+the same campaign.
 
-    antes:  summon → área → boss → fantasma some → efígie → novo summon
-    depois: entra uma vez → Forest → Bastille → Iron Keep → ... → Nashandra
+    before: summon → area → boss → phantom vanishes → effigy → new summon
+    after:  enters once → Forest → Bastille → Iron Keep → ... → Nashandra
 
-## O que é do host e o que é de cada jogador
+## What belongs to the host and what belongs to each player
 
-| pertence ao **mundo do host** | pertence a **cada jogador** |
+| belongs to the **host's world** | belongs to **each player** |
 | --- | --- |
-| bosses já mortos antes da sessão | personagem, nível, atributos |
-| portas, alavancas, elevadores, atalhos | inventário, armas, anéis, magias |
-| illusory walls, mecanismos de Pharros | almas e bloodstain |
-| estado de NPC e quests | hollowing e forma humana |
-| intensidade de fogueira (Bonfire Ascetic) | covenant |
-| despawn de inimigos | Soul Memory |
-| Company of Champions (dificuldade) | loot recolhido |
+| bosses already killed before the session | character, level, stats |
+| doors, levers, elevators, shortcuts | inventory, weapons, rings, spells |
+| illusory walls, Pharros mechanisms | souls and bloodstain |
+| NPC and quest state | hollowing and human form |
+| bonfire intensity (Bonfire Ascetic) | covenant |
+| enemy despawn | Soul Memory |
+| Company of Champions (difficulty) | loot picked up |
 
-## Progresso: o que atravessa para o save de quem entrou
+## Progress: what crosses into the joining player's save
 
-**O progresso anterior do host não é copiado.** Entrar no mundo de alguém mais
-avançado não pode completar retroativamente o jogo de quem entrou.
+**The host's earlier progress is not copied.** Entering the world of someone
+further along cannot retroactively complete the joining player's game.
 
-    A: Pursuer morto        B entra no mundo de A
-    B: Pursuer vivo         → B não encontra o Pursuer na sessão
-                            → o save de B continua com o Pursuer vivo
-                            → de volta ao mundo dele, o Pursuer está lá
+    A: Pursuer dead         B enters A's world
+    B: Pursuer alive        → B does not meet the Pursuer in the session
+                            → B's save still has the Pursuer alive
+                            → back in his own world, the Pursuer is there
 
-**O que vocês fizerem juntos é salvo para todos.** Se os dois matam a Lost
-Sinner na sessão, os dois saves ficam com a Lost Sinner morta, e ela continua
-morta quando o convidado volta para o próprio mundo. É isso que permite fazer
-a campanha inteira sem repetir cada chefe no mundo de cada um.
+**What you do together is saved for everyone.** If the two of you kill the
+Lost Sinner in the session, both saves end up with the Lost Sinner dead, and
+she stays dead when the guest goes back to his own world. That is what makes
+it possible to play the whole campaign without repeating every boss in each
+player's world.
 
-O mesmo vale para quests feitas juntos. Para estátuas e mecanismos
-secundários, sincroniza quando os dois estavam presentes; para quests
-importantes, sincroniza.
+The same goes for quests done together. For statues and secondary mechanisms,
+it syncs when both were present; for important quests, it syncs.
 
-**Loot é individual.** Um baú com um Estus Flask Shard entrega o item a cada
-jogador que o abre. Vale para titanite, armas, anéis, Estus Shards, Sublime
-Bone Dust, Fragrant Branches e Pharros Lockstones — sem isso a campanha
-cooperativa quebra.
+**Loot is individual.** A chest with an Estus Flask Shard hands the item to
+each player who opens it. That goes for titanite, weapons, rings, Estus
+Shards, Sublime Bone Dust, Fragrant Branches and Pharros Lockstones — without
+it the co-op campaign breaks.
 
-**Almas de boss são de todos.** Cada participante recebe as almas, a alma do
-boss e o item. Não existe a recompensa reduzida do multiplayer original.
+**Boss souls belong to everyone.** Each participant gets the souls, the boss
+soul and the item. There is none of the original multiplayer's reduced reward.
 
-**Bonfire Ascetic não sincroniza.** A intensidade é do mundo do host. O
-convidado joga na intensidade do host durante a sessão, mas o mundo dele não
-sobe de intensidade por causa disso.
+**Bonfire Ascetic does not sync.** The intensity belongs to the host's world.
+The guest plays at the host's intensity during the session, but his own world
+does not go up in intensity because of it.
 
-**Despawn de inimigos segue o host** durante a sessão, e não marca as mortes
-no save de quem entrou.
+**Enemy despawn follows the host** during the session, and does not record the
+kills in the joining player's save.
 
-## Morte
+## Death
 
-Fora de boss:
+Outside a boss fight:
 
-    jogador morre → perde as almas carregadas → bloodstain no lugar da morte
-                  → respawna na última fogueira → continua na sessão
-                  → volta andando até o grupo
+    player dies → loses the souls carried → bloodstain where he died
+                → respawns at the last bonfire → stays in the session
+                → walks back to the group
 
-O host continua jogando normalmente. Não é preciso soapstone, Name-engraved
-Ring nem novo summon.
+The host keeps playing normally. No soapstone, Name-engraved Ring or new
+summon is needed.
 
-Hollowing continua valendo: morrer reduz o HP máximo até os limites normais do
-DS2, o Ring of Binding continua atenuando, e a Human Effigy continua servindo
-para restaurar humanidade e HP — **sem desconectar da sessão**. O que a efígie
-deixa de fazer é liberar o multiplayer; isso passa a ser sempre permitido.
+Hollowing still applies: dying cuts maximum HP down to DS2's normal limits,
+the Ring of Binding still softens it, and the Human Effigy still restores
+humanity and HP — **without disconnecting from the session**. What the effigy
+stops doing is unlocking multiplayer; that becomes always allowed.
 
-Em luta de boss:
+In a boss fight:
 
-    jogador morre → modo espectador, assistindo quem ainda está vivo
-    todos morrem  → party wipe: o boss volta ao estado inicial,
-                    todos reaparecem, a sessão continua
-    alguém mata   → vitória vale para todos, inclusive para quem morreu antes
+    a player dies → spectator mode, watching whoever is still alive
+    everyone dies → party wipe: the boss returns to its initial state,
+                    everyone reappears, the session continues
+    someone kills → the win counts for everyone, including whoever died first
 
-O host morrer **não** encerra a sessão: ele também vira espectador e o
-convidado pode terminar a luta.
+The host dying does **not** end the session: he becomes a spectator too and
+the guest can finish the fight.
 
-## Mundo e deslocamento
+## World and travel
 
-Descansar numa fogueira **reseta o mundo para todo mundo**: inimigos voltam,
-objetos quebráveis voltam, invasões de NPC podem reiniciar, o estado de
-combate é limpo. **Sem aviso na tela**: uma caixa modal no meio da luta era
-pior que nenhum aviso (decidido 15/09).
+Resting at a bonfire **resets the world for everyone**: enemies come back,
+breakable objects come back, NPC invasions can restart, combat state is
+cleared. **No on-screen warning**: a modal box in the middle of a fight was
+worse than no warning at all (decided 15/09).
 
-Qualquer jogador descansa, não só o host, e o descanso de qualquer um
-reseta o mundo para todos. A cura é de quem sentou: o descanso do host **não**
-cura o convidado, e o convidado que quer a cura senta na fogueira (decidido
-15/09).
+Any player rests, not just the host, and anyone's rest resets the world for
+everyone. The healing belongs to whoever sat down: the host's rest does
+**not** heal the guest, and a guest who wants the healing sits at the bonfire
+himself (decided 15/09).
 
-Fast travel move o grupo inteiro, com votação, e qualquer jogador pode
-propor. A pergunta diz para onde, com fogueira e área:
+Fast travel moves the whole group, by vote, and any player can propose it. The
+question says where to, with bonfire and area:
 
     The host wants to travel to The Far Fire (Majula). Travel together?
-    A ✓  B ✓  C ✓   → party inteira viaja
+    A ✓  B ✓  C ✓   → the whole party travels
 
-Uma proposta para uma fogueira que o host não acendeu é cancelada com aviso a
-quem propôs.
+A proposal for a bonfire the host has not lit is cancelled, with a warning to
+whoever proposed it.
 
-Portas, alavancas, elevadores, atalhos, illusory walls e mecanismos de Pharros
-são sincronizados: o mundo da sessão tem um estado autoritativo. Quem usa a
-Pharros Lockstone gasta a própria; ninguém mais perde uma. Se o convidado
-voltar ao próprio mundo, o mecanismo lá continua fechado — Pharros conta como
-interação de mundo, não como progresso de boss.
+Doors, levers, elevators, shortcuts, illusory walls and Pharros mechanisms are
+synchronised: the session's world has one authoritative state. Whoever uses
+the Pharros Lockstone spends his own; nobody else loses one. If the guest goes
+back to his own world, the mechanism there is still closed — Pharros counts as
+world interaction, not as boss progress.
 
-## Matchmaking, covenants e invasões
+## Matchmaking, covenants and invasions
 
-**Soul Memory deixa de limitar quem joga com quem.** Continua existindo no
-save, mas não decide conexão: a entrada é por senha.
+**Soul Memory stops limiting who plays with whom.** It still exists in the
+save, but it does not decide the connection: entry is by password.
 
-Covenant é individual e não muda ao entrar numa sessão; as recompensas também
-continuam individuais. Se o host estiver em Company of Champions, o mundo
-assume a dificuldade dele para todos, sem alterar o covenant de ninguém.
+The covenant is individual and does not change on joining a session; the
+rewards stay individual too. If the host is in Company of Champions, the world
+takes his difficulty for everyone, without changing anybody's covenant.
 
-Invasões são opcionais (`allow_invasions`). Com elas ligadas, um Dark Spirit
-invade a sessão e enfrenta o grupo — 3v1, ou com balanceamento para mais de um
-invasor.
+Invasions are optional (`allow_invasions`). With them on, a Dark Spirit
+invades the session and faces the group — 3v1, or balanced for more than one
+invader.
 
-## Ciclo de vida da sessão
+## Session lifecycle
 
-    A abre o jogo, cria a sessão
-    B entra por senha
-    o mundo passa a ser o estado de A
-    jogam
-    B sai  → volta ao próprio mundo levando tudo que conquistou
-    A sai  → a party é desfeita e todos voltam aos próprios mundos
+    A opens the game, creates the session
+    B joins by password
+    the world becomes A's state
+    they play
+    B leaves → goes back to his own world with everything he earned
+    A leaves → the party is dissolved and everyone returns to their own world
 
-**Não existe migração de host.** Se o host sai, a sessão acaba: o estado de
-mundo de outro jogador é diferente, e promover alguém a host produziria
-inconsistência. Pelo mesmo motivo, uma campanha deve manter **sempre o mesmo
-host** — trocar de host entre sessões faz flags de NPC andarem para trás.
+**There is no host migration.** If the host leaves, the session ends: another
+player's world state is different, and promoting someone to host would produce
+inconsistency. For the same reason, a campaign should keep **always the same
+host** — switching hosts between sessions makes NPC flags run backwards.
 
-## Notas de engenharia
+## Engineering notes
 
-Estas não mudam o desenho; dizem o que ele custa.
+These do not change the design; they say what it costs.
 
-- **O buraco arquitetural é a sessão, não o warp.** Hoje uma morte desfaz a
-  sessão e o jogo nunca carrega área nenhuma para um convidado dentro do mundo
-  do host. Quase todo o resto desta lista depende de resolver isso primeiro —
-  respawn, espectador, party wipe, fast travel em grupo e reset de fogueira só
-  fazem sentido quando a sessão sobrevive.
-- **Três jogadores não são testáveis nesta máquina.** São duas contas Steam, e
-  a sessão é peer to peer por Steam id. Tudo sobre 3+ jogadores (espectador com
-  dois vivos, party wipe de três, 3v1) fica sem verificação local até existir
-  uma terceira conta.
-- **Save é a segunda metade do problema.** "O que fizemos juntos entra nos dois
-  saves" exige que o cliente do convidado escreva no próprio save flags de um
-  mundo que não é o dele. Isso não foi investigado ainda, e é provavelmente o
-  maior trabalho depois da sessão.
-- **Quests de NPC são o item mais caro da lista** e o mais fácil de corromper
-  save. Convém deixá-las para o fim, atrás de bosses e de flags de mundo, que
-  são mais simples e mais fáceis de verificar.
+- **The architectural hole is the session, not the warp.** Today a death tears
+  the session down and the game never loads any area for a guest inside the
+  host's world. Almost everything else on this list depends on solving that
+  first — respawn, spectator, party wipe, group fast travel and bonfire reset
+  only make sense once the session survives.
+- **Three players are not testable on this machine.** There are two Steam
+  accounts, and the session is peer to peer keyed on Steam id. Anything about
+  3+ players (spectator with two alive, a three-way party wipe, 3v1) goes
+  unverified locally until a third account exists.
+- **The save is the second half of the problem.** "What we did together goes
+  into both saves" requires the guest's client to write into its own save
+  flags from a world that is not its own. That has not been investigated yet,
+  and it is probably the biggest job after the session.
+- **NPC quests are the most expensive item on the list** and the easiest way
+  to corrupt a save. Better to leave them for last, behind bosses and world
+  flags, which are simpler and easier to verify.

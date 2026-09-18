@@ -15,7 +15,7 @@
 ///
 /// `DS2_Party.req` takes one order per line and `DS2_Party.log` answers:
 ///
-///   placa <tipo>   places this player's own sign, as the soapstone would
+///   placa <type>   places this player's own sign, as the soapstone would
 ///   status         what the sign manager holds
 ///   pausa, retoma  stop and resume placing and accepting (DS2PartyGuest,
 ///                  DS2PartyAccept), e.g. to end a session for good
