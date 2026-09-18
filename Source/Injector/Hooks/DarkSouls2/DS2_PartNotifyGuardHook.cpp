@@ -157,7 +157,10 @@ namespace
         const LONG Attached = DetourAttach(Original, Hook);
         if (Attached != NO_ERROR)
         {
-            DetourTransactionAbort();
+            // Closed with a commit rather than an abort: the abort is not in
+            // every build of Detours this tree compiles against, and a commit
+            // with nothing pending is harmless.
+            DetourTransactionCommit();
             Error("[DS2PartNotifyGuard] nao consegui desviar +0x%zx: DetourAttach deu %ld.", Offset, Attached);
             return false;
         }
