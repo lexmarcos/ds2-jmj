@@ -145,6 +145,86 @@ namespace
         return Used - Start;
     }
 
+    // The one exception that kills the process, wherever it happened. The
+    // vectored handler above only writes faults inside the game's image, on
+    // purpose: every guarded read in the injector faults first-chance outside
+    // it and is then handled, and those would drown the log. Measured 18/09:
+    // the host died on the real Brume Tower's teardown with exit code
+    // 0xC0000005 and not one line here, so the fault was outside the image.
+    // This filter only runs for an exception nobody handled.
+    LPTOP_LEVEL_EXCEPTION_FILTER s_previous_filter = nullptr;
+    uintptr_t s_self_base = 0;
+    uintptr_t s_self_end = 0;
+
+    int DescribeAddress(char* Text, int Used, int Size, uintptr_t Address)
+    {
+        if (InGame(Address))
+        {
+            return snprintf(Text + Used, Size - Used, "DarkSoulsII.exe+0x%llx", (unsigned long long)(Address - s_base));
+        }
+        if (Address >= s_self_base && Address < s_self_end)
+        {
+            return snprintf(Text + Used, Size - Used, "Injector.dll+0x%llx", (unsigned long long)(Address - s_self_base));
+        }
+        HMODULE Module = nullptr;
+        char Name[MAX_PATH] = {};
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                (LPCSTR)Address, &Module) && Module != nullptr && GetModuleFileNameA(Module, Name, sizeof(Name)) != 0)
+        {
+            const char* Base = strrchr(Name, '\\');
+            return snprintf(Text + Used, Size - Used, "%s+0x%llx", Base != nullptr ? Base + 1 : Name,
+                (unsigned long long)(Address - (uintptr_t)Module));
+        }
+        return snprintf(Text + Used, Size - Used, "%p (no module)", (void*)Address);
+    }
+
+    LONG WINAPI FatalFilter(EXCEPTION_POINTERS* Info)
+    {
+        const EXCEPTION_RECORD* Record = Info->ExceptionRecord;
+        const CONTEXT* Context = Info->ContextRecord;
+        SYSTEMTIME Now;
+        GetLocalTime(&Now);
+        char Text[4096];
+        int Used = snprintf(Text, sizeof(Text), "%02u:%02u:%02u.%03u  FATAL exception %08lx at ", Now.wHour, Now.wMinute,
+            Now.wSecond, Now.wMilliseconds, (unsigned long)Record->ExceptionCode);
+        Used += DescribeAddress(Text, Used, (int)sizeof(Text), (uintptr_t)Context->Rip);
+        Used += snprintf(Text + Used, sizeof(Text) - Used,
+            " (thread %lu), %s 0x%llx\n    rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx rsi=%016llx rdi=%016llx\n"
+            "    r8 =%016llx r9 =%016llx r12=%016llx r13=%016llx r14=%016llx r15=%016llx rsp=%016llx\n    stack:",
+            GetCurrentThreadId(),
+            Record->NumberParameters >= 2 ? (Record->ExceptionInformation[0] == 1 ? "writing" :
+                (Record->ExceptionInformation[0] == 8 ? "executing" : "reading")) : "at",
+            Record->NumberParameters >= 2 ? (unsigned long long)Record->ExceptionInformation[1] : 0ull,
+            (unsigned long long)Context->Rax, (unsigned long long)Context->Rbx, (unsigned long long)Context->Rcx,
+            (unsigned long long)Context->Rdx, (unsigned long long)Context->Rsi, (unsigned long long)Context->Rdi,
+            (unsigned long long)Context->R8, (unsigned long long)Context->R9, (unsigned long long)Context->R12,
+            (unsigned long long)Context->R13, (unsigned long long)Context->R14, (unsigned long long)Context->R15,
+            (unsigned long long)Context->Rsp);
+        if (Record->ExceptionCode != EXCEPTION_STACK_OVERFLOW)
+        {
+            const uintptr_t* Stack = (const uintptr_t*)Context->Rsp;
+            int Found = 0;
+            for (int i = 0; i < kStackWords && Found < kMaxReturns && Used < (int)sizeof(Text) - 64; ++i)
+            {
+                MEMORY_BASIC_INFORMATION Region;
+                if (i % 32 == 0 && (VirtualQuery(Stack + i, &Region, sizeof(Region)) == 0 || Region.State != MEM_COMMIT))
+                {
+                    break;
+                }
+                const uintptr_t Word = Stack[i];
+                if (InGame(Word) || (Word >= s_self_base && Word < s_self_end))
+                {
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, " ");
+                    Used += DescribeAddress(Text, Used, (int)sizeof(Text), Word);
+                    ++Found;
+                }
+            }
+        }
+        Used += snprintf(Text + Used, sizeof(Text) - Used, "\n");
+        Write(Text, (size_t)Used < sizeof(Text) ? (size_t)Used : sizeof(Text) - 1);
+        return s_previous_filter != nullptr ? s_previous_filter(Info) : EXCEPTION_CONTINUE_SEARCH;
+    }
+
     LONG CALLBACK Handler(EXCEPTION_POINTERS* Info)
     {
         const EXCEPTION_RECORD* Record = Info->ExceptionRecord;
@@ -172,8 +252,8 @@ namespace
             "    retornos no jogo:",
             Now.wHour, Now.wMinute, Now.wSecond, Now.wMilliseconds, (unsigned long)Code,
             (unsigned long long)(Context->Rip - s_base), GetCurrentThreadId(),
-            Record->NumberParameters >= 2 ? (Record->ExceptionInformation[0] == 1 ? "escrevendo" :
-                (Record->ExceptionInformation[0] == 8 ? "executando" : "lendo")) : "em",
+            Record->NumberParameters >= 2 ? (Record->ExceptionInformation[0] == 1 ? "writing" :
+                (Record->ExceptionInformation[0] == 8 ? "executing" : "reading")) : "at",
             Record->NumberParameters >= 2 ? (unsigned long long)Record->ExceptionInformation[1] : 0ull,
             (unsigned long long)Context->Rax, (unsigned long long)Context->Rbx, (unsigned long long)Context->Rcx,
             (unsigned long long)Context->Rdx, (unsigned long long)Context->Rsi, (unsigned long long)Context->Rdi,
@@ -350,6 +430,19 @@ bool DS2_CrashHook::Install(Injector& injector)
 
     const std::wstring Path = (injector.GetDllPath() / "DS2_Crash.log").wstring();
     wcsncpy_s(s_log_path, Path.c_str(), _TRUNCATE);
+
+    {
+        HMODULE Self = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                (LPCSTR)&FatalFilter, &Self) && Self != nullptr)
+        {
+            const IMAGE_DOS_HEADER* SelfDos = (const IMAGE_DOS_HEADER*)Self;
+            const IMAGE_NT_HEADERS64* SelfNt = (const IMAGE_NT_HEADERS64*)((uintptr_t)Self + SelfDos->e_lfanew);
+            s_self_base = (uintptr_t)Self;
+            s_self_end = s_self_base + SelfNt->OptionalHeader.SizeOfImage;
+        }
+    }
+    s_previous_filter = SetUnhandledExceptionFilter(FatalFilter);
 
     s_handler = AddVectoredExceptionHandler(1, Handler);
     if (s_handler == nullptr)
