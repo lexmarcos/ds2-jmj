@@ -12,6 +12,12 @@ Written material lives in `docs/`; `docs/README.md` is the index.
 `docs/DS2_MAJULA_MULTIPLAYER.md` is the closest thing to a reference for what
 the injector actually does and why.
 
+**Everything written into the repo is in English**: documentation, commit
+messages, code comments, log strings and the harness's own output. Talking to
+the user is in Portuguese; what gets committed is not. Parts of the injector
+and of `docs/` are still in Portuguese from earlier work — leave them be unless
+you are already editing that passage, and write the new text in English.
+
 **The standing goal is seamless co-op**, and it is written down rather than
 carried in anyone's head. `docs/DS2_SEAMLESS_COOP_DESIGN.md` is the brief —
 the host owns the world, each player keeps their own save, and everything that
