@@ -1764,6 +1764,26 @@ is noted as a possible lever if the crash comes back.
 
 ---
 
+### The guest's object sync dies with the map the session began in (18/09)
+
+The crash that followed the guest through every group travel for two days was
+the object sync writing into freed memory. On a guest the sync binds once, at
+the join, to the object table of the session's map (`FUN_140517880`), and only a
+real load binds it again; travel here is not a real load. When the backread
+lets that map go, the host's object packets keep arriving and `FUN_140518920`
+writes each one into a block that has since become a `MapEntity`.
+
+`DS2_BonfireInSession_ForgetSyncedMap` now drops the records (count at `+0xc`)
+and closes the guest's rebuild gate (`+0x198`) as that map's release begins.
+
+- **Missing:** the cost. From the first time the guest leaves the map the session
+  began in, the host's object state (the kind-0x14 packets) no longer reaches
+  that guest for the rest of the session. What those 56 objects are, and what a
+  player would notice, is not measured.
+- **Missing:** the real fix, which is to rebind the sync to the map the group is
+  actually in after each travel. That needs the world's per-map object table
+  for the destination to be the one the rebuild reads, and it is not today.
+
 ## M9 — spectator and party wipe
 
 A death inside a boss fight becomes spectator mode; everyone dead is a party

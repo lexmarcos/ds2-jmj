@@ -394,6 +394,9 @@ namespace
     // session's own idea of the current map, which on a guest stays the map the
     // session began in. See DS2_BonfireInSession_ForgetSyncedMap.
     constexpr size_t kSyncMap = 0x18;
+    // A byte: on a guest, FUN_1405170e0 rebuilds the sync in state 0 only while
+    // this is set.
+    constexpr size_t kSyncGuestGate = 0x198;
 
     // A travel the game itself starts, the way FUN_14017fdb0 does once a
     // bonfire is picked: FUN_1401843b0(&request, id, 2) builds it,
@@ -2355,8 +2358,23 @@ void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map)
     }
     const uint32_t Zero = 0;
     WriteBytes(Sync + kSyncCount, &Zero, sizeof(Zero));
-    Append(StringFormat("object sync: map %08x is going and the sync was bound to it; dropped its %u records\n",
-        Map, Count));
+
+    // And it must not bind itself again. On a guest, state 0 rebuilds the sync
+    // (FUN_140517880) as soon as the world says it is loaded and the byte at
+    // +0x198 is set, and the rebuild asks for the object table of the session's
+    // map - the one being released here. Measured 18/09 with only the count
+    // dropped: the sync read state 0 after the crash, and the guest died about
+    // a second after the first return to Majula, with the rebuild's own stores
+    // into the object blocks in the shape of the damage. Closing the gate keeps
+    // the sync empty for the rest of the session; the cost is that the host's
+    // object state stops reaching this guest, which is written down in
+    // docs/DS2_SEAMLESS_COOP_TASKS.md.
+    uint8_t Gate = 0;
+    ReadBytes(Sync + kSyncGuestGate, &Gate, sizeof(Gate));
+    const uint8_t Closed = 0;
+    WriteBytes(Sync + kSyncGuestGate, &Closed, sizeof(Closed));
+    Append(StringFormat("object sync: map %08x is going and the sync was bound to it; dropped its %u records "
+        "and closed the rebuild gate (was %u)\n", Map, Count, (unsigned)Gate));
 #endif
 }
 
