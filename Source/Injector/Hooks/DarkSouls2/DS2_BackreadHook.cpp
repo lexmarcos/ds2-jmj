@@ -242,10 +242,140 @@ namespace
     std::atomic<uint64_t> s_caught_update{ 0 };
     std::atomic<uint64_t> s_not_owner{ 0 };
 
+    // Every part bit this hook has ever turned on, per map index, and when a
+    // release of that map began.
+    //
+    // The bits were only ever OR'd and never taken back, so a map was let go
+    // with all of its parts still asked for. The owner's state machine then
+    // tore it down without ever deactivating them, and whatever the parts had
+    // registered themselves in - the notify list at +0x38, the component list
+    // at +0x18, the array at +0x10 of the world update - kept pointing at
+    // blocks the allocator had already handed to somebody else. That is every
+    // remaining death of 17 and 18/09, in a different container each time.
+    //
+    // So a release is two steps now: take our bits back first, let the game
+    // see the smaller mask for a few frames and deactivate what it no longer
+    // needs, and only then drop the force byte.
+    struct Added
+    {
+        uint32_t Bits[4] = {};
+        ULONGLONG ReleasingAt = 0;
+        bool Releasing = false;
+    };
+    std::mutex s_added_mutex;
+    Added s_added[0x40];
+    constexpr ULONGLONG kLetGoMs = 700;
+
+    void RememberAdded(int32_t Index, const uint32_t Bits[4])
+    {
+        if (Index < 0 || Index > 0x3f)
+        {
+            return;
+        }
+        std::scoped_lock Lock(s_added_mutex);
+        for (int i = 0; i < 4; ++i)
+        {
+            s_added[Index].Bits[i] |= Bits[i];
+        }
+    }
+
+    // Step one of a release: take back every part bit this hook turned on and
+    // start the clock. True the first time, so the caller says it once.
+    bool BeginLetGo(uintptr_t Owner, uint32_t Map, const char* Why)
+    {
+        int32_t Index = -1;
+        if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 0x3f)
+        {
+            // No index to remember bits against: the old behaviour, at once.
+            const uint8_t Zero = 0;
+            WriteBytes(Owner + kOwnerForced, &Zero, 1);
+            Append(StringFormat("%s  mapa %08x %s; solto sem indice\n", Clock().c_str(), Map, Why));
+            return true;
+        }
+
+        uint32_t Bits[4] = {};
+        {
+            std::scoped_lock Lock(s_added_mutex);
+            if (s_added[Index].Releasing)
+            {
+                return false;
+            }
+            memcpy(Bits, s_added[Index].Bits, sizeof(Bits));
+            s_added[Index].Releasing = true;
+            s_added[Index].ReleasingAt = GetTickCount64();
+            memset(s_added[Index].Bits, 0, sizeof(s_added[Index].Bits));
+        }
+
+        uint32_t Cleared = 0;
+        if ((Bits[0] | Bits[1] | Bits[2] | Bits[3]) != 0)
+        {
+            for (const size_t At : kOwnerMasks)
+            {
+                uint32_t Mask[4] = {};
+                if (!ReadBytes(Owner + At, Mask, sizeof(Mask)))
+                {
+                    continue;
+                }
+                bool Any = false;
+                for (int i = 0; i < 4; ++i)
+                {
+                    const uint32_t Next = Mask[i] & ~Bits[i];
+                    if (Next != Mask[i])
+                    {
+                        Mask[i] = Next;
+                        Any = true;
+                    }
+                }
+                if (Any)
+                {
+                    WriteBytes(Owner + At, Mask, sizeof(Mask));
+                    ++Cleared;
+                }
+            }
+        }
+        Append(StringFormat("%s  mapa %08x %s; devolvi as partes que eu tinha pedido (%u bloco(s)) e solto em %llu ms\n",
+            Clock().c_str(), Map, Why, Cleared, (unsigned long long)kLetGoMs));
+        return true;
+    }
+
+    // Step two, a few frames later: the force byte goes.
+    void FinishLetGo(uintptr_t Owner, uint32_t Map)
+    {
+        int32_t Index = -1;
+        if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 0x3f)
+        {
+            return;
+        }
+        {
+            std::scoped_lock Lock(s_added_mutex);
+            if (!s_added[Index].Releasing || GetTickCount64() - s_added[Index].ReleasingAt < kLetGoMs)
+            {
+                return;
+            }
+            s_added[Index].Releasing = false;
+        }
+        const uint8_t Zero = 0;
+        WriteBytes(Owner + kOwnerForced, &Zero, 1);
+        Append(StringFormat("%s  mapa %08x solto\n", Clock().c_str(), Map));
+    }
+
     void Force(uintptr_t Owner)
     {
         const uint8_t One = 1;
         WriteBytes(Owner + kOwnerForced, &One, 1);
+
+        {
+            uint32_t Mine[4] = {};
+            int32_t Index = -1;
+            for (int i = 0; i < 4; ++i)
+            {
+                Mine[i] = s_mask[i].load();
+            }
+            if (ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)))
+            {
+                RememberAdded(Index, Mine);
+            }
+        }
 
         for (const size_t At : kOwnerMasks)
         {
@@ -325,6 +455,9 @@ namespace
         const KeepVerdict Verdict = HaveMap ? CheckKept((uintptr_t)Owner, KeptMask) : KeepVerdict::None;
         if (HaveMap)
         {
+            // A release that began a few frames ago finishes here.
+            FinishLetGo((uintptr_t)Owner, Map);
+
             if (Verdict == KeepVerdict::Keep)
             {
                 // The force byte and the parts this keep asks for. Both are
@@ -341,6 +474,11 @@ namespace
                 const bool Any = (KeptMask[0] | KeptMask[1] | KeptMask[2] | KeptMask[3]) != 0;
                 if (Any)
                 {
+                    int32_t Index = -1;
+                    if (ReadBytes((uintptr_t)Owner + kOwnerIndexField, &Index, sizeof(Index)))
+                    {
+                        RememberAdded(Index, KeptMask);
+                    }
                     for (const size_t At : kOwnerMasks)
                     {
                         uint32_t Mask[4] = {};
@@ -364,11 +502,11 @@ namespace
                 // at the end of the travel (the earlier fix) was too early -
                 // this release comes thirty seconds later, and by then the
                 // sync had been rebuilt and filled again.
-                DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
-                const uint8_t Zero = 0;
-                WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
-                Append(StringFormat("%s  mapa %08x nao e mais de ninguem; solto\n", Clock().c_str(), Map));
-                DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
+                if (BeginLetGo((uintptr_t)Owner, Map, "nao e mais de ninguem"))
+                {
+                    DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
+                    DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
+                }
             }
 
             if (Map == s_map.load())
@@ -379,15 +517,15 @@ namespace
             {
                 // Not from under another player: its keep holds the byte.
                 const bool StillKept = Verdict == KeepVerdict::Keep;
-                if (!StillKept)
+                if (!StillKept && BeginLetGo((uintptr_t)Owner, Map, "a pedido"))
                 {
                     DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto a pedido");
-                    const uint8_t Zero = 0;
-                    WriteBytes((uintptr_t)Owner + kOwnerForced, &Zero, 1);
                 }
                 s_released_map.store(0);
-                Append(StringFormat("%s  mapa %08x solto%s\n", Clock().c_str(), Map,
-                    StillKept ? ", mas segue mantido por outro jogador" : ""));
+                if (StillKept)
+                {
+                    Append(StringFormat("%s  mapa %08x solto, mas segue mantido por outro jogador\n", Clock().c_str(), Map));
+                }
             }
         }
 
