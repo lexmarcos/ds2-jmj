@@ -149,6 +149,27 @@ namespace
         return s_original_find(Obj);
     }
 
+    // Detours, one target at a time, with the error in hand.
+    bool Attach(PVOID* Original, PVOID Hook, size_t Offset)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        const LONG Attached = DetourAttach(Original, Hook);
+        if (Attached != NO_ERROR)
+        {
+            DetourTransactionAbort();
+            Error("[DS2PartNotifyGuard] nao consegui desviar +0x%zx: DetourAttach deu %ld.", Offset, Attached);
+            return false;
+        }
+        const LONG Committed = DetourTransactionCommit();
+        if (Committed != NO_ERROR)
+        {
+            Error("[DS2PartNotifyGuard] nao consegui desviar +0x%zx: o commit deu %ld.", Offset, Committed);
+            return false;
+        }
+        return true;
+    }
+
     void* __fastcall FindTwinHook(uintptr_t Obj)
     {
         Tidy(Obj + kFindHead, kFindNext, Obj, "busca de componente (gemea)");
@@ -252,21 +273,37 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
+    // One transaction each, and both return values checked.
+    //
+    // All three went in one transaction at first, and the third silently did
+    // not take: the commit answered NO_ERROR, the log line said three lists
+    // were guarded, and reading the live bytes on 18/09 showed a jmp at the
+    // first two and the untouched prologue at the third. The crash then landed
+    // in the function nobody was watching. A commit that returns NO_ERROR is
+    // not a receipt for every attach in it.
     s_original = (NotifyFn)Address;
     s_original_find = (FindFn)Find;
     s_original_find_twin = (FindFn)Twin;
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-    DetourAttach(&(PVOID&)s_original, NotifyHook);
-    DetourAttach(&(PVOID&)s_original_find, FindHook);
-    DetourAttach(&(PVOID&)s_original_find_twin, FindTwinHook);
-    if (DetourTransactionCommit() != NO_ERROR)
+    if (!Attach((PVOID*)&s_original, NotifyHook, kNotifyOffset) ||
+        !Attach((PVOID*)&s_original_find, FindHook, kFindOffset) ||
+        !Attach((PVOID*)&s_original_find_twin, FindTwinHook, kFindTwinOffset))
     {
-        Error("[DS2PartNotifyGuard] nao consegui instalar os detours.");
-        s_original = nullptr;
-        s_original_find = nullptr;
-        s_original_find_twin = nullptr;
+        Uninstall();
         return false;
+    }
+
+    // Proof, not a report: the first byte of each target is now a jmp.
+    const size_t Targets[] = { kNotifyOffset, kFindOffset, kFindTwinOffset };
+    for (const size_t At : Targets)
+    {
+        const uint8_t First = *(const uint8_t*)(s_base + At);
+        if (First != 0xE9 && First != 0xEB)
+        {
+            Error("[DS2PartNotifyGuard] +0x%zx nao foi desviado (primeiro byte %02x); nao aplicado.",
+                (size_t)At, First);
+            Uninstall();
+            return false;
+        }
     }
 
     Log("[DS2PartNotifyGuard] as tres listas passam a ser conferidas antes de andadas (+0x%zx, +0x%zx e +0x%zx).",
