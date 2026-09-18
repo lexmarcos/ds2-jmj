@@ -31,6 +31,23 @@ namespace
     using NotifyFn = void(__fastcall*)(uintptr_t, uint32_t, uint8_t);
     NotifyFn s_original = nullptr;
 
+    // FUN_14017b240, `void*(obj)`: walks the list at obj+0x18, node to node by
+    // +0x10, and calls slot 0 of each node's vftable. The same shape as the
+    // one above and the same death: on 18/09 the guest faulted at +0x17b266
+    // with the node's vftable reading 4254670941466334, which is not a
+    // pointer at all but two floats - the block had been freed and handed to
+    // something that keeps positions in it.
+    //
+    // This one is only tidied, not replaced: the list is cut at the first
+    // rotten node and the game's own function then does the work.
+    constexpr size_t kFindOffset = 0x17b240;
+    constexpr uint8_t kFindBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kFindHead = 0x18;
+    constexpr size_t kFindNext = 0x10;
+
+    using FindFn = void*(__fastcall*)(uintptr_t);
+    FindFn s_original_find = nullptr;
+
     uintptr_t s_base = 0;
     uintptr_t s_end = 0;
     std::atomic<uint64_t> s_cut{ 0 };
@@ -75,6 +92,47 @@ namespace
             return false;
         }
         return Vftable >= s_base && Vftable < s_end && (Vftable & 7) == 0;
+    }
+
+    // Walks a list of objects and cuts it at the first one that is no longer
+    // an object of the game. Returns how many it kept.
+    int Tidy(uintptr_t Head, size_t NextAt, uintptr_t Owner, const char* Which)
+    {
+        uintptr_t Link = Head;
+        uintptr_t Node = 0;
+        int Kept = 0;
+        if (!ReadPointer(Link, Node))
+        {
+            return 0;
+        }
+        while (Node != 0 && Kept < 4096)
+        {
+            uintptr_t Vftable = 0, Slot = 0;
+            if (!Sound(Node, Vftable) || !ReadPointer(Vftable, Slot) || Slot < s_base || Slot >= s_end)
+            {
+                WritePointer(Link, 0);
+                const uint64_t Count = s_cut.fetch_add(1);
+                if (Count < 20)
+                {
+                    Log("[DS2PartNotifyGuard] %s: o no %p da lista de %p nao e mais um objeto do jogo (tabela virtual %p); a lista foi cortada ai.",
+                        Which, (void*)Node, (void*)Owner, (void*)Vftable);
+                }
+                return Kept;
+            }
+            Link = Node + NextAt;
+            if (!ReadPointer(Link, Node))
+            {
+                return Kept;
+            }
+            ++Kept;
+        }
+        return Kept;
+    }
+
+    void* __fastcall FindHook(uintptr_t Obj)
+    {
+        Tidy(Obj + kFindHead, kFindNext, Obj, "busca de componente");
+        return s_original_find(Obj);
     }
 
     void __fastcall NotifyHook(uintptr_t Obj, uint32_t Arg, uint8_t Flag)
@@ -156,19 +214,31 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
-    s_original = (NotifyFn)Address;
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-    DetourAttach(&(PVOID&)s_original, NotifyHook);
-    if (DetourTransactionCommit() != NO_ERROR)
+    const uintptr_t Find = s_base + kFindOffset;
+    uint8_t FoundFind[sizeof(kFindBytes)] = {};
+    memcpy(FoundFind, (const void*)Find, sizeof(FoundFind));
+    if (memcmp(FoundFind, kFindBytes, sizeof(kFindBytes)) != 0)
     {
-        Error("[DS2PartNotifyGuard] nao consegui instalar o detour em +0x%zx.", (size_t)kNotifyOffset);
-        s_original = nullptr;
+        Error("[DS2PartNotifyGuard] o prologo em +0x%zx nao e o esperado; nao aplicado.", (size_t)kFindOffset);
         return false;
     }
 
-    Log("[DS2PartNotifyGuard] a lista de ouvintes de parte passa a ser conferida antes de chamada (+0x%zx).",
-        (size_t)kNotifyOffset);
+    s_original = (NotifyFn)Address;
+    s_original_find = (FindFn)Find;
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)s_original, NotifyHook);
+    DetourAttach(&(PVOID&)s_original_find, FindHook);
+    if (DetourTransactionCommit() != NO_ERROR)
+    {
+        Error("[DS2PartNotifyGuard] nao consegui instalar os detours.");
+        s_original = nullptr;
+        s_original_find = nullptr;
+        return false;
+    }
+
+    Log("[DS2PartNotifyGuard] as duas listas passam a ser conferidas antes de andadas (+0x%zx e +0x%zx).",
+        (size_t)kNotifyOffset, (size_t)kFindOffset);
 #endif
     return true;
 }
@@ -181,6 +251,11 @@ void DS2_PartNotifyGuardHook::Uninstall()
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
         DetourDetach(&(PVOID&)s_original, NotifyHook);
+        if (s_original_find != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_find, FindHook);
+            s_original_find = nullptr;
+        }
         DetourTransactionCommit();
         s_original = nullptr;
     }
