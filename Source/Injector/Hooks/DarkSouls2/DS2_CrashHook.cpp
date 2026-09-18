@@ -56,6 +56,95 @@ namespace
         CloseHandle(File);
     }
 
+    // A MapEntity in hand is described whole: the map its owner belongs to,
+    // then every node of its component list at +0x18 (next at +0x10) and every
+    // slot of its component array at +0x98 (count, a short, at +0xa0), each
+    // with the first eight bytes of what it points at. On 18/09 every guest
+    // death had a live MapEntity in hand and one of its components already
+    // freed; this is what names which component, and whose map the entity is.
+    constexpr uintptr_t kMapEntityVftable = 0x10e7b68;
+    constexpr uintptr_t kMapOwnerVftable = 0x10e87f0;
+
+    bool SafeQword(uintptr_t At, uintptr_t& Out)
+    {
+        __try
+        {
+            Out = *(const uintptr_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool SafeShort(uintptr_t At, int16_t& Out)
+    {
+        __try
+        {
+            Out = *(const int16_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    int DescribeFirst(char* Text, int Used, int Size, uintptr_t Object)
+    {
+        uintptr_t First = 0;
+        if (!SafeQword(Object, First))
+        {
+            return snprintf(Text + Used, Size - Used, " %p(unreadable)", (void*)Object);
+        }
+        if (InGame(First))
+        {
+            return snprintf(Text + Used, Size - Used, " %p(+0x%llx)", (void*)Object,
+                (unsigned long long)(First - s_base));
+        }
+        return snprintf(Text + Used, Size - Used, " %p(ROTTEN %016llx)", (void*)Object, (unsigned long long)First);
+    }
+
+    int DescribeEntity(char* Text, int Used, int Size, const char* Name, uintptr_t Entity)
+    {
+        int Start = Used;
+        uintptr_t Owner = 0, OwnerVftable = 0, Map = 0;
+        uint32_t MapId = 0xffffffff;
+        if (SafeQword(Entity + 0x28, Owner) && Owner != 0 && SafeQword(Owner, OwnerVftable) &&
+            OwnerVftable == s_base + kMapOwnerVftable && SafeQword(Owner + 0x08, Map))
+        {
+            MapId = (uint32_t)Map;
+        }
+        Used += snprintf(Text + Used, Size - Used, "    MapEntity %s=%p, owner %p, map %08x\n      list +0x18:", Name,
+            (void*)Entity, (void*)Owner, MapId);
+        uintptr_t Node = 0;
+        SafeQword(Entity + 0x18, Node);
+        for (int k = 0; k < 16 && Node != 0 && Used < Size - 80; ++k)
+        {
+            Used += DescribeFirst(Text, Used, Size, Node);
+            if (!SafeQword(Node + 0x10, Node))
+            {
+                break;
+            }
+        }
+        int16_t Count = 0;
+        uintptr_t Array = 0;
+        SafeShort(Entity + 0xa0, Count);
+        SafeQword(Entity + 0x98, Array);
+        Used += snprintf(Text + Used, Size - Used, "\n      array +0x98 (%d):", (int)Count);
+        for (int k = 0; k < Count && k < 16 && Array != 0 && Used < Size - 80; ++k)
+        {
+            uintptr_t Component = 0;
+            if (SafeQword(Array + (uintptr_t)k * 8, Component) && Component != 0)
+            {
+                Used += DescribeFirst(Text, Used, Size, Component);
+            }
+        }
+        Used += snprintf(Text + Used, Size - Used, "\n");
+        return Used - Start;
+    }
+
     LONG CALLBACK Handler(EXCEPTION_POINTERS* Info)
     {
         const EXCEPTION_RECORD* Record = Info->ExceptionRecord;
@@ -168,6 +257,12 @@ namespace
                 }
                 Used += snprintf(Text + Used, sizeof(Text) - Used, " %s=+0x%llx", Names[i],
                     (unsigned long long)(Vftable - s_base));
+                if (Vftable == s_base + kMapEntityVftable && Used < (int)sizeof(Text) - 1200)
+                {
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, "\n");
+                    Used += DescribeEntity(Text, Used, (int)sizeof(Text), Names[i], At);
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, "   ");
+                }
                 // The first two get their first sixty-four bytes written down,
                 // which is where a stale pointer's neighbours are.
                 if (Objects < 2)
