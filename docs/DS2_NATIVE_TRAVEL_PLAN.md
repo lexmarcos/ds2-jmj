@@ -1006,3 +1006,42 @@ servidor vê o cliente conectar e cair na mesma hora, e as duas contas Steam
 seguem logadas. A DLL anterior, que tinha subido bem uma hora antes, trava
 igual. Sobrou pendurada uma cadeia de lançamento da segunda Steam que o
 `game stop` não enxerga e que só morre com `kill` por pid.
+
+## 10. 18/09 — o que a queda que sobra segue, e o que não a conserta
+
+**Ela segue o mapa onde a sessão se formou.** Esse é o achado do dia. Com a
+sessão formada em Majula, o convidado morria voltando a Majula; encerrei a
+sessão em Heide, deixei a party re-formar ali, e a morte mudou para Heide. Não é
+Majula, não é a zona sem invocação, não é o destino: é o mapa do encontro. A
+perna anterior ser a Torre de Brume adianta a queda, porque Brume é o maior mapa
+do rodízio e é o carregamento dela que reaproveita a memória liberada.
+
+**O controle solo continua limpo.** Dez pernas pelas quatro fogueiras, um jogo
+só, sem sessão, sem uma falta. O transporte e o backread não corrompem nada
+sozinhos.
+
+Tudo abaixo foi tentado e **não** resolveu:
+
+| tentativa | o que aconteceu |
+| --- | --- |
+| podar as duas listas encadeadas antes de o jogo andar nelas | nunca cortou um nó sequer; a queda mudou de recipiente |
+| parar de escrever nos dois blocos de visibilidade | ajudou, mas a queda continua |
+| segurar o sync de personagens parado durante todo o desmonte | sem efeito |
+| entregar a parte ao streamer só quando é do mapa focado | sem efeito; entregar nulo quebra o chão e a viagem falha |
+| devolver os bits de parte antes de soltar o mapa | rodou cinco vezes, sem efeito |
+| reconstruir as presenças a cada chegada | sem efeito, e caiu mais cedo |
+| desligar o segurar do mapa do outro jogador | 256 faltas de uma vez; o segurar é necessário |
+| segurar o mapa do encontro enquanto a sessão durar | **quebra a viagem**: com dois mapas presos, o terceiro para no estado 0 e o host desiste em 30 s |
+
+**Dois limites que ficaram medidos.** O jogo carrega dois mapas ao mesmo tempo e
+não três: qualquer coisa que segure um mapa a mais faz o pedido seguinte parar
+no estado 0. E o mapa corrente do jogo (`0x141616cf8 +0x20 → +0x5b8 → +0xc`)
+**acompanha** o transporte antigo, medido ao vivo: 0x0a040000 antes, 0x0a1f0000
+depois. A teoria de que o jogo continuava achando que o jogador estava no mapa
+de origem está errada.
+
+**Onde procurar a seguir.** O objeto liberado é encontrado pela atualização do
+mundo, sempre numa estrutura de partes ou entidades, e só existe quando há
+sessão. O que a sessão põe naquele mapa e ninguém tira quando ele sai é o que
+falta nomear. O vigia de exceções agora escreve a tabela virtual dos objetos na
+mão, então a próxima queda que pegar um objeto de heap já nomeia a classe.
