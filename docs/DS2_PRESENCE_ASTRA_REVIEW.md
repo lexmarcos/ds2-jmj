@@ -1,406 +1,407 @@
-# Revisão do gpt-6-astra sobre a reconstrução de presença
+# gpt-6-astra's review of the presence rebuild
 
-Consulta feita em 16/09, com `codex exec` em sandbox somente leitura sobre este
-repositório, modelo `gpt-6-astra`, esforço `low`. Thread para retomar:
+Consulted on 16/09, with `codex exec` in a read-only sandbox over this
+repository, model `gpt-6-astra`, effort `low`. Thread to resume:
 `codex resume 01a0abfe-7d86-7d71-8888-1a40a0b85a6d`.
 
-É a terceira opinião da cadeia: o parecer externo
-(`DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`) propôs reconstruir a presença; um
-agente Fable conferiu contra o binário e achou a premissa central errada
-(`DS2_PRESENCE_REBUILD_PLAN.md`); esta revisão confere o Fable e desenha os
-caminhos de implementação.
+It is the third opinion in the chain: the outside assessment
+(`DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md`) proposed rebuilding the presence; a
+Fable agent checked it against the binary and found the central premise wrong
+(`DS2_PRESENCE_REBUILD_PLAN.md`); this review checks the Fable one and lays out
+the implementation paths.
 
-**O que ela mudou, em uma linha:** os 13 prólogos do Fable conferem todos, mas
-a nossa falha restante estava atribuída à função errada — ver a seção "A
-segunda dependência nunca esteve sob guarda" em `DS2_SEAMLESS_COOP_TASKS.md`.
+**What it changed, in one line:** all 13 of Fable's prologues match, but our
+remaining crash was attributed to the wrong function — see "the second
+dependency that escaped the guard" in `DS2_SEAMLESS_COOP_TASKS.md`.
 
-O relatório abaixo é a saída literal do modelo, sem edição.
+The report below is the model's own output, translated from the Portuguese
+it was written in and otherwise unedited.
 
 ---
 
-## 1. Verificação
+## 1. Verification
 
-**Recomendo antecipar o teste de travessia com as cópias ausentes e manter a reconstrução híbrida como primeira opção, condicionada ao resultado.** A análise encontrou, porém, três divergências relevantes entre documentação e implementação: o endereço da falha restante pertence a outra função, a chegada ainda não exige diretamente o contato físico, e faltam contadores publicados para executar o portão proposto com rigor.
+**I recommend bringing the crossing test with the copies absent forward and keeping the hybrid rebuild as the first option, conditional on the result.** The analysis did find, however, three relevant divergences between documentation and implementation: the address of the remaining crash belongs to another function, arrival does not yet directly require the physical contact, and the published counters needed to run the proposed gate rigorously are missing.
 
-Nenhum arquivo foi criado ou editado. Não executei o harness, jogos, servidor ou Steam; não acessei rede. `git status --porcelain=v1` estava vazio no início e permaneceu vazio no fim, na branch `feature/seamless-coop`.
+No file was created or edited. I did not run the harness, the games, the server or Steam; I did not access the network. `git status --porcelain=v1` was empty at the start and stayed empty at the end, on the `feature/seamless-coop` branch.
 
-### Conferência dos prólogos
+### Checking the prologues
 
-Usei `x86_64-w64-mingw32-objdump -d`, com intervalos delimitados por `--start-address` e `--stop-address`, sobre o executável indicado. **Todos os 13 prólogos da tabela conferem integralmente**, incluindo os bytes das instruções que o objdump apresenta em linhas de continuação.
+I used `x86_64-w64-mingw32-objdump -d`, with ranges bounded by `--start-address` and `--stop-address`, over the indicated executable. **All 13 prologues in the table match completely**, including the bytes of the instructions objdump prints on continuation lines.
 
-| Offset relativo ao módulo | Bytes conferidos | Resultado |
+| Offset relative to the module | Bytes checked | Result |
 |---|---:|---|
-| `+0x51c820` | 12 | Iguais |
-| `+0x51b0e0` | 15 | Iguais |
-| `+0x51ce20` | 5 | Iguais |
-| `+0x51d2a0` | 13 | Iguais |
-| `+0x51c4d0` | 15 | Iguais |
-| `+0x51bff0` | 15 | Iguais |
-| `+0x51c940` | 16 | Iguais |
-| `+0x51dbb0` | 15 | Iguais |
-| `+0x520810` | 15 | Iguais |
-| `+0x2be090` | 16 | Iguais |
-| `+0x2c2820` | 15 | Iguais |
-| `+0x359890` | 12 | Iguais |
-| `+0x513340` | 16 | Iguais |
+| `+0x51c820` | 12 | Equal |
+| `+0x51b0e0` | 15 | Equal |
+| `+0x51ce20` | 5 | Equal |
+| `+0x51d2a0` | 13 | Equal |
+| `+0x51c4d0` | 15 | Equal |
+| `+0x51bff0` | 15 | Equal |
+| `+0x51c940` | 16 | Equal |
+| `+0x51dbb0` | 15 | Equal |
+| `+0x520810` | 15 | Equal |
+| `+0x2be090` | 16 | Equal |
+| `+0x2c2820` | 15 | Equal |
+| `+0x359890` | 12 | Equal |
+| `+0x513340` | 16 | Equal |
 
-O arquivo tem **28.200.992 bytes** e `ImageBase = 0x140000000`.
+The file is **28,200,992 bytes** and `ImageBase = 0x140000000`.
 
-Uma ressalva factual: o cabeçalho PE contém `DYNAMIC_BASE` e `HIGH_ENTROPY_VA`. Portanto, **“sem ASLR” não é uma conclusão sustentada pelo cabeçalho**; pode descrever o comportamento medido nesse ambiente. Os hooks devem continuar resolvendo endereços pela base efetivamente carregada.
+One factual caveat: the PE header contains `DYNAMIC_BASE` and `HIGH_ENTROPY_VA`. So **"no ASLR" is not a conclusion the header supports**; it may describe the behaviour measured in this environment. The hooks should keep resolving addresses from the base they were actually loaded at.
 
-A coincidência dos prólogos confirma os pontos de entrada documentados, mas não certifica ABI, contexto de chamada ou segurança concorrente. Em particular, os cinco bytes de `+0x51ce20` são uma assinatura bastante curta para uma futura verificação de versão.
+The prologues matching confirms the documented entry points, but it does not certify ABI, calling context or concurrency safety. In particular, the five bytes at `+0x51ce20` are a rather short signature for a future version check.
 
-### O que conferi além dos prólogos
+### What I checked beyond the prologues
 
-Li os documentos na ordem pedida, as partes pertinentes do histórico e os trechos de implementação dos hooks. Também consultei decompilações **já existentes** em `/tmp/ds2-presence-review/`, sem executar novamente o Ghidra, e confrontei os pontos decisivos com disassembly novo do executável.
+I read the documents in the order asked, the relevant parts of the history and the hooks' implementation excerpts. I also consulted decompilations that **already existed** in `/tmp/ds2-presence-review/`, without running Ghidra again, and checked the decisive points against fresh disassembly of the executable.
 
-**Confirmações importantes:**
+**Important confirmations:**
 
-- `FUN_14051ce20` procura uma entrada existente e grava o resultado da criação diretamente em `E+0x40`. A instrução em `0x14051d006` confirma a sobrescrita; esse caminho não retira previamente o personagem antigo.
-- O construtor copia **`blob+0x22e → E+0x6a`**, estabelecendo o net id da presença.
-- `FUN_14051ac20` procura uma entrada por net id, exige estado `2` e identidade válida.
-- `FUN_14051b3c0` resolve net id para o `PlayerCtrl`; `FUN_14051a9c0` também resolve a entrada e usa `FUN_14051d360` para produzir uma descrição contendo seu personagem.
-- `FUN_14051d2a0` chama `FUN_140359890`, zera `E+0x40`, decrementa `R+8` e libera a entrada.
-- `FUN_14035b9c0` processa a lista adiada em `CharacterManager+0x30..+0x38`, incluindo etapas anteriores à liberação final. Isso confirma que a entrada livre é uma evidência insuficiente de destruição.
-- O watchdog consulta o bit `0x10` em `sessão+0x1b8` e compara `sessão+8 − sessão+0x1b4` com `DAT_1410d7b40`. Os bytes dessa constante são `00 00 96 43`: **300,0 em float**.
+- `FUN_14051ce20` looks for an existing entry and writes the result of the creation straight into `E+0x40`. The instruction at `0x14051d006` confirms the overwrite; that path does not remove the old character first.
+- The constructor copies **`blob+0x22e → E+0x6a`**, establishing the presence's net id.
+- `FUN_14051ac20` looks up an entry by net id, and requires state `2` and a valid identity.
+- `FUN_14051b3c0` resolves a net id to the `PlayerCtrl`; `FUN_14051a9c0` also resolves the entry and uses `FUN_14051d360` to produce a description containing its character.
+- `FUN_14051d2a0` calls `FUN_140359890`, zeroes `E+0x40`, decrements `R+8` and frees the entry.
+- `FUN_14035b9c0` processes the deferred list at `CharacterManager+0x30..+0x38`, including steps before the final free. That confirms a free entry is insufficient evidence of destruction.
+- The watchdog checks bit `0x10` at `sessão+0x1b8` and compares `sessão+8 − sessão+0x1b4` against `DAT_1410d7b40`. That constant's bytes are `00 00 96 43`: **300.0 as a float**.
 
-**Correção importante sobre a falha restante:** `0x1403f4f2b` pertence a **`FUN_1403f4f10`**, não a `FUN_1403f4f60`. Nesse caminho:
+**Important correction about the remaining crash:** `0x1403f4f2b` belongs to **`FUN_1403f4f10`**, not to `FUN_1403f4f60`. On that path:
 
-1. O argumento aponta para o componente.
-2. O jogo carrega `componente+0x40`.
-3. Em `+0x3f4f2b`, lê a vftable desse objeto.
-4. Depois chama seu slot virtual `+0x08`.
+1. The argument points to the component.
+2. The game loads `componente+0x40`.
+3. At `+0x3f4f2b`, it reads that object's vftable.
+4. Then it calls its virtual slot `+0x08`.
 
-Isso localiza melhor o consumidor do ponteiro inválido. Ainda não identifica quem liberou o objeto nem se o componente pertence a um personagem remoto, local ou a outra entidade.
+That pins down the consumer of the invalid pointer better. It still does not identify who freed the object, nor whether the component belongs to a remote character, a local one or another entity.
 
-### Divergências no código atual
+### Divergences in the current code
 
-- **Chegada física:** em [ContinueSettle](/home/suel/projects/ds2-jmj/Source/Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp:1780), `Arrived` depende de `CurrentMap() == destino`. [CurrentMap](/home/suel/projects/ds2-jmj/Source/Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp:701) percorre o streamer até a parte onde o jogador esteve. O contato físico é lido para retenção e diagnóstico, mas **não participa daquela decisão**. O contrato escrito é mais forte que a implementação.
-- **Contadores:** os acumuladores existem, mas `Backread::WriteStatus` não publica `s_caught_update`; `Death::status` não publica `s_bodies_dropped`; a interface de `TravelWatch` não oferece um snapshot completo dos seus contadores. Contar linhas limitadas do log não substitui isso.
-- **Congelamento:** `HoldCopies` aparece no documento, mas não encontrei sua declaração ou implementação em `Source`.
-- **Barreira:** já distingue `Arrived` de `Failed`, mas ainda libera pelo resultado do transporte, sem uma etapa de reconstrução. O código também registra a limitação de uma única caixa de recebimento por tipo de evento, que pode perder recibos com três ou mais jogadores.
+- **Physical arrival:** in [ContinueSettle](/home/suel/projects/ds2-jmj/Source/Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp:1780), `Arrived` depends on `CurrentMap() == destino`. [CurrentMap](/home/suel/projects/ds2-jmj/Source/Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp:701) walks the streamer down to the part where the player has been. The physical contact is read for holding and for diagnostics, but it **takes no part in that decision**. The written contract is stronger than the implementation.
+- **Counters:** the accumulators exist, but `Backread::WriteStatus` does not publish `s_caught_update`; `Death::status` does not publish `s_bodies_dropped`; `TravelWatch`'s interface does not offer a complete snapshot of its counters. Counting a bounded number of log lines is no substitute.
+- **Freezing:** `HoldCopies` appears in the document, but I did not find its declaration or implementation in `Source`.
+- **Barrier:** it already tells `Arrived` from `Failed`, but it still releases on the transport's result, with no rebuild step. The code also records the limitation of a single inbox per event type, which can lose receipts with three or more players.
 
-**Não conferi integralmente:** todos os campos do blob, todos os consumidores da replicação, os vetos do `0xd` nas duas máquinas de sessão, nem todos os efeitos transitivos da retirada. Não houve medição ao vivo nesta consulta.
+**I did not check completely:** every field of the blob, every consumer of replication, the `0xd` vetoes in the two session machines, nor all of the removal's transitive effects. There was no live measurement in this consultation.
 
-## 2. As opções
+## 2. The options
 
-### Opção A — Retirada nativa, transporte atual e reconstrução pelo registro
+### Option A — Native removal, the current transport and a rebuild through the registry
 
-**O que é:** implementar o híbrido do plano, com uma barreira antes da viagem e outra antes de devolver o controle.
+**What it is:** implement the plan's hybrid, with one barrier before the travel and another before handing control back.
 
-A sequência seria:
+The sequence would be:
 
-**Preparar → retirar em todas as máquinas → confirmar destruição → host viaja → convidados viajam → reconstruir em todas → confirmar replicação → `TravelRelease`.**
+**Prepare → remove on every machine → confirm destruction → host travels → guests travel → rebuild on every machine → confirm replication → `TravelRelease`.**
 
-As funções centrais são:
+The central functions are:
 
-| Responsabilidade | Funções/estruturas |
+| Responsibility | Functions/structures |
 |---|---|
-| Retirada individual | `FUN_14051c820(E)` |
-| Progressão da retirada | `FUN_14051c940` → `FUN_14051d2a0` |
-| Retirada do CharacterManager | `FUN_140359890`; fila processada por `FUN_14035b9c0` |
-| Registro pendente | `FUN_14051b0e0(R, membro, blob, flag)` |
-| Materialização | `FUN_14051dbb0` → `FUN_14051ce20` |
-| Liberação específica do papel `0xe` | `FUN_14051c4d0` |
-| Resolução da identidade | `FUN_140520040`, `E+0x6a`, `FUN_14051ac20`, `FUN_14051b3c0` |
+| Individual removal | `FUN_14051c820(E)` |
+| Progression of the removal | `FUN_14051c940` → `FUN_14051d2a0` |
+| Removal from the CharacterManager | `FUN_140359890`; queue processed by `FUN_14035b9c0` |
+| Pending registration | `FUN_14051b0e0(R, membro, blob, flag)` |
+| Materialisation | `FUN_14051dbb0` → `FUN_14051ce20` |
+| Clearance specific to role `0xe` | `FUN_14051c4d0` |
+| Identity resolution | `FUN_140520040`, `E+0x6a`, `FUN_14051ac20`, `FUN_14051b3c0` |
 
-**Preferiria deixar `FUN_14051c940` executar normalmente o processamento dos pendentes**, após a mod registrar o pedido no contexto correto. Chamar `FUN_14051dbb0` diretamente acrescenta risco de reentrância e de executar a criação numa fase inadequada do quadro.
+**I would rather let `FUN_14051c940` process the pending entries the way it normally does**, after the mod has registered the request in the right context. Calling `FUN_14051dbb0` directly adds the risk of reentrancy and of running the creation in an unsuitable phase of the frame.
 
-Há duas formas concretas de fornecer os dados:
+There are two concrete ways to supply the data:
 
-#### A1. Blob capturado na entrada, atualizado apenas onde houver contrato conhecido
+#### A1. The blob captured on entry, updated only where there is a known contract
 
-É o menor protótipo. Capturar o blob recebido por `FUN_14051b0e0`, guardar a identidade e a flag separadamente, e reutilizar a representação de criação.
+It is the smallest prototype. Capture the blob `FUN_14051b0e0` receives, keep the identity and the flag separately, and reuse the creation representation.
 
-Para uma reconstrução no mesmo mapa, isso reduz bastante o trabalho. Para viajar, **reproduzir o blob intacto é insuficiente como projeto definitivo**: ele contém posição e estado do personagem no instante da entrada. Pode recriar na origem, com equipamento ou HP antigos.
+For a rebuild on the same map, that cuts the work down a lot. For travelling, **reproducing the blob untouched is not enough as a final design**: it contains the character's position and state at the instant of entry. It may recreate at the origin, with old equipment or HP.
 
-**Custo:** médio para demonstrar retirar/recriar; médio a alto para transformar em viagem robusta.
+**Cost:** medium to demonstrate remove/recreate; medium to high to turn into robust travel.
 
-**Risco principal:** snapshot obsoleto, replicação que não retoma, destruição ainda pendente e duplicação por repetição do registro.
+**Main risk:** a stale snapshot, replication that does not resume, destruction still pending, and duplication from repeating the registration.
 
-**Sinal positivo:** uma nova geração de personagem por peer, resolvida pelo mesmo net id, recebendo movimento e ações nativas atuais nos dois sentidos.
+**Positive signal:** one new character generation per peer, resolved by the same net id, receiving the owner's current native movement and actions in both directions.
 
-#### A2. Snapshot novo produzido pelo dono a cada viagem
+#### A2. A fresh snapshot produced by the owner on every travel
 
-Manter a captura inicial como referência, mas produzir dados atuais para reconstrução. Há um caminho concreto para investigar: **`FUN_14051ba70` e `FUN_14051d5a0`**, que exportam dados do personagem; a primeira também trata identidade, papel e net id.
+Keep the initial capture as a reference, but produce current data for the rebuild. There is a concrete path to investigate: **`FUN_14051ba70` and `FUN_14051d5a0`**, which export character data; the first also handles identity, role and net id.
 
-O dono produziria o snapshot em contexto seguro do jogo, e o canal 7 transportaria os dados associados à transação. O receptor chamaria o registro com um membro obtido da lista atual.
+The owner would produce the snapshot in a safe game context, and channel 7 would carry the data attached to the transaction. The receiver would call the registration with a member taken from the current list.
 
-**Isso evita depender de reenviar o pacote nativo `0xd` ou reabrir seu portão de sessão.** Não autoriza, porém, chamar esses exportadores arbitrariamente: suas pré-condições e o buffer completo ainda precisam ser conferidos.
+**That avoids depending on resending the native `0xd` packet or reopening its session gate.** It does not, however, authorise calling those exporters arbitrarily: their preconditions and the complete buffer still have to be checked.
 
-**Custo:** maior que A1; exige exportação validada, transporte do snapshot, tratamento de versão, tamanho, repetição e validade temporal.
+**Cost:** higher than A1; it requires a validated export, transport of the snapshot, and handling of version, size, repetition and time validity.
 
-**Risco principal:** exportação incompleta ou incoerente; identidade correta associada a dados velhos; tratar uma estrutura interna como formato de rede sem validar sua representação.
+**Main risk:** an incomplete or inconsistent export; the right identity attached to old data; treating an internal structure as a network format without validating its representation.
 
-**Sinal positivo:** mudar equipamento/estado antes da viagem, reconstruir com esse estado atual e observar a replicação posterior funcionando. A cópia inicial serve para comparar os campos, não como autorização para restaurar estado antigo.
+**Positive signal:** change equipment/state before the travel, rebuild with that current state and watch replication working afterwards. The initial copy is there to compare the fields, not as authorisation to restore old state.
 
-**Minha avaliação:** A1 é o melhor protótipo; A2 é uma candidata melhor para uso contínuo. Nenhuma delas resolve automaticamente uma dependência pertencente exclusivamente ao mapa ou ao jogador local.
+**My assessment:** A1 is the better prototype; A2 is the better candidate for continuous use. Neither of them automatically solves a dependency belonging exclusively to the map or to the local player.
 
-### Opção B — Corrigir a segunda dependência pelo ciclo de vida do modelo
+### Option B — Fix the second dependency through the model's life cycle
 
-**O que é:** identificar o proprietário de `componente+0x40` na falha de `FUN_1403f4f10` e corrigir sua retirada/recriação pelo mecanismo proprietário.
+**What it is:** identify the owner of `componente+0x40` in the `FUN_1403f4f10` crash and fix its removal/recreation through the owning mechanism.
 
-Há portas nativas concretas para estudar:
+There are concrete native doors to study:
 
-- `FUN_1403f4f10`: consumidor exato da falha informada.
-- `FUN_1403f4f60`: outro caminho de atualização do modelo.
-- `FUN_1403f6300`: soltura do recurso do componente.
-- `FUN_1403f4c20`: reação a mudança de backread, com desligamento e chamadas virtuais de soltura/carregamento.
-- `FUN_1403f4ce0`: desligamento de registro/proxy.
-- `FUN_1403f4410` e `FUN_1403f4500`: construção e destruição do componente.
+- `FUN_1403f4f10`: the exact consumer of the reported crash.
+- `FUN_1403f4f60`: another model update path.
+- `FUN_1403f6300`: release of the component's resource.
+- `FUN_1403f4c20`: reaction to a backread change, with a shutdown and virtual release/load calls.
+- `FUN_1403f4ce0`: shutdown of registration/proxy.
+- `FUN_1403f4410` and `FUN_1403f4500`: construction and destruction of the component.
 
-As últimas relações vêm das decompilações existentes; **não representam uma API de recarga já validada**.
+The last relationships come from the existing decompilations; **they do not amount to an already validated reload API**.
 
-Essa opção tem duas implementações possíveis: invalidar corretamente a dependência quando seu recurso morre, ou executar o ciclo nativo de desligar/recarregar o modelo enquanto o componente proprietário permanece vivo.
+This option has two possible implementations: invalidate the dependency correctly when its resource dies, or run the native shutdown/reload cycle of the model while the owning component stays alive.
 
-**Custo:** baixo se aparecer um vínculo único com uma operação nativa segura; alto se for necessário descobrir dependências espalhadas.
+**Cost:** low if a single link to a safe native operation turns up; high if scattered dependencies have to be discovered.
 
-**Risco:** transformar um ponteiro inválido em vazamento, modelo permanentemente ausente ou atualização incompleta. **Zerar `+0x40` por analogia com `DropDeadRigidBody` não está justificado.** O teste de nulo desse consumidor não prova o contrato dos demais.
+**Risk:** turning an invalid pointer into a leak, a permanently missing model or an incomplete update. **Zeroing `+0x40` by analogy with `DropDeadRigidBody` is not justified.** That consumer's null test does not prove the others' contract.
 
-**Sinal positivo:** observar o recurso antigo desligado e destruído, o novo ligado ao componente correto e ambos os caminhos de atualização executando normalmente após o descarregamento da origem.
+**Positive signal:** watching the old resource shut down and destroyed, the new one attached to the right component, and both update paths running normally after the origin is unloaded.
 
-**Minha avaliação:** continua viável porque esta é a segunda dependência identificada. Eu daria à investigação uma pergunta delimitada: *quem é o dono do componente e qual operação nativa troca o recurso?* Não abriria outra sequência de guardas pontuais. Uma terceira dependência independente aciona a regra de reconstrução.
+**My assessment:** still viable, because this is the second dependency identified. I would give the investigation a bounded question: *who owns the component and which native operation swaps the resource?* I would not open another series of one-off guards. A third independent dependency triggers the rebuild rule.
 
-### Opção C — Congelar as cópias mantendo vivos seus recursos
+### Option C — Freeze the copies while keeping their resources alive
 
-**O que é:** conservar o `PlayerCtrl` e sua identidade de rede, impedir temporariamente sua travessia e manter as partes da origem necessárias à cópia. Depois, reassentar/religar a cópia ao destino antes de liberar a origem.
+**What it is:** keep the `PlayerCtrl` and its network identity, temporarily stop it crossing, and keep the parts of the origin the copy needs. Then resettle/reattach the copy to the destination before releasing the origin.
 
-É diferente de simplesmente ocultar o personagem:
+It is different from simply hiding the character:
 
-| Intervenção | O que resolve | O que permanece |
+| Intervention | What it solves | What remains |
 |---|---|---|
-| Ocultar desenho | Aparência durante a transição | Física, animação, tarefas e referências antigas |
-| Pular apenas pré-desenho | Um consumidor | Outros consumidores e a liberação dos recursos |
-| Congelar posição | Movimento da cópia | Recursos podem morrer sob ela |
-| Suspender consumidores e reter recursos | Pode preservar a vida do conjunto | Ainda precisa resolver a transferência ao destino |
+| Hide the drawing | Appearance during the transition | Physics, animation, tasks and old references |
+| Skip only the pre-draw | One consumer | The other consumers and the freeing of the resources |
+| Freeze the position | The copy's movement | Resources can die underneath it |
+| Suspend consumers and hold resources | May preserve the whole thing's life | Still has to solve the transfer to the destination |
 
-As peças existentes incluem `DS2_Backread::KeepIndex`, o transporte e os pontos de tarefa observados pelo `TravelWatch`. A suspensão precisaria acontecer num ponto seguro de agendamento; não bastaria abandonar tarefas sem cumprir sua conclusão.
+The existing pieces include `DS2_Backread::KeepIndex`, the transport and the task points `TravelWatch` observes. The suspension would have to happen at a safe scheduling point; abandoning tasks without seeing them through would not be enough.
 
-**Custo:** baixo para um ensaio limitado; médio a alto para garantir segurança em todos os consumidores.
+**Cost:** low for a limited trial; medium to high to guarantee safety across every consumer.
 
-**Risco:** apenas adiar o defeito até descongelar ou expirar o `keep`. Também pode reter progressivamente mapas e recursos.
+**Risk:** merely postponing the defect until the thaw or until the `keep` expires. It can also hold on to maps and resources progressively.
 
-**Sinal positivo:** depois de descongelar, a cópia retoma replicação e execução normal, e a origem é efetivamente desmontada sem referência sobrevivente aos recursos antigos.
+**Positive signal:** after the thaw, the copy resumes replication and normal execution, and the origin is effectively torn down with no surviving reference to the old resources.
 
-**Minha avaliação:** é mais barata como experimento, **não está demonstrado que seja mais barata como solução**. A documentação já mostra por que “segurar por mais tempo” não equivale a estabelecer propriedade correta. Não existe ainda prova de um estado nativo em que a cópia viva deixe de tocar qualquer mapa.
+**My assessment:** it is cheaper as an experiment, **it has not been shown to be cheaper as a solution**. The documentation already shows why "holding for longer" is not the same as establishing correct ownership. There is still no proof of a native state in which the live copy stops touching any map.
 
-### Opção D — Carregamento nativo coordenado, seguido de reconstrução híbrida
+### Option D — Coordinated native loading, followed by a hybrid rebuild
 
-**O que é:** substituir backread forçado e teleporte pelo carregamento nativo, mas continuar reconstruindo as presenças pela mod. Não retomar como premissa a reentrada pura já bloqueada pelos estados da sessão.
+**What it is:** replace the forced backread and the teleport with native loading, but keep rebuilding the presences from the mod. Do not take up again, as a premise, the pure re-entry that the session states already block.
 
-Peças relevantes:
+Relevant pieces:
 
 - Host: `FUN_1401843b0`, `FUN_140184830`, `FUN_14044fe30`.
-- Convidado: construção do pedido que preserve destino e mundo do host, tomando `FUN_1402c2a80` como referência.
-- Reset de presenças: `FUN_140513340` → `FUN_14051bff0`.
-- Reconstrução: as mesmas primitivas da opção A.
+- Guest: building the request so that it preserves the destination and the host's world, taking `FUN_1402c2a80` as a reference.
+- Presence reset: `FUN_140513340` → `FUN_14051bff0`.
+- Rebuild: the same primitives as option A.
 - Watchdog: `FUN_1402be090`.
-- Preservação do retorno original do convidado e do estado de mundo emprestado.
+- Preservation of the guest's original return and of the borrowed-world state.
 
-**Custo:** alto; é troca do transporte e revalidação do mundo, não apenas troca de uma chamada.
+**Cost:** high; it is a change of transport and a revalidation of the world, not just swapping one call.
 
-**Risco:** convidado reaparecer no próprio mundo, instantâneo errado, perda da ligação de replicação, timeout e alteração indevida do registro de retorno.
+**Risk:** the guest reappearing in its own world, the wrong snapshot, loss of the replication link, a timeout, and improper alteration of the return record.
 
-Eu **não neutralizaria globalmente o watchdog**. Primeiro observaria seu armamento; depois definiria um tratamento limitado à transação de viagem, com prazo próprio e recuperação. O fim da transação precisa restaurar o comportamento normal.
+I would **not neutralise the watchdog globally**. First I would watch it arm; then I would define a treatment limited to the travel transaction, with its own deadline and recovery. The end of the transaction has to restore normal behaviour.
 
-**Sinal positivo:** ambos materializam o destino no mundo do host, replicam ações, preservam personagem/save e, na saída legal, o convidado recupera seu mundo original. Deve passar também com viagem iniciada após mais de 300 segundos de sessão.
+**Positive signal:** both materialise the destination in the host's world, replicate actions, preserve character/save and, on a legal exit, the guest gets its original world back. It must also pass with the travel started after more than 300 seconds of session.
 
-**Minha avaliação:** escalada apropriada se o transporte atual continuar produzindo falhas após retirada e destruição comprovadas das cópias.
+**My assessment:** the appropriate escalation if the current transport keeps producing crashes after the copies' removal and destruction have been proven.
 
-## 3. Recomendação
+## 3. Recommendation
 
-**Adotar a opção A, mas investir primeiro no experimento capaz de refutá-la.** A ordem que proponho é:
+**Adopt option A, but invest first in the experiment that can refute it.** The order I propose is:
 
-1. **Fechar a observabilidade mínima.** Publicar contadores completos, identificar gerações dos personagens e observar a destruição adiada. Registrar corretamente a falha de `FUN_1403f4f10`. A prova de chegada do experimento deve incluir contato atual, destino e avanço da física.
-2. **Observar uma entrada e uma saída normais em Heide.** Isso calibra os sinais de registro, materialização, retirada e destruição. Instrumentação passiva reduz o risco, mas não é literalmente “sem custo”: um detour incorreto também pode derrubar o cliente.
-3. **Executar o portão causal antes de implementar reconstrução.** Com fixtures consistentes das duas contas, retirar as cópias nos dois lados, confirmar destruição e realizar um trecho pelo transporte atual, host primeiro.
-4. **Manter as cópias ausentes até o descarregamento efetivo da origem.** Passar de 30 segundos é necessário, mas o cronômetro sozinho não prova que os recursos foram desmontados.
-5. **Se houver falha relevante nesse intervalo, parar a implementação da opção A como solução suficiente.** Investigar a propriedade do componente e escolher B ou D conforme a evidência. A retirada pode continuar sendo parte da solução, mas perdeu a justificativa de resolver sozinha.
-6. **Se o portão não refutar, testar reconstrução no mesmo mapa.** Primeiro um lado, depois o outro, depois ambos. Aqui entram o ensaio de ausência prolongada, o retorno da replicação e o controle de duplicação.
-7. **Integrar preparação e reconstrução à barreira.** A reconstrução deve ocorrer **antes** de `TravelRelease`, com recibos próprios. Não fazer a mensagem que libera o controle também iniciar a criação.
-8. **Validar sequência curta e depois pelo menos 40 trechos reais**, com intervalos que exponham a desmontagem da origem, inversão de host, votação completa, movimento/ações bilaterais e saída legal final.
+1. **Close the minimum observability.** Publish complete counters, identify the characters' generations and observe the deferred destruction. Record the `FUN_1403f4f10` crash correctly. The experiment's proof of arrival must include the current contact, the destination and the physics advancing.
+2. **Watch one normal entry and one normal exit in Heide.** That calibrates the registration, materialisation, removal and destruction signals. Passive instrumentation lowers the risk, but it is not literally "free": an incorrect detour can bring the client down too.
+3. **Run the causal gate before implementing any rebuild.** With consistent fixtures for both accounts, remove the copies on both sides, confirm destruction and do one leg through the current transport, host first.
+4. **Keep the copies absent until the origin is actually unloaded.** Going past 30 seconds is necessary, but the clock on its own does not prove the resources were torn down.
+5. **If there is a relevant crash in that window, stop implementing option A as a sufficient solution.** Investigate the component's ownership and choose B or D according to the evidence. The removal may still be part of the solution, but it has lost its justification as a solution on its own.
+6. **If the gate does not refute it, test a rebuild on the same map.** First one side, then the other, then both. This is where the prolonged-absence trial, the return of replication and the duplication control come in.
+7. **Integrate preparation and rebuild into the barrier.** The rebuild must happen **before** `TravelRelease`, with receipts of its own. Do not make the message that releases control start the creation as well.
+8. **Validate a short sequence and then at least 40 real legs**, with intervals that expose the origin's teardown, host inversion, a complete vote, two-way movement/actions and a final legal exit.
 
-Durante ausência deliberada, `R+8` pode chegar a zero e o portão nativo de sync ficar falso. Portanto, os critérios devem distinguir **sessão preservada durante a ausência** de **replicação funcional depois da reconstrução**. Tráfego no canal 7 prova comunicação da mod, não movimento dos personagens.
+During a deliberate absence, `R+8` can reach zero and the native sync gate can go false. So the criteria have to tell **a session preserved during the absence** from **working replication after the rebuild**. Traffic on channel 7 proves the mod is communicating, not that the characters are moving.
 
-Um trecho com sucesso permite continuar a investigação; não aprova a arquitetura contra uma falha intermitente.
+One successful leg lets the investigation continue; it does not approve the architecture against an intermittent crash.
 
-## 4. Respostas diretas
+## 4. Direct answers
 
-### 1. Os bytes conferem?
+### 1. Do the bytes match?
 
-**Sim: todos os 13 prólogos da tabela conferem integralmente.**
+**Yes: all 13 prologues in the table match completely.**
 
-Também confirmei a sobrescrita de `E+0x40`, o transporte do net id, parte importante da resolução identidade→personagem, a fila adiada e a constante do watchdog.
+I also confirmed the overwrite of `E+0x40`, the net id being carried, an important part of the identity→character resolution, the deferred queue and the watchdog's constant.
 
-A principal correção é o sítio da queda: **`+0x3f4f2b` está em `FUN_1403f4f10`**, lendo o objeto de `componente+0x40`.
+The main correction is the crash site: **`+0x3f4f2b` is in `FUN_1403f4f10`**, reading the object at `componente+0x40`.
 
-Não certifiquei toda a semântica do plano apenas por esses bytes.
+I did not certify the plan's whole semantics from those bytes alone.
 
-### 2. A ordem das fases está certa? Qual é o menor experimento?
+### 2. Is the order of the phases right? What is the smallest experiment?
 
-**Concordo com antecipar o trecho com cópias ausentes, depois da instrumentação necessária para provar que realmente foram destruídas.** Não exigiria implementar a recriação para fazer essa pergunta.
+**I agree with bringing the leg with the copies absent forward, after the instrumentation needed to prove they really were destroyed.** I would not require the recreation to be implemented in order to ask that question.
 
-O menor ensaio interpretável tem:
+The smallest interpretable trial has:
 
-1. Controle com cópias presentes, na mesma rota e condições, para estabelecer exposição ao defeito.
-2. Ensaio em estado inicial equivalente, retirando ambas as cópias ainda na origem.
-3. Recibo positivo de destruição de cada geração antiga.
-4. Travessia serial dos jogadores locais.
-5. Confirmação física de chegada e desmontagem efetiva da origem.
-6. Snapshots dos contadores antes da retirada, depois da retirada, depois da chegada e depois da desmontagem.
+1. A control with the copies present, on the same route and under the same conditions, to establish exposure to the defect.
+2. A trial from an equivalent initial state, removing both copies while still at the origin.
+3. A positive destruction receipt for each old generation.
+4. Serial crossing of the local players.
+5. Physical confirmation of arrival and of the origin actually being torn down.
+6. Snapshots of the counters before the removal, after the removal, after arrival and after the teardown.
 
-Se o controle não reproduzir a falha, uma passagem limpa sem cópias tem pouco poder discriminante. Se a falha ocorrer **depois da destruição comprovada**, a retirada isolada não basta.
+If the control does not reproduce the crash, a clean pass without copies has little discriminating power. If the crash happens **after destruction has been proven**, removal on its own is not enough.
 
-Duas cautelas causais:
+Two causal cautions:
 
-- Uma falha durante a retirada precisa ser classificada separadamente da falha durante a travessia.
-- Falhar sem cópias **não prova que o jogador local seja a causa**. Podem existir resíduos da presença anterior, recursos compartilhados, tarefas pendentes ou um defeito do streamer.
+- A crash during the removal has to be classified separately from a crash during the crossing.
+- Crashing without copies **does not prove the local player is the cause**. There may be residue from the earlier presence, shared resources, pending tasks or a streamer defect.
 
-A limpeza desse ensaio precisa estar prevista para o caso de a saída legal não funcionar sem presenças. O experimento não deve depender de uma recriação ainda inexistente para proteger os saves.
+The trial's cleanup has to be planned for the case where the legal exit does not work without presences. The experiment must not depend on a recreation that does not exist yet in order to protect the saves.
 
-### 3. Como capturar o blob e fazer a cópia voltar a se mexer?
+### 3. How to capture the blob and get the copy moving again?
 
-**Capturaria no ingresso de `FUN_14051b0e0`, antes de chamar o original.**
+**I would capture on entry to `FUN_14051b0e0`, before calling the original.**
 
-Nesse ponto estão disponíveis os quatro elementos úteis: registro, membro, blob e flag. O procedimento seria:
+At that point the four useful elements are available: registry, member, blob and flag. The procedure would be:
 
-- Copiar imediatamente os `0x5f0` bytes para memória pertencente à mod.
-- Registrar identidade normalizada, geração da sessão, lado, flag, tamanho e origem da chamada.
-- Após o original, confirmar o slot pendente efetivamente preenchido.
-- Na criação, correlacionar slot, entrada ativa e nova geração de `PlayerCtrl`.
-- Invalidar o cache ao sair/reentrar, trocar de peer ou mudar a geração da sessão.
-- Resolver novamente o membro pela lista atual antes de registrar. **Não guardar uma cópia bruta do wrapper de 0x40 bytes como membro reutilizável.**
+- Copy the `0x5f0` bytes immediately into memory owned by the mod.
+- Record the normalised identity, the session generation, the side, the flag, the size and where the call came from.
+- After the original, confirm which pending slot was actually filled.
+- At creation, correlate slot, active entry and the new `PlayerCtrl` generation.
+- Invalidate the cache on leave/re-enter, on a peer change or on a change of session generation.
+- Resolve the member again from the current list before registering. **Do not keep a raw copy of the 0x40-byte wrapper as a reusable member.**
 
-O jogo usa `FUN_14051b050` para copiar o payload ao slot. Comparações devem respeitar os campos que esse caminho copia; padding não deve virar uma falsa divergência.
+The game uses `FUN_14051b050` to copy the payload into the slot. Comparisons must respect the fields that path copies; padding must not turn into a false divergence.
 
-Campos concretos relevantes, relativos ao **blob**, não ao slot:
+Concrete relevant fields, relative to the **blob**, not the slot:
 
-| Campo | Uso observado estaticamente |
+| Field | Use observed statically |
 |---|---|
-| `+0x00..+0x3f` | Dados de transformação; posição inicial lida de `+0x30..+0x3f` |
-| `+0x40` | Papel usado na criação |
-| `+0x5c` | Dados entregues à inicialização por `FUN_140338a50` |
-| `+0x18c` | Bloco entregue a um subsistema do personagem |
-| `+0x22e` | Net id copiado para `E+0x6a` |
-| `+0x230` em diante | Seleções e dados de equipamento consumidos na criação |
-| `+0x298` | Valor usado para inicializar HP, limitado pelos valores do personagem criado |
-| `+0x29c` | Nome |
-| `+0x2e0`, contador em `+0x5e0` | Bloco aplicado por `FUN_140228dc0` |
+| `+0x00..+0x3f` | Transform data; initial position read from `+0x30..+0x3f` |
+| `+0x40` | Role used at creation |
+| `+0x5c` | Data handed to initialisation by `FUN_140338a50` |
+| `+0x18c` | Block handed to a character subsystem |
+| `+0x22e` | Net id copied to `E+0x6a` |
+| `+0x230` onwards | Selections and equipment data consumed at creation |
+| `+0x298` | Value used to initialise HP, clamped by the created character's values |
+| `+0x29c` | Name |
+| `+0x2e0`, count at `+0x5e0` | Block applied by `FUN_140228dc0` |
 
-Isso **não é uma especificação completa do blob**.
+This is **not a complete specification of the blob**.
 
-A ligação que deve ser preservada é:
+The link that must be preserved is:
 
-**membro atual ↔ entrada `E` ↔ net id em `E+0x6a` ↔ novo `PlayerCtrl` em `E+0x40`.**
+**current member ↔ entry `E` ↔ net id at `E+0x6a` ↔ new `PlayerCtrl` at `E+0x40`.**
 
-O binário confirma os resolvedores dessa associação. A criação também restaura estado da entrada, incrementa contadores e chama `FUN_1405206a0`, que marca o registro correspondente do membro. Por isso, chamar só o construtor de personagem seria insuficiente.
+The binary confirms the resolvers of that association. The creation also restores the entry's state, increments counters and calls `FUN_1405206a0`, which marks the member's corresponding record. That is why calling only the character constructor would not be enough.
 
-**Não fechei a cadeia inteira do pacote de posição até sua aplicação ao novo personagem.** Ter o net id correto é necessário, mas não demonstra que buffers, portões de sync e estado de recepção retomaram corretamente.
+**I did not close the whole chain from the position packet through to its application to the new character.** Having the right net id is necessary, but it does not show that buffers, sync gates and receive state resumed correctly.
 
-O teste positivo deve mostrar uma sequência distinta — andar, parar, mudar de direção e executar uma ação — chegando à nova geração da cópia nos dois sentidos. Uma cópia visível ou posicionada no destino não basta.
+The positive test has to show a distinctive sequence — walk, stop, change direction and perform an action — reaching the copy's new generation in both directions. A copy that is visible or positioned at the destination is not enough.
 
-Também evitaria reaplicar indiscriminadamente pacotes acumulados durante a ausência. É preciso distinguir estado substituível de eventos, manter o transporte ativo e estabelecer como descartar estado anterior à reconstrução sem quebrar o protocolo nativo.
+I would also avoid indiscriminately replaying packets accumulated during the absence. Replaceable state has to be told apart from events, the transport kept active, and a way established to discard state older than the rebuild without breaking the native protocol.
 
-### 4. Como evitar duplicação e confirmar destruição?
+### 4. How to avoid duplication and confirm destruction?
 
-Usaria uma máquina de estados da mod por identidade e geração, sem adulterar os estados nativos de entrada.
+I would use a mod state machine per identity and generation, without tampering with the entries' native states.
 
-A sequência correta é:
+The correct sequence is:
 
-1. **Reservar a operação.** Impedir que duas solicitações da mesma transação registrem o mesmo peer.
-2. **Capturar a geração antiga.** Registrar `E`, `PlayerCtrl`, identidade e net id enquanto estão válidos.
-3. **Solicitar retirada por `FUN_14051c820`.**
-4. **Deixar o jogo progredir.** Observar estado `3`, passagem por `FUN_14051d2a0` e entrada no caminho do `CharacterManager`.
-5. **Confirmar retirada dos índices e conclusão do ciclo adiado.** A fila `+0x30..+0x38` é processada por `FUN_14035b9c0`; o caminho envolve `FUN_14035b920`, `FUN_14035b380` e liberação de referências.
-6. **Confirmar destruição da geração antiga.** Na vftable de `PlayerCtrl` em `0x1410e4bb8`, conferi os alvos `FUN_14037ec60` no slot `0` e `FUN_14037f240` no slot `+0x10`. São portas concretas para observar destruição e limpeza.
-7. **Revalidar membro, sessão e ausência de registro concorrente.**
-8. **Registrar uma única vez**, deixar materializar e conferir cardinalidade e vínculo de rede.
+1. **Reserve the operation.** Stop two requests from the same transaction registering the same peer.
+2. **Capture the old generation.** Record `E`, `PlayerCtrl`, identity and net id while they are valid.
+3. **Request the removal through `FUN_14051c820`.**
+4. **Let the game make progress.** Watch for state `3`, a pass through `FUN_14051d2a0` and entry into the `CharacterManager` path.
+5. **Confirm removal from the indices and completion of the deferred cycle.** The `+0x30..+0x38` queue is processed by `FUN_14035b9c0`; the path involves `FUN_14035b920`, `FUN_14035b380` and the release of references.
+6. **Confirm the old generation's destruction.** In the `PlayerCtrl` vftable at `0x1410e4bb8`, I checked the targets `FUN_14037ec60` in slot `0` and `FUN_14037f240` in slot `+0x10`. They are concrete doors for observing destruction and cleanup.
+7. **Revalidate member, session and the absence of a concurrent registration.**
+8. **Register exactly once**, let it materialise and check cardinality and the network link.
 
-A confirmação forte combina eventos positivos de retirada, limpeza/destruição e um ponto seguro após o processamento das tarefas. Se o objetivo incluir provar recuperação da memória, acrescentar recibo da liberação pelo alocador, filtrado pelos objetos acompanhados.
+Strong confirmation combines positive events for removal, cleanup/destruction and a safe point after the tasks have been processed. If the goal includes proving the memory was reclaimed, add a receipt of the allocator's free, filtered by the objects being tracked.
 
-**Não usar como prova isolada:** `E.estado=0`, `E+0x40=0`, memória ilegível, endereço diferente ou esperar alguns frames.
+**Do not use as proof on their own:** `E.estado=0`, `E+0x40=0`, unreadable memory, a different address or waiting a few frames.
 
-O alocador pode devolver o mesmo endereço para o novo personagem. Portanto, a identidade de acompanhamento precisa ser **endereço + geração**, e a instrumentação não deve manter uma referência forte que impeça justamente a destruição que tenta medir.
+The allocator can hand the same address back for the new character. So the tracking identity has to be **address + generation**, and the instrumentation must not hold a strong reference that prevents exactly the destruction it is trying to measure.
 
-Finalmente, `FUN_14051b0e0` retornar sucesso significa **pedido pendente aceito**. Repeti-lo porque a cópia ainda não apareceu pode criar vários pendentes para o mesmo jogador.
+Finally, `FUN_14051b0e0` returning success means **a pending request was accepted**. Repeating it because the copy has not appeared yet can create several pending ones for the same player.
 
-### 5. Existe alternativa mais barata?
+### 5. Is there a cheaper alternative?
 
-**Sim: corrigir o ciclo de vida do recurso de `componente+0x40` pode ser mais barato**, se a investigação encontrar uma operação nativa de desligamento e recarga com escopo definido. Esse alvo agora é mais preciso que “pré-desenho do mapa”.
+**Yes: fixing the life cycle of the `componente+0x40` resource may be cheaper**, if the investigation finds a native shutdown-and-reload operation with a defined scope. That target is now more precise than "the map's pre-draw".
 
-Além disso, `FUN_1403f4c20` sugere um caminho nativo de reagir ao backread e trocar o recurso sem reconstruir a presença inteira. É uma pista concreta, não uma solução demonstrada.
+Besides, `FUN_1403f4c20` suggests a native path that reacts to the backread and swaps the resource without rebuilding the whole presence. It is a concrete lead, not a demonstrated solution.
 
-Ocultar desenho é barato, mas não resolve propriedade. Congelar atualização pode ser um bom controle experimental, desde que inclua tarefas pendentes e retenção dos recursos. Sem uma operação segura de retomada, apenas transfere o momento da falha.
+Hiding the drawing is cheap, but it does not solve ownership. Freezing the update may be a good experimental control, as long as it includes pending tasks and holding the resources. Without a safe resume operation, it only moves when the crash happens.
 
-Não recomendaria:
+I would not recommend:
 
-- Chamar `FUN_1403f6300` isoladamente e presumir que tudo ficou desligado.
-- Zerar campos por semelhança com o conserto do Havok.
-- Reabrir genericamente a aceitação do `0xd` em sessão estabelecida: isso não resolve duplicação, destruição adiada nem os demais efeitos da entrada.
-- Manter mapas antigos indefinidamente como solução final.
+- Calling `FUN_1403f6300` on its own and assuming everything was shut down.
+- Zeroing fields by analogy with the Havok fix.
+- Generically reopening acceptance of `0xd` in an established session: that solves neither duplication, nor deferred destruction, nor the entry's other effects.
+- Keeping old maps indefinitely as a final solution.
 
-### 6. Qual é a instrumentação mínima da fase A?
+### 6. What is the minimum instrumentation for phase A?
 
-Separaria o núcleo necessário ao primeiro portão dos hooks necessários para explicar reconstrução e replicação.
+I would separate the core needed for the first gate from the hooks needed to explain the rebuild and the replication.
 
-| Pergunta | Porta de observação | Sinal positivo |
+| Question | Observation door | Positive signal |
 |---|---|---|
-| Quais dados chegaram? | `FUN_14051b0e0`, entrada/saída | Blob capturado e slot pendente associado ao membro |
-| Quem nasceu? | `FUN_14051ce20`, entrada/saída | Nova geração em `E+0x40`, estado `2`, net id correto e inclusão no manager |
-| Quem começou a sair? | `FUN_14051c820` | Transição da geração acompanhada para estado `3` |
-| Quem saiu do registro? | `FUN_14051d2a0` | Ponteiro retirado e contagem ajustada |
-| Quem foi enfileirado? | `FUN_140359890` | Geração antiga aceita no caminho de retirada |
-| Quem concluiu a destruição adiada? | `FUN_14035b9c0` e portas de limpeza/destruição | Processamento da geração antiga, desligamento dos índices e destrutor concluído |
-| Houve reset global? | `FUN_14051bff0`; chamador registrado | Reset observado e motivo distinguido da retirada individual |
-| O novo objeto está resolvível? | `FUN_14051b3c0` ou `FUN_14051a9c0` | Consulta pelo net id retorna a nova geração |
-| A replicação retomou? | Aplicador de movimento ainda a identificar + amostras do personagem | Movimento/ação atual do dono aplicado à cópia |
-| Quem envia o `0xd`? | `FUN_140520810`, filtrado pelo tipo | Envio observado com chamador, thread, tamanho e contexto |
-| Quem possui o modelo que falha? | `FUN_1403f4f10` e instrumentação existente | Associação componente→entidade→geração, capturada enquanto válida |
+| What data arrived? | `FUN_14051b0e0`, entry/exit | The blob captured and the pending slot associated with the member |
+| Who was born? | `FUN_14051ce20`, entry/exit | A new generation at `E+0x40`, state `2`, the right net id and inclusion in the manager |
+| Who started to leave? | `FUN_14051c820` | The tracked generation transitioning to state `3` |
+| Who left the registry? | `FUN_14051d2a0` | The pointer removed and the count adjusted |
+| Who was queued? | `FUN_140359890` | The old generation accepted onto the removal path |
+| Who completed the deferred destruction? | `FUN_14035b9c0` and the cleanup/destruction doors | The old generation processed, the indices detached and the destructor finished |
+| Was there a global reset? | `FUN_14051bff0`; caller recorded | A reset observed and its reason told apart from an individual removal |
+| Is the new object resolvable? | `FUN_14051b3c0` or `FUN_14051a9c0` | A lookup by net id returns the new generation |
+| Did replication resume? | The movement applier, still to be identified, plus character samples | The owner's current movement/action applied to the copy |
+| Who sends the `0xd`? | `FUN_140520810`, filtered by type | A send observed with caller, thread, size and context |
+| Who owns the model that fails? | `FUN_1403f4f10` and the existing instrumentation | A component→entity→generation association, captured while valid |
 
-Para o **primeiro portão**, captura, retirada, fila/destruição e contadores são suficientes; descobrir o emissor do `0xd` não precisa bloquear esse ensaio.
+For the **first gate**, capture, removal, queue/destruction and counters are enough; finding who emits the `0xd` does not have to block that trial.
 
-Para manter o hook pequeno e pouco invasivo:
+To keep the hook small and minimally invasive:
 
-- Registrar eventos binários em buffer limitado; formatar fora dos caminhos quentes.
-- Incluir boot, sessão, viagem, peer, geração, thread e sequência.
-- Publicar snapshots coerentes das cinco entradas, cinco slots e personagens acompanhados.
-- Contar perdas de eventos: buffer saturado torna a prova incompleta.
-- Usar os observadores de tarefas/mapas existentes, acrescentando correlação, sem outro executor.
-- Não persistir ponteiros de objetos do jogo para dereferenciar posteriormente numa thread de log.
+- Record binary events in a bounded buffer; format outside the hot paths.
+- Include boot, session, travel, peer, generation, thread and sequence.
+- Publish coherent snapshots of the five entries, five slots and tracked characters.
+- Count dropped events: a saturated buffer makes the proof incomplete.
+- Use the existing task/map observers, adding correlation, without another executor.
+- Do not persist pointers to game objects in order to dereference them later on a logging thread.
 
-Os contadores devem cobrir pelo menos exceções de mapa, tarefas, modelo/pós-física, soltura/desregistro, nós pulados e corpos Havok descartados. **Contador inalterado é uma condição necessária; o sinal positivo de sucesso vem dos eventos de ciclo de vida, chegada, descarregamento e replicação.**
+The counters must cover at least map exceptions, tasks, model/post-physics, release/deregistration, skipped nodes and discarded Havok bodies. **An unchanged counter is a necessary condition; the positive signal of success comes from the life cycle, arrival, unload and replication events.**
 
-## 5. O que eu não sei
+## 5. What I do not know
 
-### O que foi verificado estaticamente nesta consulta
+### What was verified statically in this consultation
 
-- Os 13 prólogos, tamanho do executável e cabeçalho PE.
-- O consumidor exato de `+0x3f4f2b`.
-- A sobrescrita de `E+0x40`.
-- A transferência do net id e os resolvedores citados.
-- A existência e o processamento da fila adiada.
-- A comparação do watchdog com 300 segundos.
-- As divergências entre contrato documentado, chegada implementada e contadores publicados.
+- The 13 prologues, the executable's size and the PE header.
+- The exact consumer at `+0x3f4f2b`.
+- The overwrite of `E+0x40`.
+- The transfer of the net id and the resolvers cited.
+- The existence and the processing of the deferred queue.
+- The watchdog's comparison against 300 seconds.
+- The divergences between the documented contract, the implemented arrival and the published counters.
 
-### O que é medição anterior relatada pelo projeto
+### What is earlier measurement reported by the project
 
-- Os 40 trechos, a diferença de 16–18 ms entre cortinas e os acionamentos de guardas.
-- A queda de 39 exceções para zero no host após `DropDeadRigidBody`.
-- O reaproveitamento do bloco Havok observado pela vigia.
-- As limitações dos watchpoints de hardware e os resultados das tentativas de reentrada.
+- The 40 legs, the 16–18 ms difference between curtains and the guards firing.
+- The drop from 39 exceptions to zero on the host after `DropDeadRigidBody`.
+- The reuse of the Havok block observed by the watchpoint.
+- The limitations of the hardware watchpoints and the results of the re-entry attempts.
 
-Não reproduzi essas medições nem auditei todos os seus artefatos.
+I did not reproduce those measurements nor audit all of their artifacts.
 
-### O que continua hipótese ou trabalho pendente
+### What remains hypothesis or pending work
 
-- Se retirar as cópias elimina a segunda dependência.
-- Quem possui e quem libera o recurso acessado em `FUN_1403f4f10`.
-- Se a retirada permanece neutra para a sessão em todas as condições relevantes.
-- Se o blob capturado basta para uma reconstrução funcional numa sessão estabelecida.
-- O aplicador final de posição, o tratamento de mensagens durante a ausência e a retomada do sync.
-- A segurança de usar os exportadores para snapshots novos.
-- A possibilidade de recarregar apenas o modelo.
-- A segurança concorrente do ponto escolhido para retirar e registrar.
-- O comportamento com três ou mais jogadores.
+- Whether removing the copies eliminates the second dependency.
+- Who owns and who frees the resource accessed in `FUN_1403f4f10`.
+- Whether the removal stays neutral for the session under every relevant condition.
+- Whether the captured blob is enough for a working rebuild in an established session.
+- The final position applier, the handling of messages during the absence and the resumption of sync.
+- The safety of using the exporters for fresh snapshots.
+- The possibility of reloading only the model.
+- The concurrency safety of the point chosen for removing and registering.
+- The behaviour with three or more players.
 
-**O investimento inicial mais justificável é provar destruição completa e atravessar sem as cópias.** Esse teste responde à ressalva causal antes de o projeto assumir o custo da reconstrução.
+**The most justifiable initial investment is proving complete destruction and crossing without the copies.** That test answers the causal caveat before the project takes on the cost of the rebuild.

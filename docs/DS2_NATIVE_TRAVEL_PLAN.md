@@ -1,25 +1,25 @@
-# Viagem por carregamento nativo (alternativa D): o plano
+# Travel by native loading (option D): the plan
 
-Levantamento feito em 16/09 por um agente Fable, em Ghidra `-readOnly` e
-`objdump`, sem executar nada nos jogos. Versão 1.03 Calibrations 2.02.
+Survey done on 16/09 by a Fable agent, in Ghidra `-readOnly` and `objdump`,
+without running anything in the games. Version 1.03 Calibrations 2.02.
 
-É a resposta à decisão registrada em `DS2_SEAMLESS_COOP_TASKS.md` de refazer a
-viagem do zero, depois de três famílias de queda distintas provarem que forçar
-o mapa ao lado e teleportar é inseguro por construção.
+It is the answer to the decision recorded in `DS2_SEAMLESS_COOP_TASKS.md` to
+redo travel from scratch, after three distinct families of crash proved that
+forcing the map alongside and teleporting is unsafe by construction.
 
-Leia com `DS2_PRESENCE_ASTRA_REVIEW.md` (que define as alternativas A a D) e
-`DS2_PRESENCE_REBUILD_PLAN.md` (as primitivas de presença).
+Read it with `DS2_PRESENCE_ASTRA_REVIEW.md` (which defines options A to D) and
+`DS2_PRESENCE_REBUILD_PLAN.md` (the presence primitives).
 
-## A conclusão que decide o rumo
+## The conclusion that decides the direction
 
-**D puro — carregamento nativo nos dois lados preservando a mesma sessão — não
-está disponível hoje**, e por dois motivos independentes. **O primeiro deles
-foi medido em 16/09 e caiu** (ver a caixa na fase 1); o segundo continua de pé:
+**Pure D — native loading on both sides preserving the same session — is not
+available today**, and for two independent reasons. **The first of them was
+measured on 16/09 and fell** (see the box in phase 1); the second still stands:
 
-1. **A viagem nativa do host provavelmente encerra a própria sessão.**
-   `FUN_1402bd0d0` (slot `+0xe0` do host ctrl) é chamado por `FUN_1402c7ec0` a
-   cada warp daquela máquina, com o motivo. O **case 2** — que é a viagem de
-   menu do host — faz:
+1. **The host's native travel probably ends its own session.**
+   `FUN_1402bd0d0` (slot `+0xe0` of the host ctrl) is called by `FUN_1402c7ec0`
+   on every warp from that machine, with the reason. **Case 2** — which is the
+   host's menu travel — does:
 
        *(ctrl+0x1b8) |= 2;
        if (3 < *(int*)(ctrl+0x30) - 1U) {     // ou seja, (ctrl+0x30) >= 5
@@ -27,42 +27,42 @@ foi medido em 16/09 e caiu** (ver a caixa na fase 1); o segundo continua de pé:
            FUN_1402be1e0(ctrl, 9);             // +0x150 = 0x12: sessão encerrada
        }
 
-   `ctrl+0x30` é o papel do convidado invocado, escrito por `FUN_1402bd560` a
-   partir da mensagem de join, indexado na tabela de 20 papéis de
-   `0x1410c0050` — onde o **fantasma branco é o índice 7**. Se for 7, `3 < 6` é
-   verdade e a sessão morre antes de o carregamento começar.
+   `ctrl+0x30` is the role of the summoned guest, written by `FUN_1402bd560`
+   from the join message, indexed into the table of 20 roles at
+   `0x1410c0050` — where the **white phantom is index 7**. If it is 7, `3 < 6`
+   is true and the session dies before the loading starts.
 
-   **Isto nunca foi exercido**: o M8 só faz o host viajar nativo depois de os
-   convidados saírem legalmente, então o case 2 nunca rodou com convidado vivo.
+   **This was never exercised**: M8 only makes the host travel natively after
+   the guests have left legally, so case 2 has never run with a live guest.
 
-2. **A re-entrada nativa do convidado já estava bloqueada** — o pacote `0xd` só
-   é aceito pelo host em `0xe` e pelo convidado em `0xc`, e a sessão
-   estabelecida veta (ver `DS2_PRESENCE_REBUILD_PLAN.md`).
+2. **The guest's native re-entry was already blocked** — the `0xd` packet is
+   only accepted by the host at `0xe` and by the guest at `0xc`, and an
+   established session vetoes it (see `DS2_PRESENCE_REBUILD_PLAN.md`).
 
-Portanto D fecha de uma de duas formas, e nenhuma é "só trocar o transporte":
+So D closes in one of two ways, and neither is "just swapping the transport":
 
-- **D-3a:** host viaja nativo, **convidado é re-invocado** (sessão nova no
-  destino). Totalmente nativo, zero ponteiro pendurado, já provado ponta a
-  ponta. Custa o ritual de invocação (~75 s) e não é seamless.
-- **D-3b:** host viaja nativo, convidado faz carregamento nativo **e a mod
-  reconstrói a presença** — isto é, **D = carregamento nativo + alternativa A**.
-  Preserva a sessão; é onde está o custo real.
+- **D-3a:** the host travels natively, **the guest is re-summoned** (a new
+  session at the destination). Fully native, zero dangling pointers, already
+  proven end to end. It costs the summoning ritual (~75 s) and is not seamless.
+- **D-3b:** the host travels natively, the guest does a native load **and the
+  mod rebuilds the presence** — that is, **D = native loading + option A**.
+  It preserves the session; that is where the real cost is.
 
-## 1. O caminho nativo
+## 1. The native path
 
-Todo warp passa por `FUN_1401c2a80` (`+0x1c2a80`), slot `+0x40` do contexto
-global `*(0x1416148f0)`. A **viagem de fogueira** é a cadeia acima dele:
+Every warp goes through `FUN_1401c2a80` (`+0x1c2a80`), slot `+0x40` of the
+global context `*(0x1416148f0)`. **Bonfire travel** is the chain above it:
 
-| passo | função | offset |
+| step | function | offset |
 | --- | --- | --- |
-| menu escolhe a fogueira | `FUN_14017fdb0` | `+0x17fdb0` |
-| monta o pedido | `FUN_1401843b0(&req, id, motivo)` | `+0x1843b0` |
-| inicia a viagem | `FUN_140184830(travel, &req)` | `+0x184830` |
-| máquina de fases | `FUN_140184a10(travel)` | `+0x184a10` |
-| **o warp** | `FUN_1401c2a80(ctx, &req, flag)` | `+0x1c2a80` |
-| grava renascimento | `FUN_14044fe30` | `+0x44fe30` |
+| the menu picks the bonfire | `FUN_14017fdb0` | `+0x17fdb0` |
+| builds the request | `FUN_1401843b0(&req, id, motivo)` | `+0x1843b0` |
+| starts the travel | `FUN_140184830(travel, &req)` | `+0x184830` |
+| phase machine | `FUN_140184a10(travel)` | `+0x184a10` |
+| **the warp** | `FUN_1401c2a80(ctx, &req, flag)` | `+0x1c2a80` |
+| writes the respawn point | `FUN_14044fe30` | `+0x44fe30` |
 
-Prólogos conferidos contra o executável:
+Prologues checked against the executable:
 
     +0x17fdb0  4c 8b dc 56 48 81 ec 10 01 00 00 48 8b
     +0x1843b0  48 89 5c 24 08 48 89 74 24 20 57 48 83 ec 60
@@ -72,146 +72,153 @@ Prólogos conferidos contra o executável:
     +0x1c2a80  40 55 41 54 41 56 48 8d 6c 24 e0 48 81 ec
     +0x2bd0d0  83 fa 05 0f 87 4b 01 00 00 53 48 83 ec 20
 
-**Campos do pedido:** `+0x00` família do destino (3 fogueira, 4 mundo próprio,
-2 player-start), `+0x04` **motivo** (1 morte, 2 viagem, 4 entrada/volta),
-`+0x08` id do mapa, `+0x18` ponto de nascimento.
+**Fields of the request:** `+0x00` the destination family (3 bonfire, 4 own
+world, 2 player-start), `+0x04` the **reason** (1 death, 2 travel, 4
+entry/return), `+0x08` the map id, `+0x18` the spawn point.
 
-**O portão de motivo** em `FUN_1401c2a80`: aceita se `ctx+0x24ac == 0x1e` e
-`!(ctx+0x24b1 & 2)`; depois motivo 1 sempre passa, motivo 4 com flag 0 passa
-sem portão, e motivos 2 e 4-flag-1 passam pelo portão `FUN_140248940`, que é
-`*(mgr+0x168) > 0` — o contador de tempo do multiplay, positivo em sessão viva.
+**The reason gate** in `FUN_1401c2a80`: it accepts if `ctx+0x24ac == 0x1e` and
+`!(ctx+0x24b1 & 2)`; after that reason 1 always passes, reason 4 with flag 0
+passes with no gate, and reasons 2 and 4-flag-1 go through the gate
+`FUN_140248940`, which is `*(mgr+0x168) > 0` — the multiplay time counter,
+positive in a live session.
 
-**Host** viaja com motivo 2 flag 0. **Convidado entrando no mundo do host** usa
-motivo 4 flag 1, e essa forma **só é construída pelo handler do estado 2 da
-sessão** a partir de um payload de rede — não pela cadeia de fogueira.
-**Convidado voltando para casa**: motivo 4 flag 0.
+The **host** travels with reason 2 flag 0. **A guest entering the host's
+world** uses reason 4 flag 1, and that form is **only built by the session's
+state 2 handler** from a network payload — not by the bonfire chain.
+**A guest going home**: reason 4 flag 0.
 
-**Por que o carregamento nativo resolve a corrupção:** o loader em `ctx+0x24ac`
-passa pelo estado `0x14`, que destrói mapa e personagens e zera `ctx+0xd0`, e
-pelo `0xb`, que recria. O mundo é remontado, não deslizado, então as três
-famílias de queda deixam de ter onde existir.
+**Why native loading solves the corruption:** the loader at `ctx+0x24ac`
+goes through state `0x14`, which destroys the map and the characters and zeroes
+`ctx+0xd0`, and through `0xb`, which recreates them. The world is rebuilt, not
+slid across, so the three families of crash have nowhere left to exist.
 
-## 2. O mundo emprestado tem quatro componentes, e o warp reconstrói um
+## 2. The borrowed world has four components, and the warp rebuilds one
 
-| componente | onde mora | um warp flag 1 reconstrói? |
+| component | where it lives | does a flag 1 warp rebuild it? |
 | --- | --- | --- |
-| bit "em outro mundo" | `ctx+0x24b1 & 0x40` | **Sim** |
-| registro de volta para casa | `session+0x1a0..+0x1c8` no join ctrl | Não é regravado; sobrevive enquanto o objeto existir |
-| snapshot do mundo do host (flags, fogueiras, objetos) | importado por `FUN_1402c2fa0`, **só no estado join 4** | **Não** |
-| presenças remotas (a cópia do outro) | registradas no **estado join 5**, materializadas por `0xd→0xe→0xf` | **Não** |
+| the "in another world" bit | `ctx+0x24b1 & 0x40` | **Yes** |
+| the go-home record | `session+0x1a0..+0x1c8` in the join ctrl | Not rewritten; it survives as long as the object exists |
+| the host's world snapshot (flags, bonfires, objects) | imported by `FUN_1402c2fa0`, **only in join state 4** | **No** |
+| remote presences (the other player's copy) | registered in **join state 5**, materialised by `0xd→0xe→0xf` | **No** |
 
-Isto explica de vez a tentativa 4, em que o convidado voltou para o próprio
-mundo: reemitir só o warp move o jogador, liga o bit, e não refaz nem o
-snapshot nem a presença.
+This explains attempt 4 once and for all, where the guest went back to its own
+world: reissuing just the warp moves the player, turns the bit on, and remakes
+neither the snapshot nor the presence.
 
-**Aviso que vale ouro:** o convidado **nunca** deve chamar `FUN_14044fe30` —
-ela grava o registro de renascimento do **próprio** jogador, que vai para o
-save e para o registro de volta-para-casa. Um convidado que grave ali a
-fogueira do host contamina o save dele. Só o host grava.
+**A warning worth gold:** the guest must **never** call `FUN_14044fe30` —
+it writes the **local** player's respawn record, which goes into the save and
+into the go-home record. A guest that writes the host's bonfire there
+contaminates its own save. Only the host writes.
 
-## 3. Os watchdogs — são dois
+## 3. The watchdogs — there are two
 
 **300 s** (`FUN_1402be090`, `DAT_1410d7b40 = 300.0f`, bytes `00 00 96 43`):
-dispara com o bit `0x10` de `ctrl+0x1b8` armado e `ctrl+8 - ctrl+0x1b4 > 300`.
-O case 0 de `FUN_1402bd0d0` arma **e renova** `+0x1b4`; o case 4 arma e **não
-renova**. Tratamento dentro da transação: guardar `+0x1b8` e `+0x1b4`, renovar
-`+0x1b4 = ctrl+8` se o bit estiver armado, restaurar no fim. É escrita de dados
-num campo por quadro, reversível — não desligar globalmente.
+it fires with bit `0x10` of `ctrl+0x1b8` armed and `ctrl+8 - ctrl+0x1b4 > 300`.
+Case 0 of `FUN_1402bd0d0` arms **and refreshes** `+0x1b4`; case 4 arms and
+**does not refresh**. Handling inside the transaction: save `+0x1b8` and
+`+0x1b4`, refresh `+0x1b4 = ctrl+8` if the bit is armed, restore at the end. It
+is a data write into a per-frame field, reversible — do not switch it off
+globally.
 
-**~23 s, o do silêncio** — e este é **o matador mais provável**. Medido na
-tentativa 9: o host largou um convidado silencioso ~23 s depois de ele parar de
-mandar. Durante um carregamento nativo o convidado tem `ctx+0xd0 = 0` e não
-manda nada por segundos. Rankeia à frente do de 300 s.
+**~23 s, the silence one** — and this is **the most likely killer**. Measured
+in attempt 9: the host dropped a silent guest ~23 s after it stopped sending.
+During a native load the guest has `ctx+0xd0 = 0` and sends nothing for
+seconds. It ranks ahead of the 300 s one.
 
-## 4. O que sobrevive
+## 4. What survives
 
-| peça | sobrevive | como muda |
+| piece | survives | how it changes |
 | --- | --- | --- |
-| contrato `Idle/Moving/Arrived/Failed` | sim | `Arrived` passa a vir do **fim do carregamento nativo** (`ctx+0x24ac` de volta a `0x1e`, `ctx+0xd0 != 0`), não do streamer. "Nunca por tempo" continua |
-| barreira + `TravelRelease` + host primeiro | sim, intacta | o gatilho do recibo muda; host primeiro fica **mais** necessário, porque o convidado importa o snapshot do host |
-| provas de tipo | sim | |
-| guardas `__try` | sim, como rede | devem passar a **nunca** disparar; um disparo vira sinal de que o carregamento não aconteceu |
-| `DropDeadRigidBody` | vira **medidor** | deve parar de disparar |
-| canal entre as máquinas | sim, central | carrega a transação e, em D-3b, o blob da presença |
-| transporte (backread forçado, teleporte, contato) | **não** | sai inteiro; é a fonte da corrupção |
-| cortina desenhada por nós | **em aberto** | provavelmente vira a tela do próprio jogo; `FUN_140b06270` é inerte fora de um warp real e **não foi testado dentro de um** |
+| the `Idle/Moving/Arrived/Failed` contract | yes | `Arrived` now comes from the **end of the native load** (`ctx+0x24ac` back to `0x1e`, `ctx+0xd0 != 0`), not from the streamer. "Never by time" stays |
+| barrier + `TravelRelease` + host first | yes, intact | the receipt's trigger changes; host first becomes **more** necessary, because the guest imports the host's snapshot |
+| type proofs | yes | |
+| the `__try` guards | yes, as a net | they must from now on **never** fire; a firing becomes a sign that the load did not happen |
+| `DropDeadRigidBody` | becomes a **gauge** | it must stop firing |
+| the channel between the machines | yes, central | it carries the transaction and, in D-3b, the presence blob |
+| the transport (forced backread, teleport, contact) | **no** | it goes entirely; it is the source of the corruption |
+| the curtain we draw ourselves | **open** | it probably becomes the game's own screen; `FUN_140b06270` is inert outside a real warp and **has not been tested inside one** |
 
-## 5. As fases
+## 5. The phases
 
-> ## Fase 1 medida em 16/09: **passou**
+> ## Phase 1 measured on 16/09: **passed**
 >
-> Sessão de co-op viva e verificada, sem viajar. O controlador do host
-> (`0x7ffffe5bf120`, vftable `0x1410d7998`, `+0x150 = 0x10`) tem
+> A live, verified co-op session, without travelling. The host's controller
+> (`0x7ffffe5bf120`, vftable `0x1410d7998`, `+0x150 = 0x10`) has
 >
 >     ctrl+0x30 = 1
 >
-> A previsão estática era 7. **Está errada.** Com 1, a condição do case 2 é
-> `3 < (unsigned)(1 - 1)` = `3 < 0` = falsa, e o ramo que manda `0x15` ao par e
-> encerra a sessão **não roda**. A viagem nativa do host **não mata a sessão**.
+> The static prediction was 7. **It is wrong.** With 1, case 2's condition is
+> `3 < (unsigned)(1 - 1)` = `3 < 0` = false, and the branch that sends `0x15`
+> to the peer and ends the session **does not run**. The host's native travel
+> **does not kill the session**.
 >
-> A aritmética foi conferida no binário e não só na decompilação do relatório:
-> em `FUN_1402bd0d0`, `param_1` é `longlong*`, então `param_1[6]` é o byte
-> `+0x30` e `param_1+0x37` como `uint*` é `+0x1b8`. Confere. E vale registrar o
-> outro lado da comparação: ela é verdadeira para `x >= 5` **e também para
-> `x == 0`**, que dá wrap em unsigned — então zero é tão perigoso quanto sete.
+> The arithmetic was checked in the binary and not only in the report's
+> decompilation: in `FUN_1402bd0d0`, `param_1` is a `longlong*`, so
+> `param_1[6]` is the byte `+0x30` and `param_1+0x37` as a `uint*` is `+0x1b8`.
+> It checks out. And the other side of the comparison is worth recording: it is
+> true for `x >= 5` **and also for `x == 0`**, which wraps in unsigned — so
+> zero is as dangerous as seven.
 >
-> A varredura pela vftable devolve dois endereços; o segundo (`0xa38fb08`) é
-> falso positivo — o `+0x150` dele é um ponteiro, não um estado.
+> The scan by vftable returns two addresses; the second (`0xa38fb08`) is a
+> false positive — its `+0x150` is a pointer, not a state.
 >
-> **Escopo desta medição:** uma amostra, um convidado, fantasma branco invocado
-> pelo sistema de party, logo depois da invocação. Não cobre invasor nem outros
-> papéis, e não foi observada ao longo de uma sessão inteira.
+> **Scope of this measurement:** one sample, one guest, a white phantom
+> summoned by the party system, right after the summon. It does not cover an
+> invader or other roles, and it was not observed across a whole session.
 >
-> **Consequência:** D-mesma-sessão **não** precisa do hook host-side de
-> supressão de fim de sessão. Esse risco, que era o mais caro do plano, está
-> fora. O caminho segue para a fase 2.
+> **Consequence:** D-same-session does **not** need the host-side hook that
+> suppresses the session end. That risk, which was the most expensive in the
+> plan, is out. The path moves on to phase 2.
 >
-> **De brinde, para a fase 2:** no mesmo controlador, `+0x1b8 = 0x261` — o bit
-> `0x10` **não** está armado — e `+0x1b4 = 0.0` com o relógio `+0x08` em 65,9 s.
-> Ou seja `+0x1b4` nunca foi renovado; se algo armar aquele bit depois de 300 s
-> de sessão, o watchdog dispara **na hora**, sem os 300 s de folga.
+> **As a bonus, for phase 2:** on the same controller, `+0x1b8 = 0x261` — bit
+> `0x10` is **not** armed — and `+0x1b4 = 0.0` with the clock `+0x08` at
+> 65.9 s. That is, `+0x1b4` was never refreshed; if something arms that bit
+> after 300 s of session, the watchdog fires **immediately**, with none of the
+> 300 s of slack.
 
-**Fase 1 — custo zero, e é a que pode matar D inteiro.** Ler `+0x30` do host
-ctrl (`NetSummonAcceptMultiplayCtrl`, vftable `0x1410d7998`) **numa sessão de
-co-op viva, sem viajar**. Se for >= 5 (previsão estática: 7, o fantasma
-branco), a viagem nativa do host encerra a sessão, e D-mesma-sessão passa a
-exigir um hook novo do lado do **host** suprimindo o fim de sessão no case 2 —
-uma classe de intervenção que nunca existiu aqui (toda supressão até hoje é do
-convidado). Se for < 5, o host viaja nativo sem encerrar e D fica barato.
+**Phase 1 — zero cost, and it is the one that can kill D entirely.** Read
+`+0x30` of the host ctrl (`NetSummonAcceptMultiplayCtrl`, vftable
+`0x1410d7998`) **in a live co-op session, without travelling**. If it is >= 5
+(static prediction: 7, the white phantom), the host's native travel ends the
+session, and D-same-session then requires a new hook on the **host** side
+suppressing the session end in case 2 — a class of intervention that has never
+existed here (every suppression so far is the guest's). If it is < 5, the host
+travels natively without ending it and D comes cheap.
 
-> ## Fase 2 medida em 16/09: o warp passa, e **mata o host pelas presenças**
+> ## Phase 2 measured on 16/09: the warp passes, and **kills the host through the presences**
 >
-> Duas corridas, mesmo destino (`0a1f0000`, fogueira `7ba7`), mesma função
-> `StartTravel`. A diferença entre elas é uma só, e por isso valem como
-> controle e experimento.
+> Two runs, the same destination (`0a1f0000`, bonfire `7ba7`), the same
+> `StartTravel` function. There is only one difference between them, and that
+> is why they work as control and experiment.
 >
-> **Controle — convidado fora da sessão.** Pelo caminho de fallback
-> (`junta desliga` → votação → `TravelLeave` → `StartTravel`): o host viaja e
-> **chega** em Heide (`-18.5, 209`). O objeto do controlador some no mesmo
-> segundo, mas por causa da saída dos convidados, não do warp.
+> **Control — guest outside the session.** Through the fallback path
+> (`junta desliga` → vote → `TravelLeave` → `StartTravel`): the host travels
+> and **arrives** in Heide (`-18.5, 209`). The controller's object disappears
+> in the same second, but because of the guests leaving, not because of the
+> warp.
 >
-> **Experimento — convidado dentro da sessão.** Pelo pedido `nativo`, que
-> chama `StartTravel` sem mandar ninguém embora:
+> **Experiment — guest inside the session.** Through the `nativo` request,
+> which calls `StartTravel` without sending anyone away:
 >
 >     21:36:58  estado=0x10 papel=1 flags=0x261 armado=False relogio=54.2
 >     21:36:59  host: viagem iniciada para a fogueira 7ba7
 >     21:37:01  estado=0x10 papel=1 flags=0x271 armado=True  relogio=57.2
 >     21:37:03  excecao c0000005 em +0x5180a8, lendo 0xffffffffffffffff
 >
-> **Três coisas medidas, em ordem de importância.**
+> **Three things measured, in order of importance.**
 >
-> **1. A fase 1 se confirmou em ação.** No instante do warp o estado seguiu
-> `0x10` e o papel seguiu 1: o ramo do case 2 que encerra a sessão **não
-> rodou**. O host pode warpar sem que a sessão seja encerrada por aquele
-> caminho.
+> **1. Phase 1 confirmed itself in action.** At the instant of the warp the
+> state stayed `0x10` and the role stayed 1: the case 2 branch that ends the
+> session **did not run**. The host can warp without the session being ended by
+> that path.
 >
-> **2. O warp arma o watchdog de 300 s e não renova a marca.** As flags foram
-> de `0x261` para `0x271` — o bit `0x10` ligou — com `+0x1b4` ainda em `0.0` e
-> o relógio em 57,2 s. É exatamente a configuração que o levantamento previu
-> como perigosa, e agora está medida: a partir daí a sessão está num
-> cronômetro que dispara quando o relógio passar de 300.
+> **2. The warp arms the 300 s watchdog and does not refresh the mark.** The
+> flags went from `0x261` to `0x271` — bit `0x10` came on — with `+0x1b4` still
+> at `0.0` and the clock at 57.2 s. It is exactly the configuration the survey
+> predicted as dangerous, and now it is measured: from then on the session is
+> on a timer that fires when the clock passes 300.
 >
-> **3. E o host caiu 3,7 s depois, dentro do código de presença.**
+> **3. And the host crashed 3.7 s later, inside the presence code.**
 >
 >     1405180a0:  sub  $0x28,%rsp
 >     1405180a4:  mov  0x60(%rcx),%rax     rcx = 0x7fffe81ed980
@@ -220,91 +227,95 @@ convidado). Se for < 5, o host viaja nativo sem encerrar e D fica barato.
 >     rax = 3f800000293988ec  -> dois floats (1.0 e 4.1e-14), nao um ponteiro
 >     retornos: +0x5184b0 +0xa480d2 +0x10c5118 +0x517154 +0x5140c0
 >
-> A pilha inteira está em `0x51xxxx`, a região do registro de presenças
-> remotas. O campo `+0x60` do objeto devolveu dados de ponto flutuante onde o
-> código espera um ponteiro.
+> The whole stack is in `0x51xxxx`, the region of the remote presence registry.
+> The object's `+0x60` field returned floating-point data where the code
+> expects a pointer.
 >
-> **O que o par controle/experimento isola.** Mesmo warp, mesmo destino, mesma
-> fogueira: **sem presenças, chega limpo; com presenças, mata o host em 3,7 s.**
-> O warp não é o problema — as presenças remotas sendo desmontadas debaixo de
-> uma sessão viva são.
+> **What the control/experiment pair isolates.** Same warp, same destination,
+> same bonfire: **without presences it arrives clean; with presences it kills
+> the host in 3.7 s.** The warp is not the problem — the remote presences being
+> torn down underneath a live session are.
 >
-> **Consequência para o plano.** O que era inferência vira medição: "presenças
-> remotas **não** são reconstruídas por um warp" é fraco demais. Elas são
-> desmontadas, e a maquinaria de sessão continua andando por cima do que sobrou.
-> Portanto **D-3b exige retirar as presenças antes do warp** — `FUN_14051c820`
-> por jogador, a primitiva do `DS2_PRESENCE_REBUILD_PLAN.md` — e recriá-las
-> depois. Isto é, **D = carregamento nativo + alternativa A**, agora com apoio
-> empírico e não só por leitura.
+> **Consequence for the plan.** What was inference becomes measurement:
+> "remote presences are **not** rebuilt by a warp" is too weak. They are torn
+> down, and the session machinery keeps walking over what is left. So
+> **D-3b requires removing the presences before the warp** — `FUN_14051c820`
+> per player, the primitive from `DS2_PRESENCE_REBUILD_PLAN.md` — and
+> recreating them afterwards. That is, **D = native loading + option A**, now
+> with empirical support and not just from reading.
 >
-> **Custo.** O host caiu (Samuel estava em 30 antes). O convidado **não pagou**:
-> ficou em 80, e foi parado sem `--force` depois.
+> **Cost.** The host crashed (Samuel was at 30 before). The guest **did not
+> pay**: it stayed at 80, and was stopped without `--force` afterwards.
 >
-> **E um erro de método que custou caro, registrado para não repetir:** antes
-> deste experimento eu parei os jogos com `game stop --force` achando que não
-> havia sessão; o party tinha reinvocado e havia. **Vinte pontos**, dez em cada
-> personagem (Samuel 20→30, Chico 70→80). O `--force` existe justamente para
-> atropelar a checagem que evita isso. Nunca usar `--force` sem antes ler o
-> estado da sessão.
+> **And a method mistake that cost dearly, recorded so as not to repeat it:**
+> before this experiment I stopped the games with `game stop --force` thinking
+> there was no session; the party had re-summoned and there was. **Twenty
+> points**, ten on each character (Samuel 20→30, Chico 70→80). `--force` exists
+> precisely to run over the check that prevents this. Never use `--force`
+> without reading the session state first.
 
-**Fase 2 — viagem nativa só do host, sem convidado, custo ~zero.** Instrumentar
-`FUN_1402be090` e a cadeia do warp; confirmar que o controlador do host
-sobrevive além de 300 s e que o watchdog não arma. Aqui também se responde se a
-tela de carregamento do jogo serve de cortina.
+**Phase 2 — native travel by the host only, no guest, cost ~zero.** Instrument
+`FUN_1402be090` and the warp chain; confirm that the host's controller survives
+beyond 300 s and that the watchdog does not arm. This is also where the
+question of whether the game's loading screen works as a curtain is answered.
 
-> ## A primeira metade de 3b, medida em 16/09: **a hipótese caiu**
+> ## The first half of 3b, measured on 16/09: **the hypothesis fell**
 >
-> A regra decidida é viagem em conjunto com **sessão preservada**, que é a 3b.
-> O experimento mais barato para a primeira metade: se o host morre 3,7 s depois
-> do warp porque as presenças são desmontadas debaixo de uma sessão viva, então
-> retirá-las antes deve fazer a queda sumir.
+> The rule decided on is travelling together with the **session preserved**,
+> which is 3b. The cheapest experiment for the first half: if the host dies
+> 3.7 s after the warp because the presences are torn down underneath a live
+> session, then removing them first should make the crash go away.
 >
-> **Retirar funciona.** `presenca` leu o registro `0x7FFFFE479D80` com 1 viva,
-> entrada 0, estado 2, papel 1, net id 257, personagem `0x7FFFEB7B9E60`.
-> `presenca retira` chamou `FUN_14051c820` e três segundos depois o registro
-> lia **0 vivas**.
+> **Removing works.** `presenca` read the registry `0x7FFFFE479D80` with 1
+> alive, entry 0, state 2, role 1, net id 257, character `0x7FFFEB7B9E60`.
+> `presenca retira` called `FUN_14051c820` and three seconds later the registry
+> read **0 alive**.
 >
-> **E a sessão sobreviveu à retirada** — `p2pSessionVerified: true`, host em
-> `0x10`, convidado em 7, pacotes cruzando. Esta é a primeira **medição** da
-> premissa central do `DS2_PRESENCE_REBUILD_PLAN.md`, que até aqui era leitura
-> estática: `FUN_14051c820` tira uma presença sem tocar na sessão.
+> **And the session survived the removal** — `p2pSessionVerified: true`, the
+> host at `0x10`, the guest at 7, packets crossing. This is the first
+> **measurement** of the central premise of `DS2_PRESENCE_REBUILD_PLAN.md`,
+> which until now was static reading: `FUN_14051c820` removes a presence
+> without touching the session.
 >
-> **Mas o host caiu do mesmo jeito**, no mesmo endereço e no mesmo tempo:
+> **But the host crashed all the same**, at the same address and at the same
+> time:
 >
 >     22:03:27.531  presencas (antes da viagem nativa): 0 viva(s)
 >     22:03:27.531  host: viagem iniciada para a fogueira 7ba7
 >     22:03:31.200  excecao c0000005 em +0x5180a8, rax=00000000bf7c1c5d
 >
-> **Onde eu errei.** O "controle" da fase 2 — o caminho de fallback que chegou
-> limpo — tirava as presenças **e** encerrava a sessão. Eu atribuí às presenças
-> o que podia ser de qualquer uma das duas. Com presenças fora e sessão viva a
-> queda continua, então **as presenças não são a causa**. É a terceira hipótese
-> minha derrubada por medição hoje, e as três tinham a mesma forma: uma
-> explicação plausível sustentada por um teste que não separava as variáveis.
+> **Where I got it wrong.** Phase 2's "control" — the fallback path that
+> arrived clean — removed the presences **and** ended the session. I attributed
+> to the presences what could have come from either of the two. With presences
+> out and the session alive the crash continues, so **the presences are not the
+> cause**. It is the third hypothesis of mine knocked down by measurement
+> today, and all three had the same shape: a plausible explanation held up by a
+> test that did not separate the variables.
 >
-> **O que a queda é, com precisão.** `FUN_1405180a0(param_1)`:
+> **What the crash is, precisely.** `FUN_1405180a0(param_1)`:
 >
 >     uVar4 = *(param_1 + 0x60);      // devolveu bf7c1c5d, um float
 >     iVar1 = *(int *)(uVar4 + 0x18); // <- +0x5180a8, aqui
 >     ... &DAT_1410c0050 + papel * 0x10
 >
-> É uma consulta de **papel**, na mesma tabela de 20 papéis que o case 2 de
-> `FUN_1402bd0d0` indexa. Chamada por `FUN_140518230(objeto, float)`, que é uma
-> **atualização por quadro**. Ou seja: o warp invalida um objeto e a máquina de
-> rede continua rodando por cima dele no quadro seguinte.
+> It is a **role** lookup, in the same table of 20 roles that case 2 of
+> `FUN_1402bd0d0` indexes. Called by `FUN_140518230(objeto, float)`, which is a
+> **per-frame update**. That is: the warp invalidates an object and the network
+> machine keeps running over it on the next frame.
 >
-> **O que isso muda no plano.** A 3b não começa com "retirar as presenças". Ela
-> começa com **parar a máquina de rede durante o warp**, ou impedir que ela
-> ande sobre o objeto que o warp derruba. Retirar presença continua sendo
-> necessário para a reconstrução, mas não é o que evita esta queda.
+> **What that changes in the plan.** 3b does not start with "remove the
+> presences". It starts with **stopping the network machine during the warp**,
+> or stopping it from walking over the object the warp brings down. Removing a
+> presence is still necessary for the rebuild, but it is not what avoids this
+> crash.
 >
-> **Custo.** O host caiu (Samuel 30 → 40, contando a queda da fase 2). O
-> convidado ficou em 80 e foi parado sem `--force`.
+> **Cost.** The host crashed (Samuel 30 → 40, counting the phase 2 crash). The
+> guest stayed at 80 and was stopped without `--force`.
 
-> ## Quem é o `param_1` e quem o invalida (16/09, leitura estática)
+> ## Who `param_1` is and who invalidates it (16/09, static reading)
 >
-> **O despachante.** `FUN_140514020(param_1, delta)` é a batida por quadro da
-> camada de rede, e ela percorre os slots do objeto global `DAT_141616cf8`:
+> **The dispatcher.** `FUN_140514020(param_1, delta)` is the network layer's
+> per-frame tick, and it walks the slots of the global object `DAT_141616cf8`:
 >
 >     raiz[0] = *raiz        -> FUN_140520ed0      (e lido em +0xa4 e +0xb4)
 >     raiz[1] = raiz+0x08    -> FUN_14051e860
@@ -314,12 +325,13 @@ tela de carregamento do jogo serve de cortina.
 >     raiz[5] = raiz+0x28    -> FUN_1405170e0      <- o que quebra
 >     raiz[6] = raiz+0x30    -> FUN_140291170
 >
-> Então **`param_1` é `*(0x141616cf8 + 0x28)`**: um irmão do registro de
-> presenças, no mesmo objeto de rede, batido todo quadro. Ele tem estado em
-> `+0x08` (0, 1 ou 2), uma trava em `+0x78` que `FUN_1405170e0` fecha no começo
-> e abre no fim, e só chama a função que quebra quando o estado é 1 ou 2.
+> So **`param_1` is `*(0x141616cf8 + 0x28)`**: a sibling of the presence
+> registry, in the same network object, ticked every frame. It has a state at
+> `+0x08` (0, 1 or 2), a lock at `+0x78` that `FUN_1405170e0` closes at the
+> start and opens at the end, and it only calls the function that breaks when
+> the state is 1 or 2.
 >
-> **O objeto que morre.** Dentro de `FUN_140518230` existe um vetor:
+> **The object that dies.** Inside `FUN_140518230` there is a vector:
 >
 >     registros = *(param_1 + 0x10)     contagem em param_1 + 0x0c
 >     cada registro tem 0x18 bytes:
@@ -328,143 +340,148 @@ tela de carregamento do jogo serve de cortina.
 >       +0x0a  bandeiras; bit 0 "em uso", bit 1 "ja tratado"
 >       +0x10  **um ponteiro para um objeto do jogo**
 >
-> É esse `registro+0x10` que vai para `FUN_1405180a0`, que lê `+0x60` dele,
-> depois `+0x18` daquilo, e indexa a tabela de papéis `DAT_1410c0050`. Nas duas
-> quedas o `+0x60` devolveu ponto flutuante (`3f800000293988ec` e `bf7c1c5d`),
-> e os dois endereços eram vizinhos (`0x7fffe81ed980` e `0x7fffe81ed160`):
-> elementos de uma mesma coleção, reaproveitados.
+> It is that `registro+0x10` that goes to `FUN_1405180a0`, which reads its
+> `+0x60`, then that thing's `+0x18`, and indexes the role table
+> `DAT_1410c0050`. In both crashes `+0x60` returned floating point
+> (`3f800000293988ec` and `bf7c1c5d`), and the two addresses were neighbours
+> (`0x7fffe81ed980` and `0x7fffe81ed160`): elements of the same collection,
+> reused.
 >
-> `FUN_1405180a0` também chama `FUN_14017b7e0(param_1 + 0x10)`, que é da mesma
-> família dos `GetComponent<T>` que já nos morderam — o objeto é do tipo
-> personagem.
+> `FUN_1405180a0` also calls `FUN_14017b7e0(param_1 + 0x10)`, which is from the
+> same family as the `GetComponent<T>` calls that have bitten us before — the
+> object is of the character type.
 >
-> **Quem invalida:** o próprio warp. O carregador passa pelo estado `0x14`, que
-> destrói mapa e personagens e zera `ctx+0xd0`. O objeto de `registro+0x10`
-> morre ali, e **nada limpa o registro** — o bit "em uso" continua ligado, a
-> etiqueta continua `0x7f00`, e no quadro seguinte a camada de rede anda por
-> cima dele. É a mesma doença de sempre, numa lista nova.
+> **Who invalidates it:** the warp itself. The loader goes through state
+> `0x14`, which destroys the map and the characters and zeroes `ctx+0xd0`. The
+> object at `registro+0x10` dies there, and **nothing cleans the record** — the
+> "in use" bit stays on, the tag stays `0x7f00`, and on the next frame the
+> network layer walks over it. It is the same old disease, in a new list.
 >
-> **Isto é leitura, não medição.** O que falta medir é quem escreve por cima do
-> objeto, e agora há um alvo com endereço: a cadeia
-> `*(*(0x141616cf8 + 0x28) + 0x10) + i*0x18 + 0x10` dá o objeto **antes** do
-> warp, e a vigia de página (`wp` em `DS2_Trace.req`) pode ser armada sobre ele
-> enquanto ele ainda existe. É a ferramenta que achou o corpo rígido, e é a
-> primeira vez nesta investigação que ela tem um endereço para vigiar.
+> **This is reading, not measurement.** What is left to measure is who writes
+> over the object, and now there is a target with an address: the chain
+> `*(*(0x141616cf8 + 0x28) + 0x10) + i*0x18 + 0x10` gives the object **before**
+> the warp, and the page watchpoint (`wp` in `DS2_Trace.req`) can be armed on
+> it while it still exists. It is the tool that found the rigid body, and it is
+> the first time in this investigation that it has an address to watch.
 >
-> **E sugere um conserto mais barato que reconstruir presença:** limpar o bit
-> "em uso" dos registros com etiqueta `0x7f00` antes do warp, ou segurar o
-> estado de `*(raiz+0x28)` em 0 durante a transação de viagem, que é o que
-> impede `FUN_1405170e0` de chamar a função que quebra. Nenhum dos dois foi
-> testado.
+> **And it suggests a fix cheaper than rebuilding a presence:** clear the
+> "in use" bit of the records tagged `0x7f00` before the warp, or hold the
+> state of `*(raiz+0x28)` at 0 during the travel transaction, which is what
+> stops `FUN_1405170e0` from calling the function that breaks. Neither of the
+> two has been tested.
 
-> ## O teste do sync, e o que ele revelou sem querer (16/09, 22:24)
+> ## The sync test, and what it revealed by accident (16/09, 22:24)
 >
-> A leitura ao vivo tinha fechado bonito: o subsistema `*(raiz+0x28)` guarda o
-> **id do mapa corrente** em `+0x18`, estado em `+0x08`, e trinta registros de
-> `0x18` bytes com ponteiro para personagem em `+0x10`. **Os dois endereços das
-> duas quedas eram os registros 11 e 24 desse vetor**, ambos com etiqueta
-> `0x7f00` e bandeiras `0x11` — exatamente a combinação que chega na consulta
-> de papel. O encaixe era perfeito.
+> The live reading had closed nicely: the `*(raiz+0x28)` subsystem keeps the
+> **current map id** at `+0x18`, the state at `+0x08`, and thirty records of
+> `0x18` bytes with a pointer to a character at `+0x10`. **The two addresses
+> from the two crashes were records 11 and 24 of that vector**, both tagged
+> `0x7f00` and with flags `0x11` — exactly the combination that reaches the
+> role lookup. The fit was perfect.
 >
-> O conserto: escrever 0 no estado, que é o estado ocioso do próprio jogo e
-> desliga o ramo que quebra.
+> The fix: write 0 into the state, which is the game's own idle state and
+> switches off the branch that breaks.
 >
-> **Não funcionou, por dois motivos, e o primeiro é o que importa.**
+> **It did not work, for two reasons, and the first is the one that matters.**
 >
-> **1. A escrita não gruda.** `sync para` levou o estado de 1 para 0 às
-> 22:23:59. Treze segundos depois, no momento da viagem, o log da própria
-> viagem leu **estado 1**: a máquina de estados do jogo tinha restaurado
-> sozinha. A intervenção não estava em vigor quando importava. Qualquer
-> conserto aqui tem que ser um detour em `FUN_1405170e0`, não uma escrita.
+> **1. The write does not stick.** `sync para` took the state from 1 to 0 at
+> 22:23:59. Thirteen seconds later, at the moment of the travel, the travel's
+> own log read **state 1**: the game's state machine had restored it on its
+> own. The intervention was not in force when it mattered. Any fix here has to
+> be a detour in `FUN_1405170e0`, not a write.
 >
-> **2. E eu mudei duas variáveis de novo.** O destino desta corrida foi Majula
-> (`0a040000`) e não Heide (`0a1f0000`), porque o host já estava em Heide.
-> Então esta corrida não é comparável às duas anteriores.
+> **2. And I changed two variables again.** This run's destination was Majula
+> (`0a040000`) and not Heide (`0a1f0000`), because the host was already in
+> Heide. So this run is not comparable to the two before it.
 >
-> **A queda mudou de endereço**, de `+0x5180a8` para `+0x3ce81c`:
+> **The crash changed address**, from `+0x5180a8` to `+0x3ce81c`:
 >
 >     1403ce810:  mov 0x10(%rbx),%rax      o vetor
 >     1403ce814:  mov (%rax,%rdi,8),%rsi   indice 0x4e
 >     1403ce818:  mov 0x30(%rsi),%rcx      devolveu NULO
 >     1403ce81c:  mov 0x58(%rcx),%eax      <- aqui
 >
-> Com `rax = 0x7fffe81ecfd0`, dentro da mesma vizinhança dos objetos do sync.
-> **Não dá para saber se mudou por causa do destino ou da intervenção**, e a
-> intervenção nem estava ativa. É mais uma lista com referência pendurada.
+> With `rax = 0x7fffe81ecfd0`, inside the same neighbourhood as the sync
+> objects. **There is no way to tell whether it changed because of the
+> destination or because of the intervention**, and the intervention was not
+> even active. It is one more list with a dangling reference.
 >
-> ## A conclusão que eu tiraria, e ela é desagradável
+> ## The conclusion I would draw, and it is unpleasant
 >
-> Este é o terceiro consumidor distinto a morrer pelo mesmo motivo hoje: as
-> listas de componentes das entidades (74 cópias do mesmo laço), a lista de
-> sincronia de personagens do mapa, e agora este vetor. **Consertar consumidor
-> não termina** — é a mesma lição da manhã, cobrada outra vez à noite.
+> This is the third distinct consumer to die for the same reason today: the
+> entities' component lists (74 copies of the same loop), the map's character
+> sync list, and now this vector. **Fixing consumers never ends** — it is the
+> same lesson as this morning, charged again at night.
 >
-> O warp derruba o mundo **assumindo que nada mais aponta para ele**. Uma
-> sessão viva aponta, por várias estruturas ao mesmo tempo. Não parece haver
-> um ponto único onde intervir.
+> The warp brings the world down **assuming nothing else points at it**. A live
+> session does point at it, through several structures at once. There does not
+> seem to be a single point to intervene at.
 >
-> Isso empurra a leitura para: **"host warpa enquanto a sessão vive" pode
-> simplesmente não ser viável por remendo.** O que funciona hoje, e funcionou
-> limpo nas duas vezes que foi testado, é o warp com a sessão **encerrada** —
-> que é a D-3a.
+> That pushes the reading towards: **"the host warps while the session is
+> alive" may simply not be viable by patching.** What works today, and worked
+> cleanly both times it was tested, is the warp with the session **ended** —
+> which is D-3a.
 >
-> A regra do projeto é sessão preservada, então a saída, se existir, não é
-> impedir que a sessão toque o mundo durante o warp: é **suspender a sessão**
-> durante a travessia e retomá-la do outro lado, sem que ela seja encerrada do
-> ponto de vista do servidor nem dos saves. Isso não foi investigado, e não sei
-> se existe.
+> The project's rule is a preserved session, so the way out, if it exists, is
+> not to stop the session touching the world during the warp: it is to
+> **suspend the session** during the crossing and resume it on the other side,
+> without it being ended from the server's point of view or from the saves'.
+> That has not been investigated, and I do not know whether it exists.
 
-> ## O silêncio da rede: funcionou, e a queda esperou (16/09, 22:50)
+> ## The network's silence: it worked, and the crash waited (16/09, 22:50)
 >
-> O detour em `FUN_140514020` — a batida única de onde toda a camada de rede é
-> percorrida — foi armado antes do warp e solto quando o mundo voltasse.
+> The detour in `FUN_140514020` — the single tick from which the whole network
+> layer is walked — was armed before the warp and released when the world came
+> back.
 >
-> **A primeira corrida não provou nada e o log disse por quê:** a janela abriu e
-> fechou em três milissegundos, com **zero** batidas puladas, porque no instante
-> de armar o mundo ainda estava de pé. A condição de saída tinha uma borda só.
-> Corrigida para duas — o mundo cair e depois voltar.
+> **The first run proved nothing and the log said why:** the window opened and
+> closed in three milliseconds, with **zero** ticks skipped, because at the
+> moment of arming, the world was still standing. The exit condition had only
+> one edge. Corrected to two — the world falling and then coming back.
 >
-> **A segunda corrida funcionou:** 192 batidas puladas em 5,3 s, com o mundo
-> caindo e voltando. Nenhum subsistema de rede andou enquanto não havia mundo.
+> **The second run worked:** 192 ticks skipped in 5.3 s, with the world falling
+> and coming back. No network subsystem ran while there was no world.
 >
-> **E o host caiu assim mesmo, no mesmo milissegundo em que a janela fechou:**
+> **And the host crashed all the same, in the same millisecond the window
+> closed:**
 >
 >     22:50:42.945  rede: parei a batida ate o mundo voltar
 >     22:50:48.278  rede: o mundo voltou; 192 batida(s) puladas
 >     22:50:48.279  excecao c0000005 em +0x5180a8
 >
-> Em `+0x5180a8`, que é a consulta de papel do sync — a mesma de antes.
+> At `+0x5180a8`, which is the sync's role lookup — the same one as before.
 >
-> **O que isso diz, com precisão.** O silêncio não era pouco: era cedo demais
-> para acabar. Quando o carregador volta ao ocioso e o personagem existe, a
-> **lista de sincronia ainda é a do mapa velho** — no momento da viagem ela
-> lia `mapa 0a1f0000` e o destino era `0a040000`. A primeira batida depois do
-> silêncio anda a lista velha e morre.
+> **What that says, precisely.** The silence was not too little: it ended too
+> early. When the loader goes back to idle and the character exists, the
+> **sync list is still the old map's** — at the moment of the travel it read
+> `mapa 0a1f0000` and the destination was `0a040000`. The first tick after the
+> silence walks the old list and dies.
 >
-> **O conserto que a evidência aponta**, e ele é de uma linha: ao soltar a
-> janela, **pôr o estado do sync em 0 antes** de deixar a batida passar, para
-> que `FUN_1405170e0` tome o ramo que reconstrói em vez do que anda. A escrita
-> avulsa de 22:23 não colou porque foi treze segundos antes e a máquina
-> restaurou; no instante exato da soltura, a batida seguinte é a que lê.
+> **The fix the evidence points at**, and it is a one-liner: when releasing the
+> window, **put the sync's state at 0 first**, before letting the tick through,
+> so that `FUN_1405170e0` takes the branch that rebuilds instead of the one
+> that walks. The stand-alone write at 22:23 did not stick because it was
+> thirteen seconds earlier and the machine restored it; at the exact instant of
+> the release, the next tick is the one that reads.
 >
-> **Mas é a quinta intervenção**, e as quatro anteriores tiveram esta mesma
-> forma: evidência boa, conserto plausível, e a queda aparecendo no lugar
-> seguinte. Vale dizer isso antes de gastar mais.
+> **But it is the fifth intervention**, and the four before it had this same
+> shape: good evidence, a plausible fix, and the crash showing up in the next
+> place. That is worth saying before spending more.
 >
-> **Duas correções ao que eu já tinha escrito aqui.** A queda **não** é
-> determinística, e também **não** é imediata: a corrida das 22:41 pareceu
-> limpa, e o host morreu minutos depois, o que só se descobriu quando o
-> `session end` falhou por falta de processo. Qualquer medição daqui para
-> frente precisa vigiar minutos, não os 3,7 s do primeiro caso.
+> **Two corrections to what I had already written here.** The crash is **not**
+> deterministic, and it is **not** immediate either: the 22:41 run looked
+> clean, and the host died minutes later, which was only discovered when
+> `session end` failed for lack of a process. Any measurement from here on has
+> to watch for minutes, not the 3.7 s of the first case.
 >
-> **Custo até aqui:** Samuel de 10 a 70 pontos ao longo da noite. Chico intacto
-> em 80 — o convidado nunca pagou por esta linha de trabalho.
+> **Cost so far:** Samuel from 10 to 70 points over the night. Chico intact at
+> 80 — the guest has never paid for this line of work.
 
-> ## O veredito da noite de 16/09: a viagem nativa com sessão viva não se
-> conserta por remendo
+> ## The verdict of the night of 16/09: native travel with a live session
+> cannot be fixed by patching
 >
-> O último conserto — zerar o estado do sync no instante exato em que o
-> silêncio da rede termina — **funcionou uma vez e falhou na seguinte**.
+> The last fix — zeroing the sync's state at the exact instant the network's
+> silence ends — **worked once and failed the next time**.
 >
 >     23:01:46  sync (o mundo voltou): estado 1 -> 0
 >     23:01:46  rede: o mundo voltou; 193 batida(s) puladas
@@ -474,65 +491,66 @@ tela de carregamento do jogo serve de cortina.
 >     23:05:04  rede: o mundo voltou; 153 batida(s) puladas
 >     23:06:08  excecao c0000005 em +0x1e5c30      <- 64 s depois
 >
-> **Cinco intervenções, cinco endereços diferentes:**
+> **Five interventions, five different addresses:**
 >
-> | intervenção | onde a queda foi parar |
+> | intervention | where the crash ended up |
 > | --- | --- |
-> | guarda no pré-desenho (`FUN_1403f4f10`) | `+0x17b260`, um `GetComponent<T>` |
-> | varredura das listas de entidade | `+0xfd8592`, busca que devolve nulo |
-> | retirada das presenças | `+0x5180a8`, consulta de papel do sync |
-> | silêncio da batida da rede | `+0x5180a8`, no ms em que a janela fecha |
-> | zerar o sync ao soltar a janela | `+0x1e5c30`, 64 s depois |
+> | a guard in the pre-draw (`FUN_1403f4f10`) | `+0x17b260`, a `GetComponent<T>` |
+> | a sweep of the entity lists | `+0xfd8592`, a lookup that returns null |
+> | removing the presences | `+0x5180a8`, the sync's role lookup |
+> | silencing the network tick | `+0x5180a8`, in the ms the window closes |
+> | zeroing the sync on releasing the window | `+0x1e5c30`, 64 s later |
 >
-> Cada conserto foi tecnicamente correto sobre o que o anterior revelou, e
-> nenhum terminou. O warp derruba o mundo assumindo que **nada** aponta para
-> ele; uma sessão viva aponta por estruturas demais, e elas não estão
-> enumeradas em lugar nenhum.
+> Each fix was technically correct about what the previous one revealed, and
+> none of them finished the job. The warp brings the world down assuming
+> **nothing** points at it; a live session points at it through too many
+> structures, and they are not enumerated anywhere.
 >
-> **O que está provado e vale guardar:**
+> **What is proven and worth keeping:**
 >
-> - o host **pode** warpar nativo sem que a sessão seja encerrada pelo case 2
->   (`ctrl+0x30 = 1` medido, e a sessão seguiu verificada nas duas corridas);
-> - `FUN_14051c820` retira uma presença **sem tocar na sessão** (medido, não
->   mais leitura);
-> - a batida da rede **pode** ser silenciada durante o carregamento
->   (192 e 153 batidas puladas, mundo caindo e voltando);
-> - e uma viagem nativa completa com sessão preservada **é possível** — ela
->   aconteceu, uma vez, com o host chegando em Majula e o convidado seguindo
->   fantasma em Heide.
+> - the host **can** warp natively without the session being ended by case 2
+>   (`ctrl+0x30 = 1` measured, and the session stayed verified in both runs);
+> - `FUN_14051c820` removes a presence **without touching the session**
+>   (measured, no longer just reading);
+> - the network tick **can** be silenced during the load
+>   (192 and 153 ticks skipped, the world falling and coming back);
+> - and a complete native travel with the session preserved **is possible** —
+>   it happened, once, with the host arriving in Majula and the guest still a
+>   phantom in Heide.
 >
-> **O que não está:** que ela seja repetível. É uma em duas com o último
-> conserto, e as quedas são intermitentes e às vezes tardias, o que torna
-> qualquer corrida curta inconclusiva.
+> **What is not:** that it is repeatable. It is one in two with the last fix,
+> and the crashes are intermittent and sometimes late, which makes any short
+> run inconclusive.
 >
-> **Recomendação:** parar de remendar consumidor. Os caminhos que sobram, em
-> ordem de honestidade:
+> **Recommendation:** stop patching consumers. The paths that remain, in order
+> of honesty:
 >
-> 1. **D-3a** — os dois saem da sessão, viajam nativo, o party reinvoca do
->    outro lado. Funciona hoje, é inteiramente nativo, e custa o ritual de
->    invocação. Não é seamless, e é o único caminho com zero quedas medidas.
-> 2. **Achar a enumeração**, se existir: o que o jogo faz quando *ele* encerra
->    uma sessão antes de um warp, que é o caminho limpo das duas corridas de
->    controle. Se houver uma função que desfaz tudo o que a sessão pendurou no
->    mundo, chamá-la antes do warp e refazer depois é um conserto de raiz e não
->    um remendo. Não foi procurada.
-> 3. Continuar remendando, sabendo que a sexta intervenção tem a mesma forma
->    das cinco anteriores.
+> 1. **D-3a** — both leave the session, travel natively, and the party
+>    re-summons on the other side. It works today, it is entirely native, and
+>    it costs the summoning ritual. It is not seamless, and it is the only path
+>    with zero measured crashes.
+> 2. **Find the enumeration**, if it exists: what the game does when *it* ends
+>    a session before a warp, which is the clean path of both control runs. If
+>    there is a function that undoes everything the session hung on the world,
+>    calling it before the warp and redoing it afterwards is a root fix and not
+>    a patch. It has not been looked for.
+> 3. Keep patching, knowing that the sixth intervention has the same shape as
+>    the five before it.
 >
-> **Custo da noite:** Samuel de 10 a 90 pontos. Chico intacto em 80. O convidado
-> nunca pagou por esta linha de trabalho — todas as quedas foram do host.
+> **Cost of the night:** Samuel from 10 to 90 points. Chico intact at 80. The
+> guest has never paid for this line of work — every crash was the host's.
 
-> ## A taxa medida, e o que o silêncio realmente comprou (16/09, 23:36)
+> ## The measured rate, and what the silence really bought (16/09, 23:36)
 >
-> Com os pontos de penalidade deixando de ser recurso escasso (o `save restore`
-> do harness desfaz), deu para medir taxa em vez de anedota.
+> With penalty points no longer a scarce resource (the harness's `save restore`
+> undoes them), it became possible to measure a rate instead of an anecdote.
 >
-> **O teste precisou ser corrigido primeiro.** Depois de uma viagem a presença
-> do parceiro **some** — visto numa captura do usuário, e é o que o plano
-> previa. Sem presença a viagem é o caso seguro, então uma série de viagens
-> seguidas mede o caso fácil e devolve um número bonito e falso. O
-> `taxa.sh` espera o party reinvocar e só conta a tentativa quando o log
-> confirma `1 viva(s)` antes de viajar.
+> **The test had to be corrected first.** After a travel the partner's presence
+> **disappears** — seen in a screenshot from the user, and it is what the plan
+> predicted. Without a presence the travel is the safe case, so a series of
+> travels back to back measures the easy case and returns a pretty, false
+> number. `taxa.sh` waits for the party to re-summon and only counts the
+> attempt when the log confirms `1 viva(s)` before travelling.
 >
 >     tentativa 1 (Majula):  limpa (193 batidas puladas)
 >     tentativa 2 (Heide):   limpa (154)
@@ -540,508 +558,520 @@ tela de carregamento do jogo serve de cortina.
 >     tentativa 4 (Heide):   limpa (158)
 >     tentativa 5 (Majula):  CAIU em +0x3f39b3, 3 s depois
 >
-> Somando com as duas corridas anteriores do mesmo build: **5 limpas e 2
-> quedas**. Antes do conserto eram 4 quedas em 5.
+> Adding the two earlier runs of the same build: **5 clean and 2 crashes**.
+> Before the fix it was 4 crashes in 5.
 >
-> **O que o silêncio comprou, com precisão.** Ele tirou a família de quedas da
-> **camada de rede** — `+0x5180a8` e `+0x1e5c30` não voltaram. A queda da
-> tentativa 5 é outra coisa: aconteceu **dentro** da janela, com a rede calada
-> (não há linha "o mundo voltou"), e em `+0x3f39b3`, que é a vizinhança do
-> `MapModelComponent` — a mesma família da manhã, que o `DS2_TravelWatchHook`
-> guarda.
+> **What the silence bought, precisely.** It removed the **network layer**
+> family of crashes — `+0x5180a8` and `+0x1e5c30` did not come back. The crash
+> in attempt 5 is something else: it happened **inside** the window, with the
+> network silent (there is no "o mundo voltou" line), and at `+0x3f39b3`, which
+> is the `MapModelComponent` neighbourhood — the same family as this morning's,
+> the one `DS2_TravelWatchHook` guards.
 >
-> Ou seja: silenciar a rede resolveu a rede, e agora quem tropeça na demolição
-> do mundo é a camada de mapa. O warp é perigoso para mais de um subsistema, e
-> cada um precisa do seu próprio tratamento — ou de um que os cubra todos.
+> That is: silencing the network solved the network, and now what trips over
+> the world's demolition is the map layer. The warp is dangerous for more than
+> one subsystem, and each one needs its own treatment — or one that covers them
+> all.
 >
-> **Leitura honesta:** isto é uma melhora real e medida, de ~20% para ~70% de
-> viagens limpas, e **não** é um conserto. Uma viagem em conjunto que falha uma
-> vez a cada três não serve para jogar.
+> **Honest reading:** this is a real, measured improvement, from ~20% to ~70%
+> clean travels, and it is **not** a fix. Travelling together that fails one
+> time in three is no good for playing.
 >
-> **Também confirmado visualmente:** depois da viagem o fantasma do parceiro
-> **não aparece mais** no mundo do host. A sessão segue verificada e os pacotes
-> cruzam, mas a presença foi destruída e não reconstruída. A segunda metade da
-> 3b continua inteira, e agora tem prova de tela.
+> **Also confirmed visually:** after the travel the partner's phantom **no
+> longer appears** in the host's world. The session stays verified and the
+> packets cross, but the presence was destroyed and not rebuilt. The second
+> half of 3b is still entirely ahead, and now it has proof on screen.
 >
-> **E um confundidor descartado:** doze capturas de tela seguidas, sem viajar,
-> com sessão de pé, não derrubaram nada. `game shot` sozinho não mata o jogo;
-> uma captura na janela instável depois da viagem pode encontrá-lo já quebrado,
-> que é coisa diferente.
+> **And one confounder ruled out:** twelve screenshots in a row, without
+> travelling, with the session up, brought nothing down. `game shot` on its own
+> does not kill the game; a capture in the unstable window after the travel may
+> find it already broken, which is a different thing.
 
-> ## Onde a viagem em conjunto chegou (17/09)
+> ## Where travelling together got to (17/09)
 >
-> **A chegada funciona, e é reprodutível.** Três corridas independentes com a
-> régua completa:
+> **Arrival works, and it is reproducible.** Three independent runs with the
+> full ruler:
 >
 >     host:      papel 0, Heide, fogueira 7ba2
 >     convidado: papel 1, ao lado do host
 >     sessao:    verificada
 >
-> A receita, na ordem, e cada passo foi medido separadamente:
+> The recipe, in order, and each step was measured separately:
 >
-> 1. o host retira as presenças (`FUN_14051c820` por entrada viva) — medido:
->    tira sem tocar na sessão;
-> 2. o host viaja pela cadeia nativa com a batida da rede calada durante o
->    carregamento (`FUN_140514020` silenciada, ~155 batidas puladas);
-> 3. **três segundos depois** o convidado viaja pelo warp direto com flag 1, a
->    flag de "sou fantasma no mundo de outro" — zero segundos e doze segundos
->    ambos falham, o intervalo importa;
-> 4. o host recria a presença com o blob capturado na entrada de
->    `FUN_14051b0e0`; a cópia recriada **se move** quando o dono anda.
+> 1. the host removes the presences (`FUN_14051c820` per live entry) —
+>    measured: it removes without touching the session;
+> 2. the host travels through the native chain with the network tick silenced
+>    during the load (`FUN_140514020` silenced, ~155 ticks skipped);
+> 3. **three seconds later** the guest travels by the direct warp with flag 1,
+>    the "I am a phantom in someone else's world" flag — zero seconds and
+>    twelve seconds both fail, the interval matters;
+> 4. the host recreates the presence with the blob captured on entry to
+>    `FUN_14051b0e0`; the recreated copy **moves** when its owner walks.
 >
-> A rede só volta **dois segundos depois** de o mundo assentar. Sem isso o
-> convidado morria 14 e 21 ms depois da soltura, duas de duas.
+> The network only comes back **two seconds after** the world settles. Without
+> that the guest died 14 and 21 ms after the release, two out of two.
 >
-> **O que falta: a sessão cai 180 a 190 segundos depois.**
+> **What is missing: the session drops 180 to 190 seconds later.**
 >
-> Não é o watchdog de 300 s — a marca `ctrl+0x1b4` foi renovada à mão e a queda
-> veio igual, aos 190 s. O servidor diz quem sai: **o convidado**, por
-> `RequestNotifyLeaveSession`. E o log dele mostra por quê, em duas linhas:
+> It is not the 300 s watchdog — the `ctrl+0x1b4` mark was refreshed by hand
+> and the drop came all the same, at 190 s. The server says who leaves: **the
+> guest**, through `RequestNotifyLeaveSession`. And its log shows why, in two
+> lines:
 >
 >     canal 7: enviados=0 recebidos=333
 >     sessao ...: 1 membros (so eu)  ->  0 membros
 >
-> A sessão P2P do convidado perde o host da lista de membros e então ele sai
-> sozinho. O warp do convidado quebra a participação dele, não a do host.
-> `FUN_1402c2820`, que escreve o `+0x120` da saída, tem guarda `+0xf8 < 3` e o
-> convidado ativo está em 7, então **não é por ali** — o caminho ainda não foi
-> achado.
+> The guest's P2P session loses the host from its member list and then it
+> leaves on its own. The guest's warp breaks its own participation, not the
+> host's. `FUN_1402c2820`, which writes the exit's `+0x120`, has a `+0xf8 < 3`
+> guard and the active guest is at 7, so **it is not through there** — the path
+> has not been found yet.
 >
-> ## Armadilhas de bancada que invalidaram corridas
+> ## Bench traps that invalidated runs
 >
-> Registradas porque cada uma me fez medir coisa nenhuma achando que media:
+> Recorded because each of them had me measuring nothing while thinking I was
+> measuring:
 >
-> - o backup usado como base tinha o **host em Heide e o convidado em Majula**;
->   mapas diferentes nunca formam sessão, e o sintoma lê como party quebrado.
->   Existe agora `base-majula` com os dois no mesmo lugar;
-> - **`session end` pausa o `DS2_Party` e o `up` não retoma** — sem um `retoma`
->   explícito nenhuma sessão se forma depois de uma limpeza;
-> - **`game stop` falha calado com sessão viva**, os jogos seguem com o estado
->   velho e o `up` seguinte não faz nada. Um ciclo inteiro rodou com o convidado
->   já morto sem eu notar, e produziu um "a sessão sobreviveu seis minutos" de
->   uma sessão que não existia;
-> - **sobreviver não é passar**: houve corrida com os dois jogos de pé, sem
->   queda, e sem co-op nenhum — convidado de volta ao próprio mundo, papel 0.
->   A régua tem de conferir processo vivo, sessão verificada, papel de fantasma
->   e mapa de destino, na chegada **e** ao longo da vigília.
+> - the backup used as the base had the **host in Heide and the guest in
+>   Majula**; different maps never form a session, and the symptom reads as a
+>   broken party. There is now a `base-majula` with both in the same place;
+> - **`session end` pauses `DS2_Party` and `up` does not resume it** — without
+>   an explicit `retoma` no session forms after a cleanup;
+> - **`game stop` fails silently with a live session**, the games carry on with
+>   the old state and the next `up` does nothing. A whole cycle ran with the
+>   guest already dead without my noticing, and produced a "the session
+>   survived six minutes" for a session that did not exist;
+> - **surviving is not passing**: there was a run with both games standing, no
+>   crash, and no co-op at all — the guest back in its own world, role 0.
+>   The ruler has to check a live process, a verified session, the phantom role
+>   and the destination map, on arrival **and** throughout the watch.
 
-> ## A viagem em conjunto funcionando, nos quatro destinos (17/09, 13:30)
+> ## Travelling together working, at all four destinations (17/09, 13:30)
 >
-> **Transportes diferentes para cada lado**, e essa assimetria é o achado
-> central. Veio do par de experimentos que isola a causa:
+> **A different transport for each side**, and that asymmetry is the central
+> finding. It came from the pair of experiments that isolates the cause:
 >
 >     convidado viaja sozinho -> sessao sobrevive 5 min, segue fantasma
 >     host viaja sozinho      -> sessao cai em 10 s, convidado vai para casa
 >
-> O warp nativo do **host** é o que mata a sessão. O do convidado é seguro.
-> Então cada lado usa o que não o quebra:
+> The **host's** native warp is what kills the session. The guest's is safe.
+> So each side uses whatever does not break it:
 >
-> | lado | transporte | por quê |
+> | side | transport | why |
 > | --- | --- | --- |
-> | host | o antigo: backread + teleporte | não há warp, então a sessão nunca é tocada; 52 trechos sem uma queda de sessão |
-> | convidado | warp nativo com flag 1 | carregamento de verdade, que é o que resolve a corrupção dele; e é seguro para a sessão |
+> | host | the old one: backread + teleport | there is no warp, so the session is never touched; 52 legs without a single session drop |
+> | guest | native warp with flag 1 | a real load, which is what solves its corruption; and it is safe for the session |
 >
-> O convidado **não** precisa do silêncio da rede — ele foi feito para o warp
-> do host. Tirá-lo é uma peça a menos.
+> The guest does **not** need the network silence — that was made for the
+> host's warp. Taking it out is one piece fewer.
 >
-> ### Medido, quatro destinos numa sessão só, três minutos de vigília cada
+> ### Measured, four destinations in a single session, three minutes of watching each
 >
 >     Majula       (122a, 0a040000)   2.2 m entre os dois
 >     Heide        (7ba2, 0a1f0000)   1.7 m
 >     Iron Keep    (4cc2, 0a130000)   1.1 m
 >     Brume Tower  (2d82, 140b0000)   1.7 m
 >
-> Em todos: `p2pSessionVerified: true`, convidado papel 1, nenhuma queda dos
-> dois lados. No fim: host estado `0x10`, convidado estado 7, os dois na lista
-> de membros, pacotes cruzando, e o registro de presenças com uma entrada viva.
+> In all of them: `p2pSessionVerified: true`, the guest at role 1, no crash on
+> either side. At the end: the host in state `0x10`, the guest in state 7, both
+> on the member list, packets crossing, and the presence registry with one live
+> entry.
 >
-> **Os quatro ids de mapa**, que não estavam documentados em lugar nenhum:
+> **The four map ids**, which were not documented anywhere:
 > Majula `0a040000`, Heide `0a1f0000`, **Iron Keep `0a130000`**, **Brume Tower
-> `140b0000`**. E as primeiras fogueiras: `122a` The Far Fire, `7ba2` Tower of
+> `140b0000`**. And the first bonfires: `122a` The Far Fire, `7ba2` Tower of
 > Flame, `4cc2` Ironhearth Hall, `2d82` Tower of Prayer.
 >
-> ### Correção de 17/09: a chegada estava certa e a co-presença não
+> ### Correction of 17/09: the arrival was right and the co-presence was not
 >
-> Uma captura do usuário mostrou o que a minha régua não media: **o convidado
-> não vê o host**. O host vê o fantasma do convidado; a tela do convidado está
-> vazia, e ele não consegue usar a fogueira.
+> A screenshot from the user showed what my ruler was not measuring: **the
+> guest does not see the host**. The host sees the guest's phantom; the guest's
+> screen is empty, and it cannot use the bonfire.
 >
-> As coordenadas batiam a 1,7 m e a sessão estava verificada, mas proximidade
-> de coordenadas não prova co-presença. O bit "estou no mundo de outro" está
-> certo (`ctx+0x24b1 = 0x40` no convidado, `0x00` no host), então o problema
-> não é o warp com flag 1.
+> The coordinates matched to within 1.7 m and the session was verified, but
+> coordinates being close does not prove co-presence. The "I am in someone
+> else's world" bit is right (`ctx+0x24b1 = 0x40` on the guest, `0x00` on the
+> host), so the problem is not the flag 1 warp.
 >
-> **É que a reconstrução de presença é de mão única.** Medido, o estado normal
-> de uma sessão é simétrico:
+> **The point is that the presence rebuild is one-way.** Measured, the normal
+> state of a session is symmetrical:
 >
 >     host      -> 1 presenca: papel 1 (o convidado), net id 513
 >     convidado -> 1 presenca: papel 0 (o host),      net id 32512
 >
-> O warp do convidado destrói o registro **dele**, que é onde mora a cópia do
-> host, e eu só recriava no host. Recriar no convidado **não funciona**: o
-> pedido é aceito, o slot pendente é preenchido e consumido, e nenhuma das
-> cinco entradas nasce.
+> The guest's warp destroys **its own** registry, which is where the host's
+> copy lives, and I was only recreating on the host. Recreating on the guest
+> **does not work**: the request is accepted, the pending slot is filled and
+> consumed, and none of the five entries is born.
 >
-> A causa provável é o atalho que tomei conscientemente: guardo o **ponteiro**
-> do membro capturado na entrada em vez de re-resolvê-lo da lista viva
-> (`FUN_140520040`), que é o que o `DS2_PRESENCE_REBUILD_PLAN.md` mandava. No
-> host o ponteiro sobrevive; no convidado, aparentemente não. O portão do
-> nascimento em `FUN_14051dbb0` não é o problema - ele só exige liberação para
-> papel `0xe`, e o nosso é 0.
+> The likely cause is the shortcut I took knowingly: I keep the **pointer** of
+> the member captured on entry instead of re-resolving it from the live list
+> (`FUN_140520040`), which is what `DS2_PRESENCE_REBUILD_PLAN.md` told me to
+> do. On the host the pointer survives; on the guest, apparently not. The birth
+> gate in `FUN_14051dbb0` is not the problem - it only requires clearance for
+> role `0xe`, and ours is 0.
 >
-> ### E o transporte antigo não alcança tudo
+> ### And the old transport does not reach everything
 >
-> Testado nos quatro destinos com os dois lados nele: Majula e Heide passam
-> (1,2 m e 0,9 m), **Iron Keep falha** - o host vai e o convidado fica 857 m
-> atrás, porque o backread só traz mapas que o streamer alcança a partir do
-> atual. Para destino distante o convidado precisa mesmo do warp nativo, o que
-> torna a reconstrução de presença obrigatória e não opcional.
+> Tested at all four destinations with both sides on it: Majula and Heide pass
+> (1.2 m and 0.9 m), **Iron Keep fails** - the host goes and the guest stays
+> 857 m behind, because the backread only brings maps the streamer can reach
+> from the current one. For a distant destination the guest really does need
+> the native warp, which makes the presence rebuild mandatory and not optional.
 
-### O que ainda não está feito
+### What is still not done
 >
-> A viagem é acionada por dois pedidos (`ir` no host e `fantasma` no
-> convidado), não pela votação. Falta ligar a receita ao caminho de votação e à
-> barreira, para virar uma ação só.
+> The travel is triggered by two requests (`ir` on the host and `fantasma` on
+> the guest), not by the vote. What is left is wiring the recipe to the voting
+> path and to the barrier, so it becomes a single action.
 
-> ## O mundo emprestado depois do warp: vazio (17/09, 15:30)
+> ## The borrowed world after the warp: empty (17/09, 15:30)
 >
-> O usuário relatou que o convidado, chegando em Heide pela receita, **não
-> consegue usar a fogueira**. Controle primeiro: numa invocação normal em
-> Majula o convidado vê "A: Rest at bonfire" e descansa (`convidado: descanso
-> na fogueira 0000122a no mundo do host`). Depois da receita, parado na
-> `7ba2` de Heide com o "Samuel" ao lado, nada.
+> The user reported that the guest, arriving in Heide through the recipe,
+> **cannot use the bonfire**. Control first: in a normal summon in Majula the
+> guest sees "A: Rest at bonfire" and rests (`convidado: descanso na fogueira
+> 0000122a no mundo do host`). After the recipe, standing at Heide's `7ba2`
+> with "Samuel" beside it, nothing.
 >
-> Três medições, todas na mesma bancada:
+> Three measurements, all on the same bench:
 >
-> - **`esd 4000`** no convidado: **0 consultas** de script de evento em 4 s.
->   O host, no mesmo ponto: 4 consultas por quadro (130301, 130311, 130321,
->   132003). Os scripts do mapa não estão avaliando nada no convidado.
-> - **`ds2os-dev flags`**: o convidado com **0 flags ligadas em todas as
->   categorias** (10, 20, 13100…), o host com dezenas. Nem as flags do
->   próprio save dele: a cópia 1 do `EventFlagBuffer` (o "mundo de outro")
->   foi zerada pelo carregamento e nunca preenchida.
-> - **`ctrl+0x19c`** do controlador de join do convidado ainda lê
->   `0a040000`, o mapa da invocação original.
+> - **`esd 4000`** on the guest: **0 queries** of an event script in 4 s.
+>   The host, at the same spot: 4 queries per frame (130301, 130311, 130321,
+>   132003). The map's scripts are evaluating nothing on the guest.
+> - **`ds2os-dev flags`**: the guest with **0 flags on in every category**
+>   (10, 20, 13100…), the host with dozens. Not even the flags from its own
+>   save: copy 1 of the `EventFlagBuffer` (the "someone else's world" one)
+>   was zeroed by the load and never filled in.
+> - **`ctrl+0x19c`** on the guest's join controller still reads
+>   `0a040000`, the map of the original summon.
 >
-> É exatamente a linha 3 da tabela da seção 2: o snapshot do host chega
-> **uma vez**, no estado 4 do join, e o warp de fantasma não o repete. A
-> fogueira é só o sintoma visível; o mundo inteiro do convidado (portas,
-> inimigos mortos, valores de evento) é o do save dele e não o do host — o M4
-> desfeito pela viagem.
+> It is exactly row 3 of the table in section 2: the host's snapshot arrives
+> **once**, in join state 4, and the phantom warp does not repeat it. The
+> bonfire is only the visible symptom; the guest's whole world (doors, dead
+> enemies, event values) is its own save's and not the host's — M4 undone by
+> the travel.
 >
-> **O mecanismo, lido em Ghidra.** O host exporta no estado `0xd` do seu
-> controlador (`FUN_1402bddb0` despacha por `+0x150`; o handler é
-> `FUN_1402bf8f0`, que monta um blob de ~33 KB na pilha a partir do mapa em
-> `*(R+0x5b8)+0xc` — e esse campo já lê o mapa novo nos dois lados — e manda a
-> mensagem `0xc`). O convidado recebe em `FUN_1402cde30` case `0xc` →
-> `FUN_1402d09c0` (parse e validação) → slot 10 do controlador de join,
-> `FUN_1402c2fa0`, que importa **só se `+0xf8 == 4`**; em qualquer outro
-> estado grava `+0xf8 = 5` e `+0x120 = 1`, que encerra a sessão no quadro
-> seguinte. O import termina em estado 5 (presenças pelos registros do blob)
-> e 6 (o aperto de mão "estou dentro", que manda mensagem ao host).
+> **The mechanism, read in Ghidra.** The host exports in its controller's `0xd`
+> state (`FUN_1402bddb0` dispatches on `+0x150`; the handler is
+> `FUN_1402bf8f0`, which builds a ~33 KB blob on the stack from the map at
+> `*(R+0x5b8)+0xc` — and that field already reads the new map on both sides —
+> and sends message `0xc`). The guest receives it in `FUN_1402cde30` case `0xc`
+> → `FUN_1402d09c0` (parse and validation) → slot 10 of the join controller,
+> `FUN_1402c2fa0`, which imports **only if `+0xf8 == 4`**; in any other
+> state it writes `+0xf8 = 5` and `+0x120 = 1`, which ends the session on the
+> next frame. The import ends in state 5 (presences from the blob's records)
+> and 6 (the "I am in" handshake, which sends a message to the host).
 >
-> **O remédio, `d36f3f69`.** Pedido `snapshot` (e o evento de convidado
-> `SnapshotPlease` pelo canal): o host chama `FUN_1402bf8f0` do próprio tick
-> quando o controlador está em `0x10`; no convidado, um detour em
-> `FUN_1402c2fa0` — só quando pedido — aponta `+0x19c` para o mapa atual, põe
-> `+0xf8 = 4`, deixa o original importar e devolve `+0xf8 = 7`, sem passar
-> pelos estados 5 e 6, porque o controlador do host já está muito além deles.
-> As presenças continuam recriadas pela mod.
+> **The remedy, `d36f3f69`.** A `snapshot` request (and the guest event
+> `SnapshotPlease` over the channel): the host calls `FUN_1402bf8f0` from its
+> own tick when the controller is at `0x10`; on the guest, a detour in
+> `FUN_1402c2fa0` — only when asked — points `+0x19c` at the current map, sets
+> `+0xf8 = 4`, lets the original import, and puts `+0xf8 = 7` back, without
+> going through states 5 and 6, because the host's controller is already well
+> past them. The presences are still recreated by the mod.
 >
-> **Uma armadilha que custou duas quedas.** O decompilador mostra sete
-> parâmetros para `FUN_1402c2fa0`; ela lê um **oitavo** em `rbp+0x7f`
-> (`+0x2c334c`, para `r8d`), a contagem dos registros de 0xd0 que
-> `FUN_1404434c0` percorre. O detour com sete argumentos matou o convidado em
-> `+0x12d5a8` nas duas invocações seguintes, no mesmo endereço. Conte os
-> acessos a `[rbp+0x67..]` na entrada antes de confiar numa assinatura.
+> **A trap that cost two crashes.** The decompiler shows seven parameters for
+> `FUN_1402c2fa0`; it reads an **eighth** at `rbp+0x7f` (`+0x2c334c`, into
+> `r8d`), the count of the 0xd0 records that `FUN_1404434c0` walks. The detour
+> with seven arguments killed the guest at `+0x12d5a8` on the next two summons,
+> at the same address. Count the accesses to `[rbp+0x67..]` at the entry before
+> trusting a signature.
 >
-> **Ainda não medido:** se depois do `snapshot` as flags batem, os scripts
-> voltam a avaliar e a fogueira aparece — é o próximo teste.
+> **Not yet measured:** whether after the `snapshot` the flags match, the
+> scripts go back to evaluating and the bonfire appears — that is the next
+> test.
 
-> ## O `snapshot` medido, e a campanha das quatro pernas (17/09, 16:43–17:07)
+> ## The `snapshot` measured, and the four-leg campaign (17/09, 16:43–17:07)
 >
-> Com o pedido automático (`AskSnapshot` na chegada do warp de fantasma) e o
-> host de volta a `0x10` depois de exportar, a fogueira do convidado **passou
-> a funcionar** — o defeito que o usuário apontou. Prova de uma perna
-> (Heide, 16:43), régua completa:
+> With the automatic request (`AskSnapshot` on arrival from the phantom warp)
+> and the host back at `0x10` after exporting, the guest's bonfire **started
+> working** — the defect the user pointed out. Proof of one leg
+> (Heide, 16:43), with the full ruler:
 >
-> - **flags iguais** nos dois lados depois do `snapshot` (antes: convidado
->   zerado; a categoria 10 voltou a bater);
-> - **scripts avaliando**: 4 consultas de `esd` por quadro no convidado,
->   contra 0 antes;
-> - **`A: Rest at bonfire`** na tela do convidado, e ele descansou
+> - **equal flags** on both sides after the `snapshot` (before: the guest
+>   zeroed; category 10 matched again);
+> - **scripts evaluating**: 4 `esd` queries per frame on the guest,
+>   against 0 before;
+> - **`A: Rest at bonfire`** on the guest's screen, and it rested
 >   (`convidado: descanso na fogueira 00007ba2 no mundo do host`);
-> - **sessão verificada** depois de tudo (`p2pSessionVerified: true`).
+> - **a verified session** after all of it (`p2pSessionVerified: true`).
 >
-> **O host de volta a 0x10.** O export (`FUN_1402bf8f0`) move o controlador do
-> host de `0x10` para `0xe`, onde ele espera o "estou dentro" do convidado —
-> mensagem que o convidado **não** manda, porque os estados 5 e 6 do import
-> foram pulados. Com o host em `0xe` a sessão seguiu com pacotes e as duas
-> presenças, mas a régua a leu não-verificada e as checagens do próprio jogo
-> para um host jogando batem em `0x10`. Escrever `0x10` de volta ao vivo
-> devolveu verificada. Lido no binário (`FUN_1402c03e0`, o handler do `0xf`):
-> é o estado que fecha o join do convidado do lado do host.
+> **The host back at 0x10.** The export (`FUN_1402bf8f0`) moves the host's
+> controller from `0x10` to `0xe`, where it waits for the guest's "I am in" —
+> a message the guest does **not** send, because states 5 and 6 of the import
+> were skipped. With the host at `0xe` the session carried on with packets and
+> both presences, but the ruler read it as unverified and the game's own checks
+> for a host that is playing land on `0x10`. Writing `0x10` back live made it
+> verified again. Read in the binary (`FUN_1402c03e0`, the `0xf` handler):
+> it is the state that closes the guest's join on the host's side.
 >
-> **O registro de volta para casa não se mexeu, e isso é o certo.** Sondado
-> nas quatro pernas em `ctrl+0x1a0` (0x48 bytes) e no `character`: ficou
-> `0a1f0000/00007ba7` — a fogueira de casa do convidado, em Heide — do join
-> até o descanso, em todos os mapas. O convidado viaja como fantasma, descansa
-> no mundo do host (que reinicia o mundo do **host**), e o próprio ponto de
-> renascimento dele nunca é contaminado. É exatamente o aviso da seção 2:
-> só o host grava `FUN_14044fe30`.
+> **The go-home record did not move, and that is the right thing.** Probed
+> across the four legs at `ctrl+0x1a0` (0x48 bytes) and in `character`: it
+> stayed `0a1f0000/00007ba7` — the guest's home bonfire, in Heide — from the
+> join through to the rest, on every map. The guest travels as a phantom, rests
+> in the host's world (which restarts the **host's** world), and its own
+> respawn point is never contaminated. It is exactly the warning in section 2:
+> only the host writes `FUN_14044fe30`.
 >
-> **A campanha: 4 de 4 pernas, com uma queda na última.** Iron Keep, Brume,
-> Majula, Heide, uma emenda na outra sem parar a sessão. As três primeiras
-> passaram inteiras — warp, pedido automático, import, presença, descanso,
-> dois minutos de vigília com sessão verificada. A **quarta (Heide)** derrubou
-> o convidado três segundos dentro do warp, antes de chegar:
+> **The campaign: 4 of 4 legs, with one crash on the last.** Iron Keep, Brume,
+> Majula, Heide, one joined to the next without stopping the session. The first
+> three passed in full — warp, automatic request, import, presence, rest,
+> two minutes of watching with a verified session. The **fourth (Heide)**
+> brought the guest down three seconds into the warp, before it arrived:
 >
 >     17:06:12  excecao c0000005 em +0x2fd4b0 (thread 360), lendo 0xffff...
 >     17:06:12  excecao c0000005 em +0x3f64a7 (thread 360), lendo 0x8
 >     17:06:12  excecao c0000005 em +0x3f6326 (thread 360), lendo 0x20
 >
-> É o desmonte do mapa velho do convidado (Majula) enquanto Heide carrega:
-> `FUN_1403f6300`/`FUN_1403f4500` (o destrutor do `MapModelComponent`),
-> chamado de `FUN_1403ba070` → `FUN_1403ce966`, sobre um nó podre da lista de
-> componentes — a mesma classe das quedas do host, mas na **thread de
-> trabalho 360**, não na thread do jogo (364) onde a varredura do
-> `DS2_TravelWatch` roda. O teto de relatos de exceção, subido de 32 para 256
-> nesta corrida, foi o que deixou os três serem gravados; sem ele a queda
-> ficaria sem registro. A varredura não alcança a thread 360 — é o mesmo
-> limite anotado na morte de 17/09 em `+0x2f0987`. **É intermitente**: a mesma
-> Heide passou limpa às 16:43. Fica como o próximo alvo de estabilidade: um
-> guarda do desmonte que rode na thread de trabalho, ou calar essa lista
-> durante o warp do convidado.
+> It is the teardown of the guest's old map (Majula) while Heide loads:
+> `FUN_1403f6300`/`FUN_1403f4500` (the `MapModelComponent` destructor),
+> called from `FUN_1403ba070` → `FUN_1403ce966`, over a rotten node in the
+> component list — the same class as the host's crashes, but on the **worker
+> thread 360**, not on the game thread (364) where `DS2_TravelWatch`'s sweep
+> runs. The ceiling on exception reports, raised from 32 to 256 in this run,
+> is what let all three be recorded; without it the crash would have gone
+> unlogged. The sweep does not reach thread 360 — it is the same limit noted in
+> the death of 17/09 at `+0x2f0987`. **It is intermittent**: the same Heide
+> passed clean at 16:43. It stands as the next stability target: a teardown
+> guard that runs on the worker thread, or silencing that list during the
+> guest's warp.
 
-> ## O híbrido ligado ao jogo, e a queda é da votação e não da viagem (17/09, 18:00)
+> ## The hybrid wired into the game, and the crash is the vote's and not the travel's (17/09, 18:00)
 >
-> **O que faltava ligar.** Sentar na fogueira e viajar nunca passou pelo
-> trabalho deste dia: o warp de fantasma, o `snapshot` e a recriação de
-> presença tinham **um** chamador cada, o leitor do `DS2_Bonfire.req`. O
-> caminho do jogo só tinha dois modos — os dois pelo transporte antigo, ou os
-> convidados **expulsos da sessão** quando o mapa não vinha. `99fb8d29` liga o
-> híbrido: no `TravelGo`, o convidado que não alcança o mapa avisa o host
-> (`GuestEvent::WarpNotice`), tira a própria presença, espera o host tirar a
-> dele, viaja de warp, pede o mundo do host ao pisar no destino, recria a
-> presença e só então relata chegada. A barreira ganha 70 s quando há warp;
-> 25 s é o orçamento do transporte antigo e cortaria a viagem no meio.
+> **What was left to wire up.** Sitting at the bonfire and travelling never
+> went through this day's work: the phantom warp, the `snapshot` and the
+> presence recreation had **one** caller each, the `DS2_Bonfire.req` reader.
+> The game's path had only two modes — both sides on the old transport, or the
+> guests **thrown out of the session** when the map did not come. `99fb8d29`
+> wires up the hybrid: in `TravelGo`, a guest that cannot reach the map
+> notifies the host (`GuestEvent::WarpNotice`), removes its own presence, waits
+> for the host to remove its own, travels by warp, asks for the host's world on
+> landing at the destination, recreates the presence and only then reports
+> arrival. The barrier gets 70 s when there is a warp;
+> 25 s is the old transport's budget and would cut the travel in half.
 >
-> **A queda que o usuário viu, isolada.** Duas viagens dele pelo caminho do
-> jogo terminaram com **os dois jogos fechando** ~1,2 s depois de a cortina
-> descer, 250 ms um do outro, duas de duas (17:38 e 17:44). O controle separa
-> a causa:
+> **The crash the user saw, isolated.** Two of his travels through the game's
+> path ended with **both games closing** ~1.2 s after the curtain came down,
+> 250 ms apart, two out of two (17:38 and 17:44). The control separates the
+> cause:
 >
-> | caminho | pernas | quedas | exceções |
+> | path | legs | crashes | exceptions |
 > | --- | --- | --- | --- |
-> | `ir` nos dois (mesmo transporte, sem votação nem menu) | 6 | 0 | 0 |
-> | fogueira → lista → votação | 2 | **2** | várias |
+> | `ir` on both (same transport, no vote and no menu) | 6 | 0 | 0 |
+> | bonfire → list → vote | 2 | **2** | several |
 >
-> As seis pernas de controle foram Majula ↔ Heide, ida e volta três vezes, com
-> o convidado **provadamente viajando** (seis cargas de mapa no log dele) e a
-> sessão verificada no fim. **O transporte é o mesmo nos dois casos** —
-> `StartGo` nas duas máquinas. O que difere é a cirurgia de interface.
+> The six control legs were Majula ↔ Heide, there and back three times, with
+> the guest **provably travelling** (six map loads in its log) and the session
+> verified at the end. **The transport is the same in both cases** —
+> `StartGo` on both machines. What differs is the interface surgery.
 >
-> **Descartado:** a dança da trava do job ao fechar o menu da fogueira. Ela
-> rodou igual na primeira perna de `ir` (o host estava sentado na fogueira) —
-> `trava do job de volta depois de 16 ms` — e aquela perna passou limpa.
+> **Ruled out:** the job lock dance when the bonfire menu closes. It ran the
+> same way on the first `ir` leg (the host was sitting at the bonfire) —
+> `trava do job de volta depois de 16 ms` — and that leg passed clean.
 >
-> **A melhor pista.** No convidado que caiu, a linha `tela de carregamento:
-> desceu` **nunca foi escrita**, embora `o mundo assentou` tenha sido, 1,8 s
-> antes. Essa linha é a última instrução de `Curtain(false)`, depois de
-> `s_hud_show`, `s_loading_close`, `s_hud_drop` e de religar o desenho do
-> mundo. Ou seja: **o convidado caiu dentro da descida da cortina**. E caiu no
-> renderizador, em **duas threads ao mesmo tempo** (360 e 624), lendo um
-> ponteiro com a metade alta carimbada (`00b010ffff483c10`).
+> **The best lead.** On the guest that crashed, the line `tela de carregamento:
+> desceu` was **never written**, although `o mundo assentou` was, 1.8 s
+> earlier. That line is the last instruction of `Curtain(false)`, after
+> `s_hud_show`, `s_loading_close`, `s_hud_drop` and turning the world's drawing
+> back on. That is: **the guest crashed inside the curtain coming down**. And
+> it crashed in the renderer, on **two threads at once** (360 and 624), reading
+> a pointer with the high half stamped (`00b010ffff483c10`).
 >
-> Junte com o que difere da votação: a caixa de Sim/Não é aberta e fechada
-> **no mesmo objeto de front-end** onde a cortina abre a tela de carregamento.
-> A hipótese é que o `close`/`release` da caixa deixa um nó morto na lista do
-> front-end, e o renderizador morre no primeiro quadro em que volta a desenhar.
-> É hipótese, não prova.
+> Put that together with what differs about the vote: the Yes/No box is opened
+> and closed **on the same front-end object** where the curtain opens the
+> loading screen. The hypothesis is that the box's `close`/`release` leaves a
+> dead node in the front-end's list, and the renderer dies on the first frame
+> it goes back to drawing. It is a hypothesis, not proof.
 >
-> **Como reproduzir sem o usuário — e o que travou.** `votar <mapa> <fogueira>`
-> abre a votação, mas responder exige apertar A na caixa do convidado, e neste
-> boot **o pad não alcança a instância 2**: nem a caixa de votação, nem a de
-> aviso, nem o menu de início respondem, com `pad status` dizendo `pad 1: no
-> ar` e `game focus` passando. Sem isso a votação estoura em 30 s. O próximo
-> passo barato é um verbo de pedido que responda a votação aberta, para o
-> caminho inteiro ficar testável sem ninguém na frente da tela.
+> **How to reproduce it without the user — and what got stuck.**
+> `votar <mapa> <fogueira>` opens the vote, but answering requires pressing A
+> on the guest's box, and on this boot **the pad does not reach instance 2**:
+> neither the voting box, nor the warning box, nor the start menu responds,
+> with `pad status` saying `pad 1: no ar` and `game focus` passing. Without
+> that the vote times out in 30 s. The next cheap step is a request verb that
+> answers an open vote, so the whole path becomes testable with nobody in front
+> of the screen.
 
-**Fase 3 — convidado no mundo. É aqui que há risco de ponto.** Com baseline dos
-dois saves. **3a**: host viaja nativo, convidado é re-invocado. **3b**: host
-viaja nativo, convidado carrega nativo e a mod reconstrói a presença antes do
-`TravelRelease`. Régua de 3b: **uma** geração por peer, movimento e ação nos
-dois sentidos depois da reconstrução (tráfego no canal não conta — prova
-comunicação da mod, não replicação), contadores inalterados, saída legal.
+**Phase 3 — the guest in the world. This is where a point is at risk.**
+With a baseline of both saves. **3a**: the host travels natively, the guest is
+re-summoned. **3b**: the host travels natively, the guest loads natively and
+the mod rebuilds the presence before `TravelRelease`. 3b's ruler: **one**
+generation per peer, movement and action in both directions after the rebuild
+(traffic on the channel does not count — it proves the mod is communicating,
+not replication), unchanged counters, a legal exit.
 
-## 6. Riscos e o que detecta cada um
+## 6. Risks and what detects each one
 
-- host encerra a própria sessão no warp → a leitura da fase 1; em teste,
-  `ctrl+0x150` indo a `0x12`/`0x13` e `0x15` no par
-- watchdog de silêncio derruba o convidado em carregamento → cronometrar do
-  warp do convidado até o `Leave*` no servidor
-- watchdog de 300 s → detour de leitura gravando o delta contra 300.0
-- convidado reaparece no próprio mundo → mundo do host não aplicado, o outro
-  não visível
-- save do convidado contaminado → nunca chamar `FUN_14044fe30` no convidado
-- penalidade: qualquer queda na fase 3 custa 10 pontos, e Chico está em 70
-- duplicação de presença ao recriar → `FUN_14051ce20` sobrescreve `E+0x40` sem
-  destruir o antigo
+- the host ends its own session on the warp → phase 1's reading; in a test,
+  `ctrl+0x150` going to `0x12`/`0x13` and `0x15` at the peer
+- the silence watchdog drops the guest while it loads → time it from the
+  guest's warp to the `Leave*` on the server
+- the 300 s watchdog → a reading detour recording the delta against 300.0
+- the guest reappears in its own world → the host's world not applied, the
+  other player not visible
+- the guest's save contaminated → never call `FUN_14044fe30` on the guest
+- penalty: any crash in phase 3 costs 10 points, and Chico is at 70
+- presence duplication when recreating → `FUN_14051ce20` overwrites `E+0x40`
+  without destroying the old one
 
-## 7. O que é leitura e o que precisa medição
+## 7. What is reading and what needs measurement
 
-**Lido estaticamente:** a cadeia da viagem e os campos do pedido; o portão de
-motivo; os quatro componentes do mundo emprestado; o case 2 de `FUN_1402bd0d0`;
-os dois watchdogs; que `FUN_14044fe30` grava o registro do próprio jogador; os
-prólogos acima.
+**Read statically:** the travel chain and the request's fields; the reason
+gate; the four components of the borrowed world; case 2 of `FUN_1402bd0d0`;
+the two watchdogs; that `FUN_14044fe30` writes the local player's record; the
+prologues above.
 
-**Precisa medição, e não pode ser apresentado como fato:** o valor de `+0x30`
-numa sessão viva (previsão 7, mas é previsão); se suprimir o case 2 deixa a
-máquina do host consistente, já que ela também escreve `+0x1b8 |= 2`; quem no
-host conta o silêncio de ~23 s e se um carregamento cabe dentro dele; se o
-convidado consegue carregar preservando o join ctrl; e a tela de carregamento
-dentro de um warp real.
+**Needs measurement, and cannot be presented as fact:** the value of `+0x30`
+in a live session (prediction 7, but it is a prediction); whether suppressing
+case 2 leaves the host's machine consistent, since it also writes
+`+0x1b8 |= 2`; who on the host counts the ~23 s of silence and whether a load
+fits inside it; whether the guest can load while preserving the join ctrl; and
+the loading screen inside a real warp.
 
-## 8. 17/09 — o que mata a sessão numa viagem em grupo
+## 8. 17/09 — what kills the session on a group travel
 
-A viagem em grupo pela votação já leva os dois ao mesmo lugar sem ninguém sair
-da sessão. O que a derrubava eram três coisas, e duas estão fechadas.
+Group travel through the vote already takes both to the same place without
+anyone leaving the session. Three things used to bring it down, and two are
+closed.
 
-**A tabela de personagens de um mapa solto (fechada).** O convidado morria em
-`+0x517843`, 167-173 ms depois de o backread soltar um mapa, cinco vezes em
-cinco. `FUN_1405177c0` pega essa tabela do dono do mapa de duas casas: `+0x160`
-com teste de nulo, `+0x168` sem teste nenhum. O dono sobrevive ao mapa, só a
-tabela some, então a busca acha o dono e lê nulo. `DS2_NetSyncGuardHook` põe o
-teste que falta em 24 bytes, usando o `ebx` que já carrega o índice desde
-`+0x5177d1`; os dois `movzwl` que o compilador emitiu eram redundantes e pagam
-pelo teste e pelo desvio. Retornar falso é a própria resposta do jogo para "não
-achei", e o chamador em `+0x518d64` já desvia nela.
+**The character table of a released map (closed).** The guest died at
+`+0x517843`, 167-173 ms after the backread released a map, five times out of
+five. `FUN_1405177c0` takes that table from the map's owner at two places:
+`+0x160` with a null test, `+0x168` with no test at all. The owner survives the
+map, only the table disappears, so the lookup finds the owner and reads null.
+`DS2_NetSyncGuardHook` puts the missing test in 24 bytes, using the `ebx` that
+has carried the index since `+0x5177d1`; the two `movzwl` the compiler emitted
+were redundant and pay for the test and the branch. Returning false is the
+game's own answer for "did not find it", and the caller at `+0x518d64` already
+branches on it.
 
-Antes disso eu tinha escrito `+0x18` do objeto do slot 0x28 de `0x141616cf8`
-achando que era o id de mapa que `FUN_1405177c0` lê. **Não é**: aquele id vem
-do `param_1` da função, outro registro. O reapontamento não mudou nada e foi
-removido.
+Before that I had written the `+0x18` of the object in slot 0x28 of
+`0x141616cf8` thinking it was the map id `FUN_1405177c0` reads. **It is not**:
+that id comes from the function's `param_1`, another record. Repointing it
+changed nothing and was removed.
 
-**As partes inventadas (fechada).** Quando a cópia do outro jogador não estava
-sobre uma parte conhecida, o pedido de segurar o mapa vinha sem máscara e
-virava **todas** as partes: 128 bits em seis blocos, contra mapas cujo índice de
-partes é bem menor. O desmonte percorre os bits ligados. A soltura da Torre de
-Brume no convidado falhou duas vezes lá dentro (`+0x3f6476` e `+0x3ba0be`, cada
-um sobre um ponteiro de parte montado de lixo), a rede de segurança aparou, o
-mapa ficou pela metade, e o mapa seguinte morreu no destroço. Sem máscara agora
-é sem parte nenhuma: o byte de força sozinho segura um mapa que já está dentro.
+**The invented parts (closed).** When the other player's copy was not standing
+on a known part, the request to hold the map came with no mask and turned into
+**all** the parts: 128 bits across six blocks, against maps whose part index is
+far smaller. The teardown walks the bits that are on. Releasing Brume Tower on
+the guest failed twice in there (`+0x3f6476` and `+0x3ba0be`, each one over a
+part pointer assembled out of rubbish), the safety net caught it, the map was
+left half done, and the next map died in the wreckage. No mask now means no
+part at all: the force byte on its own holds a map that is already in.
 
-**O objeto liberado que sobra numa lista (aberta).** Com as duas acima, a
-campanha das quatro fogueiras deu **3 de 4 limpas**, sem nenhuma falha aparada.
-A que cai é sempre a perna **logo depois da Torre de Brume**, e o convidado
-morre cerca de meio segundo depois de chegar:
+**The freed object left over in a list (open).** With the two above, the
+four-bonfire campaign gave **3 of 4 clean**, with no caught failure. The one
+that crashes is always the leg **right after Brume Tower**, and the guest dies
+about half a second after arriving:
 
-| onde | o que faz | o que estava em mãos |
+| where | what it does | what it had in hand |
 | --- | --- | --- |
-| `+0x3f3b20` | `call [rax+8]` andando numa lista `[rcx+0x38]`, nó a nó por `+8` | tabela virtual `bded80c840bde337` |
-| `+0x3ce81c` | `[rcx+0x58]` sobre `[[rbx+0x10]+idx*8]+0x30`, índice 321 de `[rbx+0x18]` | ponteiro `00002817f1b91828` |
+| `+0x3f3b20` | `call [rax+8]` walking a `[rcx+0x38]` list, node by node through `+8` | virtual table `bded80c840bde337` |
+| `+0x3ce81c` | `[rcx+0x58]` over `[[rbx+0x10]+idx*8]+0x30`, index 321 of `[rbx+0x18]` | pointer `00002817f1b91828` |
 
-Os dois são a mesma família: soltar um mapa deixa objetos já liberados ligados
-nas listas do próprio jogo, e o próximo carregamento daquele mapa anda por cima
-deles. Heide → Majula é limpa; Brume → Majula matou duas de duas.
+Both are the same family: releasing a map leaves already freed objects attached
+to the game's own lists, and the next load of that map walks over them.
+Heide → Majula is clean; Brume → Majula killed two out of two.
 
-**Segurar todo mapa não serve.** Tentado e desfeito no mesmo dia: com Majula e
-Heide presas, o pedido de Iron Keep parou no estado 0 e nunca carregou, e o de
-Brume também; o host esperou 30 s e desistiu das duas viagens. Quatro mapas
-forçados ao mesmo tempo é mais do que o jogo carrega, então segurar tudo troca
-a queda por ninguém sair do lugar.
+**Holding every map does not work.** Tried and undone the same day: with Majula
+and Heide held, the Iron Keep request stopped at state 0 and never loaded, and
+Brume's did too; the host waited 30 s and gave up on both travels. Four maps
+forced at the same time is more than the game loads, so holding everything
+trades the crash for nobody going anywhere.
 
-**Como pontuar uma perna.** Só passa se nada aumentar dos dois lados: nem
-`excecao` no `DS2_Crash.log`, nem `FALHA APARADA` no `DS2_Backread.log`, e a
-sessão seguir verificada **e** o host tiver de fato chegado. A rede de segurança
-transforma uma queda em corrupção silenciosa, então a primeira falha aparada já
-é a falha; e uma perna em que ninguém saiu do lugar não é uma perna limpa.
+**How to score a leg.** It only passes if nothing goes up on either side: no
+`excecao` in `DS2_Crash.log`, no `FALHA APARADA` in `DS2_Backread.log`, and the
+session stays verified **and** the host actually arrived. The safety net turns
+a crash into silent corruption, so the first caught failure is already the
+failure; and a leg where nobody went anywhere is not a clean leg.
 
-## 9. 18/09 — o que o valor que falha estava dizendo
+## 9. 18/09 — what the failing value was saying
 
-O vigia de exceções passou a escrever de quem são os objetos na mão: um
-registrador que aponta para memória comprometida cujos primeiros oito bytes são
-um endereço dentro do jogo é um objeto com tabela virtual, e o deslocamento
-dessa tabela nomeia a classe no Ghidra sem adivinhação. Com isso a leitura
-mudou.
+The exception watcher now writes down who owns the objects in hand: a register
+pointing at compromised memory whose first eight bytes are an address inside
+the game is an object with a virtual table, and that table's offset names the
+class in Ghidra with no guessing. With that, the reading changed.
 
-**O valor que falha não é um ponteiro estragado.** São dois números de ponto
-flutuante, um em cada metade do registrador: `4254670941466334` é 53,10 e 12,40;
-`4254a3a241338718` é 53,16 e 11,22. Não há ninguém escrevendo por cima de um
-ponteiro. O bloco foi **liberado e entregue a outra pessoa**, que guarda
-posições nele, e quem ainda apontava para lá leu a posição como se fosse uma
-tabela virtual.
+**The failing value is not a corrupted pointer.** They are two floating-point
+numbers, one in each half of the register: `4254670941466334` is 53.10 and
+12.40; `4254a3a241338718` is 53.16 and 11.22. Nobody is writing over a pointer.
+The block was **freed and handed to somebody else**, who keeps positions in it,
+and whoever was still pointing there read the position as if it were a virtual
+table.
 
-Isso aparece em três recipientes diferentes, todos da mesma família:
+This shows up in three different containers, all of the same family:
 
-| onde | o recipiente |
+| where | the container |
 | --- | --- |
-| `+0x3f3b20` | lista de aviso em `obj+0x38`, nó a nó por `+8`, casa 1 da tabela virtual |
-| `+0x17b266` | lista de componentes em `obj+0x18`, nó a nó por `+0x10`, casa 0 |
-| `+0x3ce818` | vetor em `[obj+0x10]` com contagem em `+0x18`, o elemento 321 e o 392 |
+| `+0x3f3b20` | a notification list at `obj+0x38`, node by node through `+8`, slot 1 of the virtual table |
+| `+0x17b266` | a component list at `obj+0x18`, node by node through `+0x10`, slot 0 |
+| `+0x3ce818` | a vector at `[obj+0x10]` with the count at `+0x18`, element 321 and element 392 |
 
-Podar as duas listas antes de o jogo andar nelas (`DS2_PartNotifyGuardHook`)
-não cortou nada em nenhuma rodada: os nós continuavam sãos e a queda apenas
-mudava de recipiente. Ou seja, o estrago não está na lista, está em quem foi
-liberado.
+Pruning the two lists before the game walks them (`DS2_PartNotifyGuardHook`)
+cut nothing in any round: the nodes stayed healthy and the crash simply changed
+container. That is, the damage is not in the list, it is in whoever was freed.
 
-**O controle solo é limpo.** O mesmo transporte, um jogo só, sem sessão, fez dez
-pernas seguidas pelas quatro fogueiras sem uma falta sequer. Então o
-carregamento e a soltura de mapa por si não corrompem nada: a corrupção precisa
-da sessão, e o que a sessão traz é a cópia do outro jogador.
+**The solo control is clean.** The same transport, one game only, with no
+session, did ten legs in a row around the four bonfires without a single fault.
+So loading and releasing a map do not corrupt anything by themselves: the
+corruption needs the session, and what the session brings is the other player's
+copy.
 
-**A hipótese que ficou de pé, e o conserto que ela pede.** Os bits de parte só
-eram ligados, nunca retomados. Um mapa era solto com todas as suas partes ainda
-pedidas, a máquina de estado do dono o desmontava sem desativar nenhuma, e tudo
-em que essas partes tinham se registrado seguia apontando para blocos que o
-alocador já tinha reaproveitado. A soltura passou a ter duas etapas: devolver os
-bits, deixar o jogo ver a máscara menor por alguns quadros, e só então derrubar
-o byte de força. **Esse conserto ainda não foi medido** — a bancada travou antes
-(ver abaixo).
+**The hypothesis left standing, and the fix it asks for.** The part bits were
+only ever turned on, never taken back. A map was released with all of its parts
+still requested, the owner's state machine tore it down without deactivating
+any of them, and everything those parts had registered with went on pointing at
+blocks the allocator had already reused. Releasing now has two stages: give the
+bits back, let the game see the smaller mask for a few frames, and only then
+drop the force byte. **That fix has not been measured yet** — the bench got
+stuck first (see below).
 
-**A bancada travou, e não é do nosso código.** Depois de cerca de trinta e seis
-horas de Steam e Wine no ar, o jogo passou a abrir uma janela branca e nunca
-chegar ao título: o laço roda (a navegação publica milhares de tiques), o
-servidor vê o cliente conectar e cair na mesma hora, e as duas contas Steam
-seguem logadas. A DLL anterior, que tinha subido bem uma hora antes, trava
-igual. Sobrou pendurada uma cadeia de lançamento da segunda Steam que o
-`game stop` não enxerga e que só morre com `kill` por pid.
+**The bench got stuck, and it is not our code.** After about thirty-six hours
+of Steam and Wine being up, the game started opening a white window and never
+reaching the title: the loop runs (navigation publishes thousands of ticks),
+the server sees the client connect and drop in the same moment, and both Steam
+accounts are still logged in. The previous DLL, which had come up fine an hour
+earlier, freezes the same way. A launch chain from the second Steam was left
+hanging, one that `game stop` cannot see and that only dies with a `kill` by
+pid.
 
-## 10. 18/09 — o que a queda que sobra segue, e o que não a conserta
+## 10. 18/09 — what the remaining crash follows, and what does not fix it
 
-**Ela segue o mapa onde a sessão se formou.** Esse é o achado do dia. Com a
-sessão formada em Majula, o convidado morria voltando a Majula; encerrei a
-sessão em Heide, deixei a party re-formar ali, e a morte mudou para Heide. Não é
-Majula, não é a zona sem invocação, não é o destino: é o mapa do encontro. A
-perna anterior ser a Torre de Brume adianta a queda, porque Brume é o maior mapa
-do rodízio e é o carregamento dela que reaproveita a memória liberada.
+**It follows the map where the session was formed.** That is the day's finding.
+With the session formed in Majula, the guest died coming back to Majula; I
+ended the session in Heide, let the party re-form there, and the death moved to
+Heide. It is not Majula, it is not the zone with no summoning, it is not the
+destination: it is the map of the meeting. The previous leg being Brume Tower
+brings the crash forward, because Brume is the biggest map in the rotation and
+it is its load that reuses the freed memory.
 
-**O controle solo continua limpo.** Dez pernas pelas quatro fogueiras, um jogo
-só, sem sessão, sem uma falta. O transporte e o backread não corrompem nada
-sozinhos.
+**The solo control is still clean.** Ten legs around the four bonfires, one
+game only, with no session, without a single fault. The transport and the
+backread do not corrupt anything on their own.
 
-Tudo abaixo foi tentado e **não** resolveu:
+Everything below was tried and did **not** fix it:
 
-| tentativa | o que aconteceu |
+| attempt | what happened |
 | --- | --- |
-| podar as duas listas encadeadas antes de o jogo andar nelas | nunca cortou um nó sequer; a queda mudou de recipiente |
-| parar de escrever nos dois blocos de visibilidade | ajudou, mas a queda continua |
-| segurar o sync de personagens parado durante todo o desmonte | sem efeito |
-| entregar a parte ao streamer só quando é do mapa focado | sem efeito; entregar nulo quebra o chão e a viagem falha |
-| devolver os bits de parte antes de soltar o mapa | rodou cinco vezes, sem efeito |
-| reconstruir as presenças a cada chegada | sem efeito, e caiu mais cedo |
-| desligar o segurar do mapa do outro jogador | 256 faltas de uma vez; o segurar é necessário |
-| segurar o mapa do encontro enquanto a sessão durar | **quebra a viagem**: com dois mapas presos, o terceiro para no estado 0 e o host desiste em 30 s |
+| pruning the two linked lists before the game walks them | it never cut a single node; the crash changed container |
+| stopping the writes into the two visibility blocks | it helped, but the crash continues |
+| holding the character sync stopped throughout the teardown | no effect |
+| handing the part to the streamer only when it belongs to the focused map | no effect; handing null breaks the floor and the travel fails |
+| giving the part bits back before releasing the map | ran five times, no effect |
+| rebuilding the presences on every arrival | no effect, and it crashed earlier |
+| turning off the hold on the other player's map | 256 faults at once; the hold is necessary |
+| holding the map of the meeting for as long as the session lasts | **it breaks the travel**: with two maps held, the third stops at state 0 and the host gives up in 30 s |
 
-**Dois limites que ficaram medidos.** O jogo carrega dois mapas ao mesmo tempo e
-não três: qualquer coisa que segure um mapa a mais faz o pedido seguinte parar
-no estado 0. E o mapa corrente do jogo (`0x141616cf8 +0x20 → +0x5b8 → +0xc`)
-**acompanha** o transporte antigo, medido ao vivo: 0x0a040000 antes, 0x0a1f0000
-depois. A teoria de que o jogo continuava achando que o jogador estava no mapa
-de origem está errada.
+**Two limits that came out measured.** The game loads two maps at a time and
+not three: anything that holds one map more makes the next request stop at
+state 0. And the game's current map (`0x141616cf8 +0x20 → +0x5b8 → +0xc`)
+**follows** the old transport, measured live: 0x0a040000 before, 0x0a1f0000
+after. The theory that the game kept thinking the player was on the origin map
+is wrong.
 
-**Onde procurar a seguir.** O objeto liberado é encontrado pela atualização do
-mundo, sempre numa estrutura de partes ou entidades, e só existe quando há
-sessão. O que a sessão põe naquele mapa e ninguém tira quando ele sai é o que
-falta nomear. O vigia de exceções agora escreve a tabela virtual dos objetos na
-mão, então a próxima queda que pegar um objeto de heap já nomeia a classe.
+**Where to look next.** The freed object is found by the world update, always
+in a parts or entities structure, and it only exists when there is a session.
+What the session puts on that map and nobody takes away when it goes is what is
+left to name. The exception watcher now writes down the virtual table of the
+objects in hand, so the next crash that catches a heap object will already name
+the class.
