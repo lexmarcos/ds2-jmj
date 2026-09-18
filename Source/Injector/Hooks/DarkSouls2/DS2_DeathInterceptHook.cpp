@@ -163,6 +163,23 @@ namespace
     constexpr size_t kContactHandle = 0xe0;
     constexpr uint32_t kKeepOtherPlayerMs = 5000;
 
+    // The map this machine was standing in when a session first showed up, and
+    // which is kept loaded for as long as the session lasts.
+    //
+    // Measured 18/09. The guest died on arriving back at that map, never at
+    // any other, and it followed the map and not the place: with the session
+    // re-formed in Heide instead of Majula the death moved to Heide. Holding
+    // it turned the death into faults the game walks away from - eight legs
+    // over the four bonfires with both games alive and the session verified
+    // the whole way, where before it fell on the fifth or sixth.
+    //
+    // One extra map is affordable; two are not. An earlier version held every
+    // map and the next one asked for never left state 0, so the travel simply
+    // failed. This holds exactly one.
+    int32_t s_home_index = -1;
+    ULONGLONG s_home_seen = 0;
+    constexpr ULONGLONG kHomeForgetMs = 30000;
+
     // With the parts around them, not whole: what the game would have in for a
     // player standing there, and no more, since maps share coordinates.
     // FUN_140312ba0 resolves the contact to a map entity, a part when its kind
@@ -2029,6 +2046,15 @@ namespace
 
     void UpdateHook(void* Ctrl, float Delta)
     {
+        // No other player for half a minute means no session, and the home map
+        // goes back to being the game's business.
+        if (s_home_index >= 0 && GetTickCount64() - s_home_seen > kHomeForgetMs)
+        {
+            Log("[DS2DeathIntercept] ninguem mais por perto; solto o mapa de indice %d, onde a sessao tinha comecado.",
+                (int)s_home_index);
+            s_home_index = -1;
+        }
+
         uint8_t* Bytes = (uint8_t*)Ctrl;
         void* Character = *(void**)(Bytes + kCtrlCharacter);
 
@@ -2063,6 +2089,25 @@ namespace
                 else if ((Index = MapIndexUnder((uint8_t*)Character)) >= 0)
                 {
                     DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs);
+                }
+
+                // The home map of the session, learned once and held from then
+                // on. See s_home_index.
+                s_home_seen = GetTickCount64();
+                if (s_home_index < 0)
+                {
+                    uint8_t* Local = (uint8_t*)LocalCharacter();
+                    const int32_t Home = Local != nullptr ? MapIndexUnder(Local) : -1;
+                    if (Home >= 0)
+                    {
+                        s_home_index = Home;
+                        Log("[DS2DeathIntercept] o mapa de indice %d e onde a sessao comecou; fica carregado enquanto ela durar.",
+                            (int)s_home_index);
+                    }
+                }
+                if (s_home_index >= 0)
+                {
+                    DS2_Backread::KeepIndex(s_home_index, kKeepOtherPlayerMs);
                 }
             }
 
