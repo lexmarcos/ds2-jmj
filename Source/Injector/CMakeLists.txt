@@ -42,6 +42,7 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_PartyHook.cpp
     Hooks/DarkSouls2/DS2_ProgressCarryHook.cpp
     Hooks/DarkSouls2/DS2_NetSyncGuardHook.cpp
+    Hooks/DarkSouls2/DS2_PartNotifyGuardHook.cpp
     Hooks/DarkSouls2/DS2_BonfireInSessionHook.cpp
     Hooks/DarkSouls2/DS2_RematchHook.cpp
     Hooks/DarkSouls2/DS2_SeamlessCoopHook.cpp
