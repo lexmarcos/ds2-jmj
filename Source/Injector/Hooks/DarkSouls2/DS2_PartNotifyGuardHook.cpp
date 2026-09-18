@@ -295,18 +295,27 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
-    // Proof, not a report: the first byte of each target is now a jmp.
+    // Proof, not a report: the first byte of each target is now a jmp. The
+    // bytes are written down either way, because on 18/09 this check passed at
+    // install time and the live memory a minute later held the original
+    // prologue again at one of the three.
     const size_t Targets[] = { kNotifyOffset, kFindOffset, kFindTwinOffset };
+    bool Landed = true;
     for (const size_t At : Targets)
     {
-        const uint8_t First = *(const uint8_t*)(s_base + At);
-        if (First != 0xE9 && First != 0xEB)
+        const uint8_t* First = (const uint8_t*)(s_base + At);
+        Log("[DS2PartNotifyGuard] +0x%zx (base %p) comeca com %02x %02x %02x %02x %02x",
+            (size_t)At, (void*)s_base, First[0], First[1], First[2], First[3], First[4]);
+        if (First[0] != 0xE9 && First[0] != 0xEB)
         {
-            Error("[DS2PartNotifyGuard] +0x%zx nao foi desviado (primeiro byte %02x); nao aplicado.",
-                (size_t)At, First);
-            Uninstall();
-            return false;
+            Error("[DS2PartNotifyGuard] +0x%zx nao foi desviado; nao aplicado.", (size_t)At);
+            Landed = false;
         }
+    }
+    if (!Landed)
+    {
+        Uninstall();
+        return false;
     }
 
     Log("[DS2PartNotifyGuard] as tres listas passam a ser conferidas antes de andadas (+0x%zx, +0x%zx e +0x%zx).",
