@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <thread>
 #include <cstring>
 
 #ifdef _WIN32
@@ -65,6 +66,36 @@ namespace
     uintptr_t s_base = 0;
     uintptr_t s_end = 0;
     std::atomic<uint64_t> s_cut{ 0 };
+
+    // The five bytes Detours left at the entry of each target, and a thread
+    // that puts them back.
+    //
+    // Measured 18/09: on the guest, and only on the guest, the jump at
+    // +0x1729a0 is gone about a second after the white sign is placed, and the
+    // original prologue is back in its place byte for byte. The other two
+    // targets keep theirs, and the host keeps all three. No hook of ours
+    // writes anywhere near there, so it is the game putting that stretch of
+    // its own code back. Whatever the reason, a guard that is quietly lifted
+    // is worse than no guard, so this writes it again and says so.
+    constexpr size_t kTargetCount = 3;
+    size_t s_target_offset[kTargetCount] = {};
+    uint8_t s_target_jump[kTargetCount][5] = {};
+    std::atomic<bool> s_watching{ false };
+    std::atomic<uint64_t> s_restored{ 0 };
+    std::thread s_watch_thread;
+
+    bool ReadBytes(uintptr_t Address, void* Out, size_t Length)
+    {
+        __try
+        {
+            memcpy(Out, (const void*)Address, Length);
+            return true;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
 
     bool ReadPointer(uintptr_t Address, uintptr_t& Out)
     {
@@ -171,6 +202,44 @@ namespace
             return false;
         }
         return true;
+    }
+
+    // Once a second: any target whose entry is no longer the jump Detours left
+    // gets it back.
+    void WatchTargets()
+    {
+        while (s_watching.load())
+        {
+            for (size_t i = 0; i < kTargetCount; ++i)
+            {
+                if (s_target_offset[i] == 0)
+                {
+                    continue;
+                }
+                const uintptr_t At = s_base + s_target_offset[i];
+                uint8_t Now[5] = {};
+                if (!ReadBytes(At, Now, sizeof(Now)) || memcmp(Now, s_target_jump[i], sizeof(Now)) == 0)
+                {
+                    continue;
+                }
+                DWORD Previous = 0;
+                if (!VirtualProtect((void*)At, sizeof(Now), PAGE_EXECUTE_READWRITE, &Previous))
+                {
+                    continue;
+                }
+                memcpy((void*)At, s_target_jump[i], sizeof(Now));
+                FlushInstructionCache(GetCurrentProcess(), (void*)At, sizeof(Now));
+                DWORD Ignored = 0;
+                VirtualProtect((void*)At, sizeof(Now), Previous, &Ignored);
+                const uint64_t Count = s_restored.fetch_add(1);
+                if (Count < 40)
+                {
+                    Log("[DS2PartNotifyGuard] o desvio de +0x%zx tinha sido desfeito (achei %02x %02x %02x %02x %02x); reposto.",
+                        s_target_offset[i], Now[0], Now[1], Now[2], Now[3], Now[4]);
+                }
+            }
+            Sleep(1000);
+        }
     }
 
     void* __fastcall FindTwinHook(uintptr_t Obj)
@@ -318,6 +387,14 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
         return false;
     }
 
+    for (size_t i = 0; i < kTargetCount; ++i)
+    {
+        s_target_offset[i] = Targets[i];
+        memcpy(s_target_jump[i], (const void*)(s_base + Targets[i]), sizeof(s_target_jump[i]));
+    }
+    s_watching.store(true);
+    s_watch_thread = std::thread(WatchTargets);
+
     Log("[DS2PartNotifyGuard] as tres listas passam a ser conferidas antes de andadas (+0x%zx, +0x%zx e +0x%zx).",
         (size_t)kNotifyOffset, (size_t)kFindOffset, (size_t)kFindTwinOffset);
 #endif
@@ -327,6 +404,10 @@ bool DS2_PartNotifyGuardHook::Install(Injector& injector)
 void DS2_PartNotifyGuardHook::Uninstall()
 {
 #if defined(_WIN32) && defined(_M_X64)
+    if (s_watching.exchange(false) && s_watch_thread.joinable())
+    {
+        s_watch_thread.join();
+    }
     if (s_original != nullptr)
     {
         DetourTransactionBegin();
