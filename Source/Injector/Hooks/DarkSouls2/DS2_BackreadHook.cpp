@@ -518,7 +518,17 @@ namespace
             }
             if (s_focus_cell >= 0)
             {
-                s_original_streamer(Streamer, Focus, s_focus_cell, Part, Flag);
+                // The part goes with the cell or it does not go at all. `Part`
+                // is the entity under the local player's feet, which belongs
+                // to the map the player is really in, and the cell here names
+                // another one. Handing the streamer both writes a part of one
+                // map into the bookkeeping of another, and the pointer dies
+                // with whichever map goes first: on 17/09 a teardown of Majula
+                // walked a part whose vftable read 00003817410eaf80, the low
+                // half a real address in the game's image and the top half
+                // somebody else's. The graph search starts from the cell, so
+                // nothing is lost by saying nothing.
+                s_original_streamer(Streamer, Focus, s_focus_cell, nullptr, Flag);
                 return;
             }
         }
