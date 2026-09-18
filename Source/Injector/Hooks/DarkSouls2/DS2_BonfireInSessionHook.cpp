@@ -387,10 +387,12 @@ namespace
     constexpr size_t kSyncState = 0x08;
     constexpr size_t kSyncCount = 0x0c;
     constexpr size_t kSyncRecords = 0x10;
-    // Note it is NOT this object's +0x18 that killed the guest at +0x517843:
-    // that map id comes from a different record, param_1 of FUN_1405177c0.
-    // Rewriting this one changed nothing, and DS2_NetSyncGuardHook is what
-    // stops the crash. Kept because the probe scripts read it.
+    // The map the object sync is bound to. It IS the id FUN_1405177c0 reads at
+    // +0x517843 (its param_1 is this object, handed over by FUN_140518920); an
+    // earlier note here said otherwise and was wrong. Rewriting it by hand does
+    // not stick, because every rebuild (FUN_140517880) writes it again from the
+    // session's own idea of the current map, which on a guest stays the map the
+    // session began in. See DS2_BonfireInSession_ForgetSyncedMap.
     constexpr size_t kSyncMap = 0x18;
 
     // A travel the game itself starts, the way FUN_14017fdb0 does once a
@@ -2321,6 +2323,45 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
     Log("[DS2BonfireInSession] o dono do mundo descansa em fogueira com a sessao de pe");
 #endif
     return true;
+}
+
+void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // The object sync binds to the world's primary map once, when the guest
+    // loads in (FUN_140517880 walks that map's table of 0xa0-byte object blocks
+    // and writes the record count at +0xc), and nothing but a real load binds
+    // it again. Travel here is not a real load, so on the guest the sync stays
+    // bound to the map the session began in for as long as the session lasts.
+    //
+    // When the backread lets that map go, its heap goes with it, and the host's
+    // object packets keep arriving: FUN_140518920 finds each record by index,
+    // checks only that the index is below the count, and writes the update
+    // into the block the record points at. Measured 18/09, reading the guest's
+    // records live: 56 of them, unchanged after the travel and after the
+    // release, and the first eight bytes of several blocks were exactly the
+    // "vftables" of the crashes - 0000002e00290c00, 0000007e023dcd02. The
+    // blocks had become MapEntities, and the sync was writing into them.
+    //
+    // A count of zero makes the packet handler skip every record. It is
+    // written as the release begins, which is at least 700 ms before the map's
+    // memory is actually handed back.
+    const uintptr_t Sync = NetSync();
+    uint32_t Bound = 0, Count = 0;
+    if (Sync == 0 || !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)) ||
+        !ReadBytes(Sync + kSyncCount, &Count, sizeof(Count)))
+    {
+        return;
+    }
+    if (Bound != Map || Count == 0)
+    {
+        return;
+    }
+    const uint32_t Zero = 0;
+    WriteBytes(Sync + kSyncCount, &Zero, sizeof(Zero));
+    Append(StringFormat("object sync: map %08x is going and the sync was bound to it; dropped its %u records\n",
+        Map, Count));
+#endif
 }
 
 void DS2_BonfireInSession_IdleNetSync(const char* Why)

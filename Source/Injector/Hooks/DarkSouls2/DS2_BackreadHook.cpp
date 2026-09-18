@@ -287,11 +287,16 @@ namespace
         if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 0x3f)
         {
             // No index to remember bits against: the old behaviour, at once.
+            DS2_BonfireInSession_ForgetSyncedMap(Map);
             const uint8_t Zero = 0;
             WriteBytes(Owner + kOwnerForced, &Zero, 1);
             Append(StringFormat("%s  mapa %08x %s; solto sem indice\n", Clock().c_str(), Map, Why));
             return true;
         }
+
+        // Before anything of this map goes: the object sync may still be bound
+        // to it, and would keep writing into its memory.
+        DS2_BonfireInSession_ForgetSyncedMap(Map);
 
         uint32_t Bits[4] = {};
         {

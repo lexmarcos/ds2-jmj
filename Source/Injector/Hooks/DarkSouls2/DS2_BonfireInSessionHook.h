@@ -92,3 +92,9 @@ void DS2_BonfireInSession_Tick();
 /// walked them ~170 ms after every release that killed a guest on 17/09.
 void DS2_BonfireInSession_IdleNetSync(const char* Why);
 
+/// The backread is about to let this map go. If the object sync is still bound
+/// to it - on a guest it stays bound to the map the session began in - its
+/// records point into memory about to be freed, and the host's next object
+/// packet would be written there. Drops them first.
+void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map);
+
