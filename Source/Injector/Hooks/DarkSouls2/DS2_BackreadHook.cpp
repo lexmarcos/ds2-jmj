@@ -89,6 +89,10 @@ namespace
     constexpr size_t kContextNav = 0xbc0;              // *(ctx+0xbc0)+0x10
     constexpr size_t kNavManager = 0x10;
     constexpr size_t kOwnerIndexField = 0x0c;
+    // A MapEntity: its kind byte and the owner of the map it belongs to.
+    constexpr size_t kEntityKind = 0xa2;
+    constexpr uint8_t kEntityPart = 2;
+    constexpr size_t kPartOwner = 0x28;
     constexpr float kNavSearchRadius = 10.0f;
     constexpr int32_t kNavSearchLimit = 0x40;
 
@@ -488,6 +492,20 @@ namespace
         return NavMap == 0 ? -1 : CallNavFindCell(NavMap, Position);
     }
 
+    // Does this entity belong to that map? Everything is proven before it is
+    // believed: the kind byte, the owner's vftable, then the owner's map id.
+    bool PartOfMap(void* Part, uint32_t Map)
+    {
+        uint8_t Kind = 0;
+        uintptr_t Owner = 0, Vftable = 0;
+        uint32_t Mine = 0;
+        return Part != nullptr && Map != 0 &&
+            ReadBytes((uintptr_t)Part + kEntityKind, &Kind, 1) && Kind == kEntityPart &&
+            ReadPointer((uintptr_t)Part + kPartOwner, Owner) && Owner != 0 &&
+            ReadPointer(Owner, Vftable) && Vftable == s_base + kOwnerVftable &&
+            ReadBytes(Owner + kOwnerMap, &Mine, sizeof(Mine)) && Mine == Map;
+    }
+
     void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
     {
         const uint32_t Map = s_focus_map.load();
@@ -518,17 +536,22 @@ namespace
             }
             if (s_focus_cell >= 0)
             {
-                // The part goes with the cell or it does not go at all. `Part`
-                // is the entity under the local player's feet, which belongs
-                // to the map the player is really in, and the cell here names
-                // another one. Handing the streamer both writes a part of one
-                // map into the bookkeeping of another, and the pointer dies
-                // with whichever map goes first: on 17/09 a teardown of Majula
-                // walked a part whose vftable read 00003817410eaf80, the low
-                // half a real address in the game's image and the top half
-                // somebody else's. The graph search starts from the cell, so
-                // nothing is lost by saying nothing.
-                s_original_streamer(Streamer, Focus, s_focus_cell, nullptr, Flag);
+                // The part goes with the cell or it does not go at all. The
+                // fourth argument is the entity under the local player's feet,
+                // which belongs to the map the player is really in, and the
+                // cell here names another one. Handing the streamer both
+                // writes a part of one map into the bookkeeping of another,
+                // and the pointer dies with whichever map goes first: on 17/09
+                // a teardown of Majula walked a part whose vftable read
+                // 00003817410eaf80, the low half a real address in the game's
+                // image and the top half somebody else's.
+                //
+                // Saying nothing at all is worse: with no part the streamer
+                // never builds the ground, the player never lands, and the
+                // travel fails outright (measured the same day). So the part
+                // is passed exactly while it is this map's, which after the
+                // teleport it is.
+                s_original_streamer(Streamer, Focus, s_focus_cell, PartOfMap(Part, Map) ? Part : nullptr, Flag);
                 return;
             }
         }
