@@ -287,6 +287,15 @@ namespace
     Added s_added[0x40];
     constexpr ULONGLONG kLetGoMs = 700;
     std::atomic<bool> s_session_map_held{ false };
+    // The session's map this hook refused to let go, and since when it has
+    // not been one. Measured 18/09: after a legal session end the host kept
+    // Majula forced for good - a map slot and its memory held for nothing.
+    // It goes once it has not been the session's map for five seconds; the
+    // delay rides over the moment a warp inside a session puts the enemy sync
+    // back to state 0 before it binds again.
+    std::atomic<uint32_t> s_held_session_map{ 0 };
+    ULONGLONG s_held_not_session_since = 0;
+    constexpr ULONGLONG kHeldGraceMs = 5000;
 
     void RememberAdded(int32_t Index, const uint32_t Bits[4])
     {
@@ -315,6 +324,8 @@ namespace
         // room for the travel around it.
         if (DS2_BonfireInSession_IsSessionMap(Map))
         {
+            s_held_session_map.store(Map);
+            s_held_not_session_since = 0;
             if (!s_session_map_held.exchange(true))
             {
                 Append(StringFormat("%s  mapa %08x %s, but it is the session's map; kept loaded for the session\n",
@@ -502,6 +513,28 @@ namespace
         {
             // A release that began a few frames ago finishes here.
             FinishLetGo((uintptr_t)Owner, Map);
+
+            // The session's map, held while the session lived, goes once the
+            // session is over.
+            if (Map == s_held_session_map.load())
+            {
+                if (DS2_BonfireInSession_IsSessionMap(Map))
+                {
+                    s_held_not_session_since = 0;
+                }
+                else if (s_held_not_session_since == 0)
+                {
+                    s_held_not_session_since = GetTickCount64();
+                }
+                else if (GetTickCount64() - s_held_not_session_since >= kHeldGraceMs)
+                {
+                    s_held_session_map.store(0);
+                    s_held_not_session_since = 0;
+                    s_session_map_held.store(false);
+                    Append(StringFormat("%s  mapa %08x is no longer the session's map; letting it go\n", Clock().c_str(), Map));
+                    BeginLetGo((uintptr_t)Owner, Map, "the session ended");
+                }
+            }
 
             if (Verdict == KeepVerdict::Keep)
             {

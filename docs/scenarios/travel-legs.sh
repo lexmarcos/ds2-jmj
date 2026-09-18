@@ -1,7 +1,7 @@
 #!/bin/bash
 # travel-legs.sh <destination>... : group travel by vote, one leg per argument.
 #
-# Destinations: majula heide ironkeep brume (the first bonfire of each).
+# Destinations: majula heide ironkeep brume, plus ironhearth and amana.
 # The host opens the vote, the guest presses A on the box, and the leg is
 # scored 75 s later. A leg is CLEAN only if nothing grew on either side: no
 # `excecao` in DS2_Crash.log, no `FALHA APARADA` in DS2_Backread.log, the host
@@ -24,10 +24,17 @@ roles() {
   elif echo "$s" | grep -q "^conta 2: Host"; then HOST=2; GUEST=1
   else return 1; fi
 }
-declare -A MAPS=( [majula]="0a040000 122a" [heide]="0a1f0000 7ba2" [ironkeep]="0a130000 4cc2" [brume]="140b0000 2d82" )
+# The first bonfire of each area the brief asks for: The Far Fire (Majula), Tower
+# of Flame (Heide's Tower of Flame), Threshold Bridge (Iron Keep) and Foyer
+# (Brume Tower, Crown of the Old Iron King). Until 18/09 this table had
+# "ironkeep" on Ironhearth Hall, Iron Keep's second bonfire, and "brume" on
+# 140b0000/2d82, which is Tower of Prayer in Shrine of Amana - a label inherited
+# from an old shortcut and never checked against the game's own name. Both are
+# kept under their real names.
+declare -A MAPS=( [majula]="0a040000 122a" [heide]="0a1f0000 7ba2" [ironkeep]="0a130000 4cc7" [brume]="32240000 8f2f" [ironhearth]="0a130000 4cc2" [amana]="140b0000 2d82" )
 legs=()
 for n in "$@"; do [ -n "${MAPS[$n]}" ] || { echo "unknown destination: $n"; exit 1; }; legs+=("${MAPS[$n]} $n"); done
-[ ${#legs[@]} -gt 0 ] || { echo "usage: travel-legs.sh <majula|heide|ironkeep|brume>..."; exit 1; }
+[ ${#legs[@]} -gt 0 ] || { echo "usage: travel-legs.sh <majula|heide|ironkeep|brume|ironhearth|amana>..."; exit 1; }
 ok=0; clean=0
 for leg in "${legs[@]}"; do
   set -- $leg; MAP=$1; FIRE=$2; NAME=$3
