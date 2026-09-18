@@ -507,9 +507,11 @@ namespace
                 // at the end of the travel (the earlier fix) was too early -
                 // this release comes thirty seconds later, and by then the
                 // sync had been rebuilt and filled again.
+                // The sync is not put back to state 0 here any more: that
+                // rebuilds it against freed memory. BeginLetGo drops its
+                // records instead (DS2_BonfireInSession_ForgetSyncedMap).
                 if (BeginLetGo((uintptr_t)Owner, Map, "nao e mais de ninguem"))
                 {
-                    DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto");
                     DS2_TravelWatch::Open(15000, "mapa solto: nao e mais de ninguem");
                 }
             }
@@ -522,9 +524,9 @@ namespace
             {
                 // Not from under another player: its keep holds the byte.
                 const bool StillKept = Verdict == KeepVerdict::Keep;
-                if (!StillKept && BeginLetGo((uintptr_t)Owner, Map, "a pedido"))
+                if (!StillKept)
                 {
-                    DS2_BonfireInSession_IdleNetSync("um mapa vai ser solto a pedido");
+                    BeginLetGo((uintptr_t)Owner, Map, "a pedido");
                 }
                 s_released_map.store(0);
                 if (StillKept)

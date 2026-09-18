@@ -568,11 +568,7 @@ namespace
     BonfireLit_p s_bonfire_lit = nullptr;
     NetTick_p s_original_net_tick = nullptr;
     std::atomic<ULONGLONG> s_quiet_until{ 0 };
-    // While this is in the future the character sync is put back to state 0
-    // every tick: a map does not go in one frame, and one write at the moment
-    // the force byte drops only covers the first of them.
-    std::atomic<ULONGLONG> s_sync_idle_until{ 0 };
-    constexpr ULONGLONG kSyncIdleMs = 4000;
+
     // The window cannot end on "the world is up", because the world is still
     // up at the instant it is armed - the warp has not torn anything down
     // yet. Measured 16/09: the window opened and closed three milliseconds
@@ -2369,7 +2365,6 @@ void DS2_BonfireInSession_IdleNetSync(const char* Why)
 #if defined(_WIN32) && defined(_M_X64)
     if (s_events_ready.load())
     {
-        s_sync_idle_until.store(GetTickCount64() + kSyncIdleMs);
         IdleNetSync(Why);
     }
 #else
@@ -2386,19 +2381,6 @@ void DS2_BonfireInSession_Tick()
     }
     const ULONGLONG Now = GetTickCount64();
     DS2_CoopChannel::Bonfire Said;
-
-    // A map that is going takes several frames to go, and the sync walks its
-    // records on every one of them. Held at 0 for the whole of it.
-    if (Now < s_sync_idle_until.load())
-    {
-        const uintptr_t Sync = NetSync();
-        uint32_t State = 0;
-        if (Sync != 0 && ReadBytes(Sync + kSyncState, &State, sizeof(State)) && State != 0)
-        {
-            const uint32_t Zero = 0;
-            WriteBytes(Sync + kSyncState, &Zero, sizeof(Zero));
-        }
-    }
 
     // The bonfire prompt's guest gate is open exactly while this player is a
     // white phantom; each write checks the bytes it replaces.
@@ -2435,12 +2417,17 @@ void DS2_BonfireInSession_Tick()
     // Right here is the moment that matters, and the warp path learned it the
     // expensive way: written early the state machine restores it before the
     // travel, so it has to be the instant the move ends.
-    const bool MovingNow = DS2_DeathIntercept::Moving();
-    if (s_was_moving && !MovingNow)
-    {
-        IdleNetSync("a viagem pelo transporte antigo terminou");
-    }
-    s_was_moving = MovingNow;
+    //
+    // Not any more, and on purpose: state 0 is not "stop", it is "rebuild",
+    // and the rebuild (FUN_140517880) binds the sync to the table of objects
+    // the world still calls its primary map. After a travel that is not a
+    // real load, that table belongs to the map the session began in, and once
+    // that map has been released it is freed memory. Measured 18/09: the
+    // records were dropped as Majula went (ForgetSyncedMap), the state-0 write
+    // at the end of the next travel brought all 56 back, pointing at the old
+    // blocks, and 0.7 s later the guest died with the writer's 0x528 in a
+    // pointer. The sync is left alone here now.
+    s_was_moving = DS2_DeathIntercept::Moving();
 
     KeepJobPatch(Now);
     KeepCurtain(Now);
