@@ -297,6 +297,42 @@ namespace
             }
         }
 
+        // The world's per-map network object tables at the moment of the fault
+        // (FUN_140419a70: *(*(0x1416148f0)+0x40) + 0x20 + index*8, each table's
+        // 0xa0-byte blocks at +0x18 and count at +0x20). On 18/09 every value
+        // found written over a live object was the content of one of these
+        // blocks, and the old table was proven to be written by nobody after
+        // its map went; this says whether the live table sits on top of the
+        // object that broke.
+        {
+            uintptr_t Global = 0, World = 0;
+            if (SafeQword(s_base + 0x16148f0, Global) && Global != 0 && SafeQword(Global + 0x40, World) && World != 0)
+            {
+                int Header = 0;
+                for (int k = 0; k < 0x2a && Used < (int)sizeof(Text) - 120; ++k)
+                {
+                    uintptr_t Table = 0, Blocks = 0, Count = 0;
+                    if (!SafeQword(World + 0x20 + (uintptr_t)k * 8, Table) || Table == 0)
+                    {
+                        continue;
+                    }
+                    SafeQword(Table + 0x18, Blocks);
+                    SafeQword(Table + 0x20, Count);
+                    if (Header == 0)
+                    {
+                        Used += snprintf(Text + Used, sizeof(Text) - Used, "    object tables:");
+                        Header = 1;
+                    }
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, " [%d] %p blocks %p-%p", k, (void*)Table,
+                        (void*)Blocks, (void*)(Blocks + (uintptr_t)(uint32_t)Count * 0xa0));
+                }
+                if (Header != 0)
+                {
+                    Used += snprintf(Text + Used, sizeof(Text) - Used, "\n");
+                }
+            }
+        }
+
         Write(Text, (size_t)Used < sizeof(Text) ? (size_t)Used : sizeof(Text) - 1);
         return EXCEPTION_CONTINUE_SEARCH;
     }
