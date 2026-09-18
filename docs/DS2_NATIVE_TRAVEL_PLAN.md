@@ -1075,3 +1075,45 @@ What the session puts on that map and nobody takes away when it goes is what is
 left to name. The exception watcher now writes down the virtual table of the
 objects in hand, so the next crash that catches a heap object will already name
 the class.
+
+## 11. 18/09, afternoon — the writer found, and what is left after it
+
+**The two-day guest crash was the object sync writing into freed memory.** On a
+guest the sync binds once, at the join, to the object table of the session's
+map (`FUN_140517880`: one record per 0xa0-byte object block, count at `+0xc`),
+and only a real load binds it again. Travel here is not a real load. When the
+backread released that map, the host's object packets kept arriving and
+`FUN_140518920` wrote each one into a block that had since become a
+`MapEntity`. Read live on the guest: the same 56 records, same pointers, same
+map, before and after a travel and after the release; the first eight bytes of
+several blocks were exactly the "vftables" of earlier crashes
+(`0000002e00290c00`, `0000007e023dcd02`); and a crashed `MapEntity` had its own
+`+0x1c` and `+0x2c` overwritten in the shape of that writer's stores.
+
+Fixed in three steps, each measured:
+
+| change | result |
+| --- | --- |
+| drop the records (count to 0) as the bound map's release begins | the state-0 write at the next travel end rebuilt all 56 against the freed table; died 0.7 s later |
+| stop writing state 0 after travel and on release | the game went to state 0 by itself and rebuilt on the first return to Majula; died ~1 s after arriving |
+| also close the guest's rebuild gate (`sync+0x198`) | **five clean legs**, including Brume → Majula; the sync stays empty |
+
+The control was rerun on the current build first: twelve solo legs, four
+returns to Majula, three straight after Brume Tower, all clean. So everything
+here is the session's.
+
+**What is left.** On the second return to Majula of that last run, **both
+games** began faulting every frame within 17 ms of each other, host included:
+
+| side | where | what |
+| --- | --- | --- |
+| guest | `+0x3f510f`, `mov 0x38(%rcx)` with `rcx = [MapModelComponent+0xc8]` | `000b0010e8364540` |
+| host | `+0x1caa60` / `+0x1caaf0`, alternating | `000b001000000000` |
+
+In both, a live `MapModelComponent` (`+0x10eb558`) has the pointer at `+0xc8`
+with its top half replaced by `0x000b0010`, next to a `MapFlverModelCtrl`
+(`+0x10e9488`). 17 ms is the gap between the guest arriving and the host
+seeing the guest's copy appear, so the trigger looks like the other player's
+copy arriving in the map the session began in. The object sync cannot be it on
+the host, whose count is 0. The games survived that leg and one died on the
+next. Not yet named: who writes `MapModelComponent+0xcc`.
