@@ -901,3 +901,58 @@ máquina do host consistente, já que ela também escreve `+0x1b8 |= 2`; quem no
 host conta o silêncio de ~23 s e se um carregamento cabe dentro dele; se o
 convidado consegue carregar preservando o join ctrl; e a tela de carregamento
 dentro de um warp real.
+
+## 8. 17/09 — o que mata a sessão numa viagem em grupo
+
+A viagem em grupo pela votação já leva os dois ao mesmo lugar sem ninguém sair
+da sessão. O que a derrubava eram três coisas, e duas estão fechadas.
+
+**A tabela de personagens de um mapa solto (fechada).** O convidado morria em
+`+0x517843`, 167-173 ms depois de o backread soltar um mapa, cinco vezes em
+cinco. `FUN_1405177c0` pega essa tabela do dono do mapa de duas casas: `+0x160`
+com teste de nulo, `+0x168` sem teste nenhum. O dono sobrevive ao mapa, só a
+tabela some, então a busca acha o dono e lê nulo. `DS2_NetSyncGuardHook` põe o
+teste que falta em 24 bytes, usando o `ebx` que já carrega o índice desde
+`+0x5177d1`; os dois `movzwl` que o compilador emitiu eram redundantes e pagam
+pelo teste e pelo desvio. Retornar falso é a própria resposta do jogo para "não
+achei", e o chamador em `+0x518d64` já desvia nela.
+
+Antes disso eu tinha escrito `+0x18` do objeto do slot 0x28 de `0x141616cf8`
+achando que era o id de mapa que `FUN_1405177c0` lê. **Não é**: aquele id vem
+do `param_1` da função, outro registro. O reapontamento não mudou nada e foi
+removido.
+
+**As partes inventadas (fechada).** Quando a cópia do outro jogador não estava
+sobre uma parte conhecida, o pedido de segurar o mapa vinha sem máscara e
+virava **todas** as partes: 128 bits em seis blocos, contra mapas cujo índice de
+partes é bem menor. O desmonte percorre os bits ligados. A soltura da Torre de
+Brume no convidado falhou duas vezes lá dentro (`+0x3f6476` e `+0x3ba0be`, cada
+um sobre um ponteiro de parte montado de lixo), a rede de segurança aparou, o
+mapa ficou pela metade, e o mapa seguinte morreu no destroço. Sem máscara agora
+é sem parte nenhuma: o byte de força sozinho segura um mapa que já está dentro.
+
+**O objeto liberado que sobra numa lista (aberta).** Com as duas acima, a
+campanha das quatro fogueiras deu **3 de 4 limpas**, sem nenhuma falha aparada.
+A que cai é sempre a perna **logo depois da Torre de Brume**, e o convidado
+morre cerca de meio segundo depois de chegar:
+
+| onde | o que faz | o que estava em mãos |
+| --- | --- | --- |
+| `+0x3f3b20` | `call [rax+8]` andando numa lista `[rcx+0x38]`, nó a nó por `+8` | tabela virtual `bded80c840bde337` |
+| `+0x3ce81c` | `[rcx+0x58]` sobre `[[rbx+0x10]+idx*8]+0x30`, índice 321 de `[rbx+0x18]` | ponteiro `00002817f1b91828` |
+
+Os dois são a mesma família: soltar um mapa deixa objetos já liberados ligados
+nas listas do próprio jogo, e o próximo carregamento daquele mapa anda por cima
+deles. Heide → Majula é limpa; Brume → Majula matou duas de duas.
+
+**Segurar todo mapa não serve.** Tentado e desfeito no mesmo dia: com Majula e
+Heide presas, o pedido de Iron Keep parou no estado 0 e nunca carregou, e o de
+Brume também; o host esperou 30 s e desistiu das duas viagens. Quatro mapas
+forçados ao mesmo tempo é mais do que o jogo carrega, então segurar tudo troca
+a queda por ninguém sair do lugar.
+
+**Como pontuar uma perna.** Só passa se nada aumentar dos dois lados: nem
+`excecao` no `DS2_Crash.log`, nem `FALHA APARADA` no `DS2_Backread.log`, e a
+sessão seguir verificada **e** o host tiver de fato chegado. A rede de segurança
+transforma uma queda em corrupção silenciosa, então a primeira falha aparada já
+é a falha; e uma perna em que ninguém saiu do lugar não é uma perna limpa.
