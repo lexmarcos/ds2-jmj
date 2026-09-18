@@ -2324,6 +2324,49 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
     return true;
 }
 
+namespace
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // Every change of the object sync, written down: state, record count, the
+    // map it is bound to and the block its first record points at. The drop in
+    // ForgetSyncedMap stopped one writer; what is left crashes on the second
+    // return to the map the session began in, and whether a rebuild happened
+    // first - on which machine, bound to which table - is the question this
+    // answers. A rebuild whose first block is the same address as the one bound
+    // at the join is a rebuild against freed memory.
+    uint32_t s_seen_state = 0xffffffff, s_seen_count = 0xffffffff, s_seen_map = 0xffffffff;
+    uintptr_t s_seen_block = ~(uintptr_t)0;
+
+    void WatchObjectSync()
+    {
+        const uintptr_t Sync = NetSync();
+        uint32_t State = 0, Count = 0, Map = 0;
+        uintptr_t Records = 0, Block = 0;
+        if (Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+            !ReadBytes(Sync + kSyncCount, &Count, sizeof(Count)) || !ReadBytes(Sync + kSyncMap, &Map, sizeof(Map)))
+        {
+            return;
+        }
+        if (ReadPointer(Sync + kSyncRecords, Records) && Records != 0 && Count != 0)
+        {
+            ReadPointer(Records + 0x10, Block);
+        }
+        if (State == s_seen_state && Count == s_seen_count && Map == s_seen_map && Block == s_seen_block)
+        {
+            return;
+        }
+        uint8_t Gate = 0;
+        ReadBytes(Sync + kSyncGuestGate, &Gate, sizeof(Gate));
+        Append(StringFormat("object sync: state %u count %u map %08x first block %p gate %u\n", State, Count, Map,
+            (void*)Block, (unsigned)Gate));
+        s_seen_state = State;
+        s_seen_count = Count;
+        s_seen_map = Map;
+        s_seen_block = Block;
+    }
+#endif
+}
+
 void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map)
 {
 #if defined(_WIN32) && defined(_M_X64)
@@ -2446,6 +2489,8 @@ void DS2_BonfireInSession_Tick()
     // blocks, and 0.7 s later the guest died with the writer's 0x528 in a
     // pointer. The sync is left alone here now.
     s_was_moving = DS2_DeathIntercept::Moving();
+
+    WatchObjectSync();
 
     KeepJobPatch(Now);
     KeepCurtain(Now);
