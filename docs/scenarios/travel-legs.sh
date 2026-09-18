@@ -10,7 +10,8 @@
 # and a leg where nobody moved is not a clean leg.
 #
 # Set KEEP_GOING=1 to carry on past a leg with faults and stop only when a game
-# dies or the session drops.
+# dies or the session drops. Set REBUILD_PRESENCE=1 to take the other player's
+# copy out and recreate it on both sides twelve seconds after each vote.
 D=/home/suel/projects/ds2-jmj/Source/LoaderLinux/target/debug/ds2os-dev
 I1="/mnt/ssd/SteamLibrary/steamapps/common/Dark Souls II Scholar of the First Sin"
 I2="/home/suel/steam2/.steam/debian-installation/steamapps/common/Dark Souls II Scholar of the First Sin"
@@ -39,7 +40,18 @@ for leg in "${legs[@]}"; do
   printf 'votar %s %s\n' "$MAP" "$FIRE" > "$HI/DS2_Bonfire.req"
   sleep 3
   $D pad seq "press a" --focus $GUEST >/dev/null 2>&1
-  sleep 75
+  if [ "${REBUILD_PRESENCE:-0}" = 1 ]; then
+    # Take the other player's copy out and bring it back on both sides, so it
+    # is rebuilt in the map the group is in now and not left holding objects
+    # of the map it was created in.
+    sleep 12
+    printf 'presenca retira\n' > "$HI/DS2_Bonfire.req"; printf 'presenca retira\n' > "$GI/DS2_Bonfire.req"
+    sleep 6
+    printf 'presenca recria\n' > "$HI/DS2_Bonfire.req"; printf 'presenca recria\n' > "$GI/DS2_Bonfire.req"
+    sleep 57
+  else
+    sleep 75
+  fi
   n1=$(count "$I1/DS2_Crash.log" excecao); n2=$(count "$I2/DS2_Crash.log" excecao)
   g1=$(count "$I1/DS2_Backread.log" "FALHA APARADA"); g2=$(count "$I2/DS2_Backread.log" "FALHA APARADA")
   games=$($D status 2>&1 | grep "processos do jogo" | grep -o "[0-9]\+" | wc -l)
