@@ -54,7 +54,18 @@ namespace
     // parts) and +0x70 (the parts the player is in), and the parts controller
     // +0x20 and +0x30. Measured 14/09: with only +0x10 and +0x40 forced, a map
     // came in with no ground. +0x70 is left to the game.
-    constexpr size_t kOwnerMasks[] = { 0x10, 0x20, 0x30, 0x40, 0x50, 0x60 };
+    //
+    // **+0x50 and +0x60 are not written any more.** They are the visibility
+    // pair, and the part activation state machine (FUN_1403f32f0) owns them:
+    // it carries a count in the top eleven bits of `[*(obj+0x40)+0x10]`, moves
+    // it by 0x20 at a time, and guards each move with a bit at +0x48. Setting
+    // visibility bits behind it makes that count go the wrong way -
+    // `((n >> 5) - 1) * 0x20` on a zero wraps - and objects are then freed or
+    // kept against what still points at them. That is the shape of every
+    // remaining death on 17/09: a pointer whose low half is zeroed and whose
+    // high half holds something else, on the world update, on the guest, after
+    // a travel, in a different function each time.
+    constexpr size_t kOwnerMasks[] = { 0x10, 0x20, 0x30, 0x40 };
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
