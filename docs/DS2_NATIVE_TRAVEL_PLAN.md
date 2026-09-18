@@ -956,3 +956,53 @@ a queda por ninguém sair do lugar.
 sessão seguir verificada **e** o host tiver de fato chegado. A rede de segurança
 transforma uma queda em corrupção silenciosa, então a primeira falha aparada já
 é a falha; e uma perna em que ninguém saiu do lugar não é uma perna limpa.
+
+## 9. 18/09 — o que o valor que falha estava dizendo
+
+O vigia de exceções passou a escrever de quem são os objetos na mão: um
+registrador que aponta para memória comprometida cujos primeiros oito bytes são
+um endereço dentro do jogo é um objeto com tabela virtual, e o deslocamento
+dessa tabela nomeia a classe no Ghidra sem adivinhação. Com isso a leitura
+mudou.
+
+**O valor que falha não é um ponteiro estragado.** São dois números de ponto
+flutuante, um em cada metade do registrador: `4254670941466334` é 53,10 e 12,40;
+`4254a3a241338718` é 53,16 e 11,22. Não há ninguém escrevendo por cima de um
+ponteiro. O bloco foi **liberado e entregue a outra pessoa**, que guarda
+posições nele, e quem ainda apontava para lá leu a posição como se fosse uma
+tabela virtual.
+
+Isso aparece em três recipientes diferentes, todos da mesma família:
+
+| onde | o recipiente |
+| --- | --- |
+| `+0x3f3b20` | lista de aviso em `obj+0x38`, nó a nó por `+8`, casa 1 da tabela virtual |
+| `+0x17b266` | lista de componentes em `obj+0x18`, nó a nó por `+0x10`, casa 0 |
+| `+0x3ce818` | vetor em `[obj+0x10]` com contagem em `+0x18`, o elemento 321 e o 392 |
+
+Podar as duas listas antes de o jogo andar nelas (`DS2_PartNotifyGuardHook`)
+não cortou nada em nenhuma rodada: os nós continuavam sãos e a queda apenas
+mudava de recipiente. Ou seja, o estrago não está na lista, está em quem foi
+liberado.
+
+**O controle solo é limpo.** O mesmo transporte, um jogo só, sem sessão, fez dez
+pernas seguidas pelas quatro fogueiras sem uma falta sequer. Então o
+carregamento e a soltura de mapa por si não corrompem nada: a corrupção precisa
+da sessão, e o que a sessão traz é a cópia do outro jogador.
+
+**A hipótese que ficou de pé, e o conserto que ela pede.** Os bits de parte só
+eram ligados, nunca retomados. Um mapa era solto com todas as suas partes ainda
+pedidas, a máquina de estado do dono o desmontava sem desativar nenhuma, e tudo
+em que essas partes tinham se registrado seguia apontando para blocos que o
+alocador já tinha reaproveitado. A soltura passou a ter duas etapas: devolver os
+bits, deixar o jogo ver a máscara menor por alguns quadros, e só então derrubar
+o byte de força. **Esse conserto ainda não foi medido** — a bancada travou antes
+(ver abaixo).
+
+**A bancada travou, e não é do nosso código.** Depois de cerca de trinta e seis
+horas de Steam e Wine no ar, o jogo passou a abrir uma janela branca e nunca
+chegar ao título: o laço roda (a navegação publica milhares de tiques), o
+servidor vê o cliente conectar e cair na mesma hora, e as duas contas Steam
+seguem logadas. A DLL anterior, que tinha subido bem uma hora antes, trava
+igual. Sobrou pendurada uma cadeia de lançamento da segunda Steam que o
+`game stop` não enxerga e que só morre com `kill` por pid.
