@@ -139,6 +139,13 @@ namespace
     // session ends either way, and swallowing the goodbye only leaves the host
     // hanging on a farewell that never comes. It did, for good.
     constexpr uint32_t kReasonGuestDied = 2;
+    // "Duty fulfilled": the game sends a phantom home once the area's boss is
+    // dead. Seen 18/09 23:52 on the guest right after a group travel to
+    // Threshold Bridge in a world whose Iron Keep bosses were already killed;
+    // the player watching saw the message and the phantom leave. The seamless
+    // brief is exactly the opposite (a phantom does not vanish at the boss),
+    // so while the session is playing this one is swallowed.
+    constexpr uint32_t kReasonDutyFulfilled = 1;
 
     // The state the join starts from. `FUN_1402c4450` is state 1's handler and
     // it is the only place state 2 is ever written: it waits for the peer link
@@ -402,6 +409,19 @@ namespace
     void PhantomDeathHook(void* Record, uint32_t Reason)
     {
         void* Session = s_session.load();
+
+        // Not behind s_enabled: that switch picks an experimental respawn and
+        // is off by default, while this hook is only installed with seamless
+        // co-op, which is all this needs.
+        if (Record != nullptr && Session != nullptr && Reason == kReasonDutyFulfilled &&
+            *(const uint32_t*)((const uint8_t*)Session + kSessionState) == kStatePlaying)
+        {
+            Append(StringFormat("  duty fulfilled (reason %u, role %u): the phantom stays in the session\n",
+                Reason, (unsigned)*((const uint8_t*)Session + kSessionRole)));
+            // What the original does once it has acted: the record is done.
+            *((uint8_t*)Record + 0xce) = 1;
+            return;
+        }
 
         bool Redirect = s_enabled.load() && Record != nullptr && Session != nullptr &&
                         Reason == kReasonGuestDied;
