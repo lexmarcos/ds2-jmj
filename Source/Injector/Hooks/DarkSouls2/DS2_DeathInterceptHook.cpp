@@ -1827,7 +1827,14 @@ namespace
 
         const uintptr_t Fall = FallController(Chr);
         uint8_t InAir = 1;
-        const bool Down = Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
+        // On a travel to another map, "down" counts only on that map's ground.
+        // Measured 18/09 21:29: sent to Threshold Bridge, the recovery ended one
+        // frame after the jump on the contact it still had in Majula, the
+        // bridge had no floor yet, and the fall 0.8 s later was billed as a
+        // real death (hollowing, respawn in Majula). Kept open, that fall is
+        // the travel's own, and the retry below puts the character back.
+        const bool OnTarget = !s_settle.Active || CurrentMap() == s_settle.Map;
+        const bool Down = OnTarget && Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
         if (!Down)
         {
             const uint32_t GiveUp = s_settle.Active ? kOtherMapGiveUpFrames : kRecoveryGiveUpFrames;

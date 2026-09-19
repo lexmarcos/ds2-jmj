@@ -1167,3 +1167,48 @@ host warp with bit 0x10 of the host controller's `+0x1b8` cleared, and a re-run
 of the join's world load through host state `0xa` (rejoin-in-place.md,
 warp-reasons.md), modelled on the arena duel, which already warps both players
 inside one live session (alternative-travel.md).
+
+## 13. 18/09, night — corrections to §12, and the last two killers
+
+**Two corrections to §12.** The bonfire table was wrong: what §12 calls
+"Brume Tower's first" was `140b0000/2d82`, the Tower of Prayer in Shrine of
+Amana, and "Iron Keep's first" was `0a130000/4cc2`, Ironhearth Hall, the
+second. The 32 legs therefore covered Amana and Ironhearth Hall, not Brume
+Tower and Threshold Bridge. The right ids are Threshold Bridge `0a130000/4cc7`
+and Brume Tower's Foyer `32240000/8f2f` (`docs/scenarios/travel-legs.sh`).
+And the cap is not four: four maps exhaust a fixed pool (the null write at
+`+0x1bee1c4`, r9 = `INAP_LD`, `+0x113a860`), so the byte is 2, three maps, and
+the travel makes room by evicting the neighbours the game streamed in by itself
+(`StreamerMasksHook`, the detour on `FUN_1403dc930`).
+
+**The host expelled the guest 300 s after a cancelled death.** The accept
+controller's `+0x1b8` gains bit 0x10 on a host death (case 0 of
+`FUN_1402bd0d0`) or warp (case 4); nothing but the constructor clears it, and
+the watchdog `FUN_1402be090` ends the session once the controller clock passes
+`+0x1b4 + 300`. A travel landing whose fall the death hook cancelled set it at
+20:03:45 and the host sent `RequestNotifyLeaveGuestPlayer` at 20:08:45. Proven
+live: a harness kill turned 0x261 into 0x271 with `+0x1b4` = 101.5 s, and the
+expulsion came at clock 401.5 s. `DS2_SeamlessSessionHook` now clears the bit on
+every host tick while the controller is formed (state 0x10); the same bit also
+made the re-entry handshake `FUN_1402bd720` refuse a guest with reason 8.
+
+**Leaving Brume Tower killed the host about 0.4 s after its teardown**, one
+exit in four, in the effects system: `FUN_140fd8570` resolves an
+`FXEvaluatableReference` through the live node's parameter block (`node+0x50`,
+handed in by the spawner, owned by neither the effects system nor anything that
+outlives the map) and the entry was null; with that read guarded, the next call
+went through the freed node's own vftable. The streaming teardown
+(`FUN_1403cc3a0`) never touches live effects; the loading screen clears them all
+first (`FUN_140bebe00` → SfxFxManagerBase slot +0x50 → `FUN_140a09a80`). Only
+DLC maps (`0x32xxxxxx`) carry their own effect bank (sfx 5000 + area), and only
+Brume Tower crashed, so `DS2_BackreadHook` now detours `FUN_1403cc3a0` and, for a
+DLC map, makes that same clear call first. Every live effect goes at that
+moment, as it does on a load.
+
+| build | legs | clean | session up | note |
+| --- | --- | --- | --- | --- |
+| 4dd24149 | 6 | 5 | 5 | host died Brume → Heide, silently |
+| f2ee8fcb | 16 | 9 | 9 | leg 10: the 300 s expulsion |
+| 603d72a | 20 | 3 | 3 | host died Brume → Heide, effects |
+| 0af479a (guard only) | 12 | 3 | 3 | guard fired, host died on the freed node |
+| 6c419c7 (effects cleared) | 14 | 14 | 14 | seven exits from Brume Tower |
