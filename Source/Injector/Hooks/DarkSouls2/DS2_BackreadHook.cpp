@@ -111,30 +111,48 @@ namespace
     // FUN_1403cc3a0, `bool(owner)`: the whole teardown of one map, run inside
     // one call (it loops FUN_1403cb1a0 until the step counter is spent).
     //
-    // Nothing on that path touches live effects. The loading screen clears
-    // them all first (the game-manager step at 0x1401bf7bc calls
-    // FUN_140bebe00, which reaches SfxFxManagerBase slot +0x50,
-    // FUN_140a36b70 -> FUN_140a09a80(FXManager)), so in the unmodded game an
-    // effect never outlives the map that spawned it. Our travel leaves Brume
-    // Tower without a loading screen: an effect whose parameter block (node
-    // +0x50, handed in by its spawner, not owned by the effects system)
-    // belonged to the map kept ticking after the teardown, and the host died
-    // in FUN_140fd8570 about 0.4 s later, three times on 18/09. Only DLC maps
-    // (0x32xxxxxx) carry their own effect bank (sfx 5000 + area), and only
-    // they have crashed, so only their teardown clears effects first; the
-    // cost is that every live effect goes, the way it does on a load.
+    // The teardown stops the effects the map's entities hold (component
+    // finalize FUN_1403f3fc0 -> FUN_1404c83f0: a soft stop, then the handles
+    // are unlinked) but the stopped trees keep ticking with nobody holding
+    // them, reading what the map left behind. Leaving Brume Tower that way
+    // killed the host in FUN_140fd8570 about 0.4 s later, one exit in four,
+    // on 18/09; in the unmodded game Brume Tower is only left through a
+    // loading screen, which clears every effect first.
+    //
+    // Clearing every effect the same way (SfxFxManagerBase slot +0x50) held
+    // for 60+ legs but took the arrival map's own effects for good: a census
+    // on 19/09 at Heide counted 71 live trees before the clear and 14 after,
+    // the bonfire flames (ids 3020/13020, one per bonfire) and the torches
+    // among the missing, because their spawners never spawn them again.
+    //
+    // So now only what this teardown orphaned goes: the live top nodes with
+    // no handle left (node+0xf8) after the teardown that had one before it,
+    // killed the way FUN_140a09d50 kills a tree (each child through
+    // FUN_140a09cf0 and FUN_140a09860, then the top node through
+    // FUN_140a09860). Every effect of the other maps is still held by its
+    // own entity (every tree of the census was) and is not touched. Only DLC
+    // maps (0x32xxxxxx) have crashed, and only their teardown does this.
     constexpr size_t kTeardownOffset = 0x3cc3a0;
     constexpr uint8_t kTeardownBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9 };
     constexpr size_t kOwnerMapId = 0x08;
     constexpr size_t kContextSfxSystem = 0xbc8;
     constexpr size_t kSfxManagerBase = 0x10;
-    constexpr size_t kSfxClearAllSlot = 0x50;
-    constexpr size_t kSfxClearAllOffset = 0xa36b70;
-    constexpr uint8_t kSfxClearAllBytes[] = { 0x48, 0x8b, 0x49, 0x08, 0xe9 };
+    constexpr size_t kFxRoots = 0x10;          // FXManager: first root; root +8 next, +0x10 top node
+    constexpr size_t kFxRootId = 0x34;
+    constexpr size_t kFxNodeFlags = 0x58;      // bit 30 alive
+    constexpr size_t kFxNodeChild = 0x90;
+    constexpr size_t kFxNodeSibling = 0x88;
+    constexpr size_t kFxNodeHandles = 0xf8;
+    constexpr size_t kFxKillSubtreeOffset = 0xa09cf0;
+    constexpr uint8_t kFxKillSubtreeBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0x90, 0x00, 0x00, 0x00 };
+    constexpr size_t kFxKillNodeOffset = 0xa09860;
+    constexpr uint8_t kFxKillNodeBytes[] = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x0b, 0x02, 0x00, 0x00, 0x55, 0x56, 0x48, 0x83, 0xec, 0x28 };
+    constexpr size_t kMaxOrphans = 512;
     using Teardown_p = bool(*)(void* Owner);
-    using SfxClearAll_p = void(*)(void* ManagerBase);
+    using FxKill_p = void(*)(uintptr_t Manager, uintptr_t Node);
     Teardown_p s_original_teardown = nullptr;
-    std::atomic<uint32_t> s_effects_cleared{ 0 };
+    FxKill_p s_fx_kill_subtree = nullptr;
+    FxKill_p s_fx_kill_node = nullptr;
 
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
@@ -846,37 +864,109 @@ namespace
 
     void DumpEffects(const char* Why);
 
+    uintptr_t EffectsManager()
+    {
+        uintptr_t Context = 0, Sfx = 0, Manager = 0, Fx = 0;
+        if (!ReadBytes(s_base + kContextOffset, &Context, 8) || Context == 0 ||
+            !ReadBytes(Context + kContextSfxSystem, &Sfx, 8) || Sfx == 0 ||
+            !ReadBytes(Sfx + kSfxManagerBase, &Manager, 8) || Manager == 0 ||
+            !ReadBytes(Manager + 8, &Fx, 8))
+        {
+            return 0;
+        }
+        return Fx;
+    }
+
+    // The live top nodes nobody holds a handle to.
+    size_t Orphans(uintptr_t Fx, uintptr_t* Out, size_t Room)
+    {
+        size_t Count = 0;
+        uintptr_t Root = 0;
+        if (!ReadBytes(Fx + kFxRoots, &Root, 8))
+        {
+            return 0;
+        }
+        for (int Guard = 0; Root != 0 && Guard < 4000 && Count < Room; ++Guard)
+        {
+            uintptr_t Top = 0, Handles = 1;
+            uint32_t Flags = 0;
+            if (ReadBytes(Root + 0x10, &Top, 8) && Top != 0 &&
+                ReadBytes(Top + kFxNodeFlags, &Flags, 4) && (Flags & (1u << 30)) != 0 &&
+                ReadBytes(Top + kFxNodeHandles, &Handles, 8) && Handles == 0)
+            {
+                Out[Count++] = Top;
+            }
+            if (!ReadBytes(Root + 8, &Root, 8))
+            {
+                break;
+            }
+        }
+        return Count;
+    }
+
+    uintptr_t s_orphans_before[kMaxOrphans];
+    uintptr_t s_orphans_after[kMaxOrphans];
+
     bool TeardownHook(void* Owner)
     {
         uint32_t Map = 0;
-        if (Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) &&
-            (Map & 0xff000000u) == 0x32000000u)
+        if (Owner == nullptr || !ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) ||
+            (Map & 0xff000000u) != 0x32000000u || s_fx_kill_subtree == nullptr || s_fx_kill_node == nullptr)
         {
-            uintptr_t Context = 0, Sfx = 0, Manager = 0, Table = 0, Slot = 0;
-            const char* Outcome = "cleared every live effect first";
-            if (!ReadBytes(s_base + kContextOffset, &Context, sizeof(Context)) || Context == 0 ||
-                !ReadBytes(Context + kContextSfxSystem, &Sfx, sizeof(Sfx)) || Sfx == 0 ||
-                !ReadBytes(Sfx + kSfxManagerBase, &Manager, sizeof(Manager)) || Manager == 0 ||
-                !ReadBytes(Manager, &Table, sizeof(Table)) ||
-                !ReadBytes(Table + kSfxClearAllSlot, &Slot, sizeof(Slot)))
-            {
-                Outcome = "could not reach the effects manager; effects left alone";
-            }
-            else if (Slot != s_base + kSfxClearAllOffset ||
-                !BytesMatch(Slot, kSfxClearAllBytes, sizeof(kSfxClearAllBytes)))
-            {
-                Outcome = "the effects manager's clear slot is not the expected one; effects left alone";
-            }
-            else
-            {
-                DumpEffects("before the clear");
-                DS2_BonfireInSession_CaptureFlames();
-                ((SfxClearAll_p)Slot)((void*)Manager);
-                s_effects_cleared.fetch_add(1);
-            }
-            Append(StringFormat("%s  mapa %08x teardown: %s\n", Clock().c_str(), Map, Outcome));
+            return s_original_teardown(Owner);
         }
-        return s_original_teardown(Owner);
+        const uintptr_t Fx = EffectsManager();
+        if (Fx == 0)
+        {
+            Append(StringFormat("%s  mapa %08x teardown: no effects manager; effects left alone\n", Clock().c_str(), Map));
+            return s_original_teardown(Owner);
+        }
+        DumpEffects("before the teardown");
+        const size_t Before = Orphans(Fx, s_orphans_before, kMaxOrphans);
+        const bool Result = s_original_teardown(Owner);
+        const size_t After = Orphans(Fx, s_orphans_after, kMaxOrphans);
+
+        unsigned Killed = 0;
+        std::string Ids;
+        for (size_t i = 0; i < After; ++i)
+        {
+            const uintptr_t Top = s_orphans_after[i];
+            bool Old = false;
+            for (size_t j = 0; j < Before && !Old; ++j)
+            {
+                Old = s_orphans_before[j] == Top;
+            }
+            uint32_t Flags = 0;
+            if (Old || !ReadBytes(Top + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0)
+            {
+                continue;
+            }
+            uintptr_t RootPtr = 0;
+            uint32_t Id = 0;
+            if (ReadBytes(Top + 0xc8, &RootPtr, 8) && RootPtr != 0)
+            {
+                ReadBytes(RootPtr + kFxRootId, &Id, 4);
+            }
+            uintptr_t Child = 0;
+            ReadBytes(Top + kFxNodeChild, &Child, 8);
+            for (int Guard = 0; Child != 0 && Guard < 256; ++Guard)
+            {
+                uintptr_t Next = 0;
+                ReadBytes(Child + kFxNodeSibling, &Next, 8);
+                s_fx_kill_subtree(Fx, Child);
+                s_fx_kill_node(Fx, Child);
+                Child = Next;
+            }
+            s_fx_kill_node(Fx, Top);
+            ++Killed;
+            if (Killed <= 16)
+            {
+                Ids += StringFormat(" %u", Id);
+            }
+        }
+        Append(StringFormat("%s  mapa %08x teardown: %u effect tree(s) it left with no holder killed (ids%s); %zu orphan(s) from before left alone\n",
+            Clock().c_str(), Map, Killed, Ids.empty() ? " none" : Ids.c_str(), Before));
+        return Result;
     }
 
     void StreamerMasksHook(void* Streamer, void* Arg)
@@ -1289,15 +1379,6 @@ bool DS2_Backread::Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4])
     return false;
 }
 
-uint32_t DS2_Backread::EffectsCleared()
-{
-#ifdef _WIN32
-    return s_effects_cleared.load();
-#else
-    return 0;
-#endif
-}
-
 int32_t DS2_Backread::IndexOf(uint32_t MapId)
 {
 #ifdef _WIN32
@@ -1359,6 +1440,16 @@ bool DS2_BackreadHook::Install(Injector& injector)
     s_original_streamer = (StreamerUpdate_p)(s_base + kStreamerUpdateOffset);
     s_original_masks = (StreamerMasks_p)(s_base + kStreamerMasksOffset);
     s_original_teardown = (Teardown_p)(s_base + kTeardownOffset);
+    if (BytesMatch(s_base + kFxKillSubtreeOffset, kFxKillSubtreeBytes, sizeof(kFxKillSubtreeBytes)) &&
+        BytesMatch(s_base + kFxKillNodeOffset, kFxKillNodeBytes, sizeof(kFxKillNodeBytes)))
+    {
+        s_fx_kill_subtree = (FxKill_p)(s_base + kFxKillSubtreeOffset);
+        s_fx_kill_node = (FxKill_p)(s_base + kFxKillNodeOffset);
+    }
+    else
+    {
+        Error("[DS2_BackreadHook] the effects kill is not the expected code; a DLC map's orphaned effects are left alone");
+    }
     s_nav_find_map = (NavFindMap_p)(s_base + kNavFindMapOffset);
     s_nav_find_cell = (NavFindCell_p)(s_base + kNavFindCellOffset);
 
