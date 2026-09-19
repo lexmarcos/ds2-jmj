@@ -60,6 +60,10 @@ public:
 
 namespace DS2_Backread
 {
+    // How many times every live effect was cleared before a DLC map's
+    // teardown. Whoever re-lights what the clear took watches it change.
+    uint32_t EffectsCleared();
+
     // Keep a map loaded with these parts, beside whatever the player needs,
     // until Release. One map at a time; a new request replaces the old one.
     void Request(uint32_t MapId, const uint32_t Mask[4]);

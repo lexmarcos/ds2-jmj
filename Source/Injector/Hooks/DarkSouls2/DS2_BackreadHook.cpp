@@ -134,6 +134,7 @@ namespace
     using Teardown_p = bool(*)(void* Owner);
     using SfxClearAll_p = void(*)(void* ManagerBase);
     Teardown_p s_original_teardown = nullptr;
+    std::atomic<uint32_t> s_effects_cleared{ 0 };
 
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
@@ -867,6 +868,7 @@ namespace
             else
             {
                 ((SfxClearAll_p)Slot)((void*)Manager);
+                s_effects_cleared.fetch_add(1);
             }
             Append(StringFormat("%s  mapa %08x teardown: %s\n", Clock().c_str(), Map, Outcome));
         }
@@ -1213,6 +1215,15 @@ bool DS2_Backread::Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4])
     }
 #endif
     return false;
+}
+
+uint32_t DS2_Backread::EffectsCleared()
+{
+#ifdef _WIN32
+    return s_effects_cleared.load();
+#else
+    return 0;
+#endif
 }
 
 int32_t DS2_Backread::IndexOf(uint32_t MapId)

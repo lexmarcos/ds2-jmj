@@ -200,6 +200,39 @@ namespace
     constexpr size_t kBonfireList = 0x08;
     constexpr size_t kBonfireNext = 0x60;
     constexpr size_t kComponentEntity = 0x08;
+
+    // Re-lighting what the effects clear took (DS2_BackreadHook, before a DLC
+    // map's teardown). A lit bonfire's flame is spawned once by a timeact
+    // (MapTimeActTrackSfx, FUN_1403e56d0, event 0x838) through the entity's
+    // MapSfxSlotComponent, and remembered in that component's cache at
+    // comp+0xb0 (first entry at +0x08: +0 next, +0x10 handle, +0x14 effect,
+    // +0x18 slot, +0x1a dummy poly, +0x1c flags, 0x2 valid). The track then
+    // only marks the entry as still wanted and never checks the effect is
+    // alive, so after the clear the flame is gone for good: measured 18/09 at
+    // Heide's Tower of Flame. A few frames after a clear, when the slot
+    // controller (comp+0x50) has pruned its dead records, each valid cache
+    // entry is spawned again through FUN_1404c7ca0(ctrl, slot, effect,
+    // dummy, 0, 0, 0), which returns early for a slot >= 0 that already has
+    // its record, and for a slot < 0 the new handle goes back into the entry
+    // (FUN_1402e8e30) so that putting the bonfire out still removes it.
+    constexpr size_t kSlotComponentFindOffset = 0x172930;
+    constexpr uint8_t kSlotComponentFindPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8 };
+    constexpr size_t kSlotSpawnOffset = 0x4c7ca0;
+    constexpr uint8_t kSlotSpawnPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x70, 0xb8, 0x00, 0xc0, 0xff, 0xff };
+    constexpr size_t kSfxCacheSetOffset = 0x2e8e30;
+    constexpr uint8_t kSfxCacheSetPrologue[] = { 0x48, 0x85, 0xd2, 0x74, 0x1e, 0x48, 0x8b, 0x41, 0x08, 0x48, 0x85, 0xc0, 0x74, 0x15 };
+    constexpr size_t kSlotCtrl = 0x50;
+    constexpr size_t kSlotRecords = 0x70;          // ctrl+0x20: first record
+    constexpr size_t kSlotRecordNext = 0x78;
+    constexpr size_t kSlotRecordSerial = 0x70;
+    constexpr uint32_t kSlotRecordAlive = 0x10000;
+    constexpr size_t kSfxCache = 0xb0;
+    constexpr size_t kSfxCacheFirst = 0x08;
+    constexpr uint32_t kSfxCacheValid = 0x2;
+    constexpr int kRelightDelayFrames = 3;
+    using SlotComponentFind_p = uintptr_t(*)(uintptr_t Entity);
+    using SlotSpawn_p = uint32_t(*)(uintptr_t Ctrl, int16_t Slot, int32_t Effect, int16_t Dummy, uint8_t Flag, uint32_t A, uint32_t B);
+    using SfxCacheSet_p = void(*)(uintptr_t Cache, uintptr_t Entry, uint32_t Handle);
     constexpr size_t kEntityPosition = 0x70;
 
     // The guest's own travel, which cannot go through the bonfire chain.
@@ -580,6 +613,11 @@ namespace
     using FrontEndOnly_p = void(*)(void* FrontEnd);
     using FrontEndMask_p = void(*)(void* FrontEnd, uint32_t Mask);
     FrontEndOnly_p s_loading_open = nullptr;
+    SlotComponentFind_p s_slot_component = nullptr;
+    SlotSpawn_p s_slot_spawn = nullptr;
+    SfxCacheSet_p s_sfx_cache_set = nullptr;
+    uint32_t s_relight_seen = 0;
+    int s_relight_in = 0;
     using Fade_p = void(*)(void* Context, float Seconds, int OnTop);
     Fade_p s_fade_out = nullptr;
     Fade_p s_fade_in = nullptr;
@@ -1207,6 +1245,109 @@ namespace
                 (unsigned long long)(Now - s_job_unpatched_at)));
         }
         s_job_unpatched_at = 0;
+    }
+
+    uintptr_t SlotComponentOf(uintptr_t Entity)
+    {
+        __try
+        {
+            return s_slot_component(Entity);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    // Whether a slot record with this serial is still alive (slot < 0).
+    bool SlotHandleAlive(uintptr_t Component, uint32_t Handle)
+    {
+        uintptr_t Record = 0;
+        if (!ReadPointer(Component + kSlotRecords, Record))
+        {
+            return false;
+        }
+        for (int Guard = 0; Record != 0 && Guard < 256; ++Guard)
+        {
+            uint32_t Flags = 0, Serial = 0;
+            if (!ReadBytes(Record, &Flags, sizeof(Flags)) || !ReadBytes(Record + kSlotRecordSerial, &Serial, sizeof(Serial)))
+            {
+                return false;
+            }
+            if (Serial == Handle && (Flags & kSlotRecordAlive) != 0)
+            {
+                return true;
+            }
+            if (!ReadPointer(Record + kSlotRecordNext, Record))
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // Every loaded bonfire's cached map effects, spawned again.
+    void RelightBonfires()
+    {
+        const uintptr_t Manager = BonfireManager();
+        uintptr_t Component = 0;
+        if (Manager == 0 || s_slot_component == nullptr || s_slot_spawn == nullptr || s_sfx_cache_set == nullptr ||
+            !ReadPointer(Manager + kBonfireList, Component))
+        {
+            return;
+        }
+        unsigned Bonfires = 0, Spawned = 0, Alive = 0;
+        for (int Guard = 0; Component != 0 && Guard < 64; ++Guard)
+        {
+            uintptr_t Entity = 0;
+            if (!ReadPointer(Component + kComponentEntity, Entity))
+            {
+                break;
+            }
+            const uintptr_t Slots = Entity != 0 ? SlotComponentOf(Entity) : 0;
+            uintptr_t Entry = 0;
+            if (Slots != 0 && ReadPointer(Slots + kSfxCache + kSfxCacheFirst, Entry))
+            {
+                ++Bonfires;
+                for (int Inner = 0; Entry != 0 && Inner < 64; ++Inner)
+                {
+                    uint32_t Handle = 0, Effect = 0, Flags = 0;
+                    int16_t Slot = 0, Dummy = 0;
+                    if (!ReadBytes(Entry + 0x10, &Handle, 4) || !ReadBytes(Entry + 0x14, &Effect, 4) ||
+                        !ReadBytes(Entry + 0x18, &Slot, 2) || !ReadBytes(Entry + 0x1a, &Dummy, 2) ||
+                        !ReadBytes(Entry + 0x1c, &Flags, 4))
+                    {
+                        break;
+                    }
+                    if ((Flags & kSfxCacheValid) != 0)
+                    {
+                        if (Slot < 0 && Handle != 0xffffffffu && SlotHandleAlive(Slots, Handle))
+                        {
+                            ++Alive;
+                        }
+                        else
+                        {
+                            const uint32_t New = s_slot_spawn(Slots + kSlotCtrl, Slot, (int32_t)Effect, Dummy, 0, 0, 0);
+                            if (Slot < 0 && New != 0xffffffffu)
+                            {
+                                s_sfx_cache_set(Slots + kSfxCache, Entry, New);
+                            }
+                            ++Spawned;
+                        }
+                    }
+                    if (!ReadPointer(Entry, Entry))
+                    {
+                        break;
+                    }
+                }
+            }
+            if (!ReadPointer(Component + kBonfireNext, Component))
+            {
+                break;
+            }
+        }
+        Append(StringFormat("effects cleared: %u bonfire(s) with cached effects, %u spawned again, %u still alive\n",
+            Bonfires, Spawned, Alive));
     }
 
     // Whether the local character stands within a few metres of a loaded bonfire.
@@ -2318,6 +2459,18 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         {
             Error("[DS2BonfireInSession] a tela de carregamento do jogo nao tem o codigo esperado; a cortina so desliga o desenho");
         }
+        if (Matches(Base + kSlotComponentFindOffset, kSlotComponentFindPrologue, sizeof(kSlotComponentFindPrologue)) &&
+            Matches(Base + kSlotSpawnOffset, kSlotSpawnPrologue, sizeof(kSlotSpawnPrologue)) &&
+            Matches(Base + kSfxCacheSetOffset, kSfxCacheSetPrologue, sizeof(kSfxCacheSetPrologue)))
+        {
+            s_slot_component = (SlotComponentFind_p)(Base + kSlotComponentFindOffset);
+            s_slot_spawn = (SlotSpawn_p)(Base + kSlotSpawnOffset);
+            s_sfx_cache_set = (SfxCacheSet_p)(Base + kSfxCacheSetOffset);
+        }
+        else
+        {
+            Error("[DS2BonfireInSession] the map effect slot code is not the expected one; bonfire flames are not re-lit after an effects clear");
+        }
         if (Matches(Base + kFadeOutOffset, kFadePrologue, sizeof(kFadePrologue)) &&
             Matches(Base + kFadeInOffset, kFadePrologue, sizeof(kFadePrologue)))
         {
@@ -2582,6 +2735,20 @@ void DS2_BonfireInSession_Tick()
 
     KeepJobPatch(Now);
     KeepCurtain(Now);
+
+    // A few frames after the effects were cleared, the bonfires' flames.
+    {
+        const uint32_t Cleared = DS2_Backread::EffectsCleared();
+        if (Cleared != s_relight_seen)
+        {
+            s_relight_seen = Cleared;
+            s_relight_in = kRelightDelayFrames;
+        }
+        if (s_relight_in > 0 && --s_relight_in == 0)
+        {
+            RelightBonfires();
+        }
+    }
 
     // The host calls the guests the moment its own arrival is **physical**,
     // and never on a timer: the old code treated "stopped moving" as arrived,
