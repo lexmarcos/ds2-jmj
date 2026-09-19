@@ -889,7 +889,13 @@ namespace
         {
             WriteBytes(Model + 0x2a8, &Zero, 8);
             WriteBytes(Model + 0x230, &Zero, 8);
-            WriteBytes(Model + 0x4a0, &Zero, 8);
+            // Not zero: when the entry resolves to nothing (0) it would equal
+            // a zeroed "last pushed" and the model would keep Eleum Loyce's
+            // entry as its current one. A value no entry can have makes the
+            // next frame push whatever it resolves, and the old entry blends
+            // out in 0.5 s (FUN_1402f4eb0), long before the map goes.
+            const uint64_t NoEntry = 1;
+            WriteBytes(Model + 0x4a0, &NoEntry, 8);
             WriteBytes(Model + 0x2b0, &NoWeight, 4);
             WriteBytes(Model + 0x238, &Off, 1);
         }
