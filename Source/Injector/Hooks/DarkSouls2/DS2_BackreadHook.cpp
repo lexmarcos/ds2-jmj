@@ -149,6 +149,7 @@ namespace
     constexpr size_t kFxKillNodeOffset = 0xa09860;
     constexpr uint8_t kFxKillNodeBytes[] = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x0b, 0x02, 0x00, 0x00, 0x55, 0x56, 0x48, 0x83, 0xec, 0x28 };
     constexpr size_t kMaxOrphans = 512;
+    constexpr size_t kFxDefaultParams = 0x1673048;   // DAT_141673048, the static empty parameter block
     using Teardown_p = bool(*)(void* Owner);
     using FxKill_p = void(*)(uintptr_t Manager, uintptr_t Node);
     Teardown_p s_original_teardown = nullptr;
@@ -1255,11 +1256,29 @@ namespace
                 continue;
             }
             ++New;
-            uintptr_t RootPtr = 0;
+            uintptr_t RootPtr = 0, Params = 0;
             uint32_t Id = 0;
             if (ReadBytes(s_orphans_after[i] + 0xc8, &RootPtr, 8) && RootPtr != 0)
             {
                 ReadBytes(RootPtr + kFxRootId, &Id, 4);
+            }
+            // One the unlink detour did not see (a per-map emitter, 8519 in
+            // Eleum Loyce, goes through another unlink) is still safe to kill
+            // here when it carries the game's static default parameter
+            // block: the kill then reads nothing the teardown freed, and its
+            // definition lives in the map's bank, which is released only at
+            // the loader's state 0xb, later. Left alive it took the host down
+            // 0.1 s after the teardown; killed here, twice, it did not.
+            ReadBytes(s_orphans_after[i] + 0x50, &Params, 8);
+            if (Params == s_base + kFxDefaultParams)
+            {
+                KillTree(Fx, s_orphans_after[i]);
+                if (++s_unlink_killed <= 24)
+                {
+                    s_unlink_ids += StringFormat(" %u(after)", Id);
+                }
+                --New;
+                continue;
             }
             if (New <= 16)
             {
