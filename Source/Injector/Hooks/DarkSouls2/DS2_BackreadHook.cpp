@@ -2027,6 +2027,40 @@ void DS2_Backread::Unload(int32_t Index)
 #endif
 }
 
+size_t DS2_Backread::LightingEntries(int32_t Index, uintptr_t* Out, size_t Room)
+{
+    size_t Count = 0;
+#ifdef _WIN32
+    uintptr_t Owners[kMaxOwners] = {};
+    const int Owned = ReadOwners(Owners);
+    for (int i = 0; i < Owned; ++i)
+    {
+        int32_t At = -1;
+        uintptr_t Bank = 0, Array = 0;
+        int32_t Entries = 0;
+        if (!ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) || At != Index)
+        {
+            continue;
+        }
+        if (!ReadBytes(Owners[i] + 0x1a0, &Bank, 8) || Bank == 0 || !ReadBytes(Bank + 0x10, &Array, 8) || Array == 0 ||
+            !ReadBytes(Bank + 0x18, &Entries, 4) || Entries <= 0)
+        {
+            break;
+        }
+        for (int e = 0; e < Entries && Count < Room; ++e)
+        {
+            uintptr_t Entry = 0;
+            if (ReadBytes(Array + e * 0x10 + 8, &Entry, 8) && Entry != 0)
+            {
+                Out[Count++] = Entry;
+            }
+        }
+        break;
+    }
+#endif
+    return Count;
+}
+
 void DS2_Backread::CancelUnload()
 {
 #ifdef _WIN32

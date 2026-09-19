@@ -901,6 +901,76 @@ namespace
         }
     }
 
+    // While a map is being taken down for a travel, every character whose
+    // cached lighting still names one of that map's entries - players,
+    // copies, anyone - loses it, current entry included. Measured 19/09:
+    // with the players' own caches reset at parking, the renderer still bound
+    // a freed Eleum Loyce cube 300 ms after the destination was asked for.
+    constexpr size_t kMaxLighting = 256;
+    uintptr_t s_lighting[kMaxLighting] = {};
+    size_t s_lighting_count = 0;
+    int32_t s_lighting_index = -1;
+    ULONGLONG s_lighting_read = 0;
+    uint64_t s_lighting_cleared = 0;
+
+    bool IsDyingLighting(uintptr_t Entry)
+    {
+        if (Entry == 0)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < s_lighting_count; ++i)
+        {
+            if (s_lighting[i] == Entry)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void SweepLighting(uint8_t* Chr)
+    {
+        const int32_t Going = DS2_Backread::Unloading();
+        const ULONGLONG Now = GetTickCount64();
+        if (Going != s_lighting_index || Now - s_lighting_read > 200)
+        {
+            s_lighting_index = Going;
+            s_lighting_read = Now;
+            s_lighting_count = Going >= 0 ? DS2_Backread::LightingEntries(Going, s_lighting, kMaxLighting) : 0;
+        }
+        if (s_lighting_count == 0 || Chr == nullptr)
+        {
+            return;
+        }
+        uintptr_t Cached = 0, Model = 0, Current = 0, Previous = 0, Drawn = 0, DrawnPrevious = 0;
+        ReadPointer((uintptr_t)Chr + 0x460, Cached);
+        const bool HaveModel = ReadPointer((uintptr_t)Chr + 0xf0, Model);
+        if (HaveModel)
+        {
+            ReadPointer(Model + 0x2a0, Current);
+            ReadPointer(Model + 0x2a8, Previous);
+            ReadPointer(Model + 0x228, Drawn);
+            ReadPointer(Model + 0x230, DrawnPrevious);
+        }
+        if (!IsDyingLighting(Cached) && !IsDyingLighting(Current) && !IsDyingLighting(Previous) &&
+            !IsDyingLighting(Drawn) && !IsDyingLighting(DrawnPrevious))
+        {
+            return;
+        }
+        ResetLighting(Chr);
+        if (HaveModel)
+        {
+            const uint64_t Zero = 0;
+            WriteBytes(Model + 0x2a0, &Zero, 8);
+            WriteBytes(Model + 0x228, &Zero, 8);
+        }
+        if (s_lighting_cleared++ < 40)
+        {
+            Append(StringFormat("%s  lighting: character %p still held map [%d]'s lighting; cleared\n", Clock().c_str(), (void*)Chr, Going));
+        }
+    }
+
     // Copies whose lighting was reset for this parking.
     uintptr_t s_lit_copies[8] = {};
 
@@ -2339,6 +2409,7 @@ namespace
     {
         uint8_t* Bytes = (uint8_t*)Ctrl;
         void* Character = *(void**)(Bytes + kCtrlCharacter);
+        SweepLighting((uint8_t*)Character);
 
         // Every player character, local or another player's copy: the host
         // died on its own and the guest on the copy, so both are checked.

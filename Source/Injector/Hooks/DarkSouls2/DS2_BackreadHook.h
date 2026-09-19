@@ -110,4 +110,7 @@ namespace DS2_Backread
     // The index being taken down, -1 when none.
     int32_t Unloading();
     void CancelUnload();
+    // The lighting entries (MapCubeEnvLightMapBank at owner+0x1a0: {id,
+    // entry*} pairs at +0x10, count at +0x18) of the map with this index.
+    size_t LightingEntries(int32_t Index, uintptr_t* Out, size_t Room);
 }
