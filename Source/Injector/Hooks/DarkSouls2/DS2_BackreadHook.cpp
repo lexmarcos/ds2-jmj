@@ -1908,6 +1908,13 @@ void DS2_Backread::Unload(int32_t Index)
 #endif
 }
 
+void DS2_Backread::CancelUnload()
+{
+#ifdef _WIN32
+    s_unload_index.store(-1);
+#endif
+}
+
 int32_t DS2_Backread::Unloading()
 {
 #ifdef _WIN32

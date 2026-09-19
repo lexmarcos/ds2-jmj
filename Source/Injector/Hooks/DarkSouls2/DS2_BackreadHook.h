@@ -109,4 +109,5 @@ namespace DS2_Backread
     bool Unloaded(int32_t Index);
     // The index being taken down, -1 when none.
     int32_t Unloading();
+    void CancelUnload();
 }

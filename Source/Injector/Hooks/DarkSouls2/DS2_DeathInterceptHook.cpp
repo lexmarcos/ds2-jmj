@@ -2404,6 +2404,10 @@ namespace
             // world rebuild resets it.
             DS2_Backread::Unfocus();
             DS2_Backread::Release();
+            // Keeps and a pending unload are by owner index, and a load builds
+            // a new streamer whose indices mean other maps.
+            DS2_Backread::DropKeeps();
+            DS2_Backread::CancelUnload();
             s_parked = false;
             s_park_pending.store(false);
             s_park_spot_valid = false;
