@@ -582,6 +582,7 @@ namespace
     uint64_t s_cost_pending = 0;
     std::atomic<int32_t> s_unload_index{ -1 };
     std::atomic<uint64_t> s_unload_since{ 0 };
+    ULONGLONG s_unload_logged = 0;
     constexpr ULONGLONG kUnloadWindowMs = 15000;
 
     void LoadCosts()
@@ -1206,6 +1207,19 @@ namespace
             const uint8_t Zero = 0;
             WriteBytes(Streamer + kStreamerAllowed + i, &Zero, 1);
             WriteBytes(Owner + kOwnerForced, &Zero, 1);
+            // Once a second, what keeps it: the streamer's player map, and the
+            // owner's wanted byte (+0x1ea, FUN_1403dc930).
+            const ULONGLONG Now = GetTickCount64();
+            if (Now - s_unload_logged >= 1000)
+            {
+                s_unload_logged = Now;
+                int32_t PlayerIndex = -1;
+                uint8_t Wanted = 0;
+                ReadBytes(Streamer + kStreamerPlayerMap, &PlayerIndex, sizeof(PlayerIndex));
+                ReadBytes(Owner + 0x1ea, &Wanted, 1);
+                Append(StringFormat("%s  budget: map %08x [%d] still state %u; wanted %u, player map [%d]\n", Clock().c_str(),
+                    Map, Index, (unsigned)State, (unsigned)Wanted, PlayerIndex));
+            }
             return;
         }
         s_unload_index.store(-1);

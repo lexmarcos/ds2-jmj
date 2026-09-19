@@ -1871,6 +1871,10 @@ namespace
             {
                 memcpy(s_recovery.Target, Park, sizeof(Park));
                 TeleportLocal(Chr, s_recovery.Target);
+                // The streamer keeps the map of the last part the player
+                // stood on; told the player stands here, it lets the map left
+                // go (measured 19/09: teleported alone, Eleum Loyce stayed).
+                DS2_Backread::Focus(ParkMap, Park);
             }
             DS2_Backread::Unload(s_recovery.RoomSource);
             Append(StringFormat("%s  budget: still %llu targets in use + %u; the map left (%08x [%d]) goes before the destination, %s\n",
