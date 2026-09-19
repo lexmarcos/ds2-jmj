@@ -538,6 +538,12 @@ namespace
     bool s_travel_tight = false;
     std::atomic<bool> s_park_pending{ false };
     bool s_parked = false;
+    // Where this machine's player waits while a map is taken down; another
+    // player's copy standing near it has left the map too.
+    float s_park_spot[3] = {};
+    bool s_park_spot_valid = false;
+    constexpr float kParkNear = 40.0f;
+    uint64_t s_keep_skipped = 0;
 
     // A fall in the first seconds after a travel ended is the travel's, not a
     // death. Measured 18/09 22:29: the guest stood on Iron Keep's collision
@@ -1888,6 +1894,8 @@ namespace
             const bool Parked = FindParking(Source, s_recovery.LoadMap, Park, ParkMap);
             if (Parked)
             {
+                memcpy(s_park_spot, Park, sizeof(Park));
+                s_park_spot_valid = true;
                 memcpy(s_recovery.Target, Park, sizeof(Park));
                 TeleportLocal(Chr, s_recovery.Target);
                 // The streamer keeps the map of the last part the player
@@ -2287,7 +2295,29 @@ namespace
             {
                 int32_t Index = -1;
                 uint32_t Parts[4] = {};
-                if (PartsUnder((uint8_t*)Character, Index, Parts))
+                // While a map is being taken down for a travel, a copy that
+                // already stands by the parking bonfire does not hold it: its
+                // contact can go on naming the map it left (measured 19/09,
+                // leaving Eleum Loyce for Brume Tower, the map stayed kept for
+                // 27 s with both players waiting in Majula).
+                const int32_t Going = DS2_Backread::Unloading();
+                float Where[3] = {};
+                bool AtPark = false;
+                if (Going >= 0 && s_park_spot_valid && ReadBytes((uintptr_t)Character + 0x90, Where, sizeof(Where)))
+                {
+                    const float Dx = Where[0] - s_park_spot[0], Dy = Where[1] - s_park_spot[1], Dz = Where[2] - s_park_spot[2];
+                    AtPark = Dx * Dx + Dy * Dy + Dz * Dz <= kParkNear * kParkNear;
+                }
+                const int32_t Under = MapIndexUnder((uint8_t*)Character);
+                if (AtPark && Under == Going)
+                {
+                    if (s_keep_skipped++ % 300 == 0)
+                    {
+                        Append(StringFormat("%s  park: the other player's copy waits by the parking bonfire; map [%d] is not held for it\n",
+                            Clock().c_str(), Going));
+                    }
+                }
+                else if (PartsUnder((uint8_t*)Character, Index, Parts))
                 {
                     DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs, Parts);
                 }

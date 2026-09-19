@@ -1224,11 +1224,20 @@ namespace
             {
                 s_unload_logged = Now;
                 int32_t PlayerIndex = -1;
-                uint8_t Wanted = 0;
+                uint8_t Wanted = 0, Forced = 0;
                 ReadBytes(Streamer + kStreamerPlayerMap, &PlayerIndex, sizeof(PlayerIndex));
                 ReadBytes(Owner + 0x1ea, &Wanted, 1);
-                Append(StringFormat("%s  budget: map %08x [%d] still state %u; wanted %u, player map [%d]\n", Clock().c_str(),
-                    Map, Index, (unsigned)State, (unsigned)Wanted, PlayerIndex));
+                ReadBytes(Owner + kOwnerForced, &Forced, 1);
+                bool Kept = false;
+                {
+                    std::scoped_lock Lock(s_keep_mutex);
+                    for (const auto& Entry : s_kept)
+                    {
+                        Kept = Kept || (Entry.Index == Index && Now < Entry.Until);
+                    }
+                }
+                Append(StringFormat("%s  budget: map %08x [%d] still state %u; wanted %u, forced %u, kept %u, player map [%d]\n",
+                    Clock().c_str(), Map, Index, (unsigned)State, (unsigned)Wanted, (unsigned)Forced, (unsigned)Kept, PlayerIndex));
             }
             return;
         }
@@ -1729,6 +1738,15 @@ void DS2_Backread::Unload(int32_t Index)
     s_unload_since.store(GetTickCount64());
     s_unload_let_go = -1;
     s_unload_index.store(Index);
+#endif
+}
+
+int32_t DS2_Backread::Unloading()
+{
+#ifdef _WIN32
+    return s_unload_index.load();
+#else
+    return -1;
 #endif
 }
 

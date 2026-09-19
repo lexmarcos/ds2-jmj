@@ -107,4 +107,6 @@ namespace DS2_Backread
     // pass. For a travel that would not fit beside the map it leaves.
     void Unload(int32_t Index);
     bool Unloaded(int32_t Index);
+    // The index being taken down, -1 when none.
+    int32_t Unloading();
 }
