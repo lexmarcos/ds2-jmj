@@ -49,17 +49,18 @@ running on Heide's rules. Nobody has read that record.
 
 The 32 consecutive legs of the first run used the Tower of Prayer (Shrine of
 Amana) and Ironhearth Hall where Brume Tower and Threshold Bridge were meant
-(see `DS2_NATIVE_TRAVEL_PLAN.md` §13). On the right four bonfires, with the
-effects cleared before a DLC teardown, 14 of 14 legs held, seven of them
-leaving Brume Tower. Only those maps, one save. Not checked:
+(see `DS2_NATIVE_TRAVEL_PLAN.md` §13). On the right four bonfires (build
+9e9528b) 24 of 24 legs held with no billed death, and a legal `session end`
+afterwards ended the re-formed session with both games still up. Only those
+maps, one save, two players. Not checked:
 
 - **Other DLC maps.** The effects clear runs for every `0x32xxxxxx` teardown,
   but only Brume Tower has been left. Shulva and Frozen Eleum Loyce are the
   same shape and untested.
-- **What the effects clear costs.** It removes every live effect at the
-  teardown, the phantom's glow and the bonfire flames included; whether each
-  comes back by itself has not been looked at on screen, nor whether anything
-  held a pointer (not a handle) to an effect it removed.
+- **What else the effects clear costs.** Besides the flame below, nothing
+  else has been looked at on screen; no crash has followed a clear in 60+
+  legs, but whether anything held a pointer (not a handle) to a removed effect
+  is not read.
 - **The "duty fulfilled" guard.** Written after one occurrence at Threshold
   Bridge; not exercised since. Nor has a boss actually been killed in a
   session with it in place.
@@ -71,10 +72,6 @@ leaving Brume Tower. Only those maps, one save. Not checked:
   map held plus one; a leg can need four maps, and a larger area (Drangleic
   Castle, Shrine of Amana) may not fit. Read `H+0xd0` against `H+0x4f0`,
   `H = *(*(base+0x1616cc0))`, on arrival.
-- **A legal session end after travelling.** The host's native unbind
-  (`FUN_140517e70`) walks the enemy sync's records; with the session's map held
-  they stay valid, but a session that began elsewhere and was re-formed has not
-  been ended after a travel.
 - **The held map across a whole play session**: a session that begins in one
   map and plays for hours keeps that map loaded the entire time.
 
