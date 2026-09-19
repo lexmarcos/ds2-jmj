@@ -1661,6 +1661,14 @@ namespace
         Next.Why = "viagem";
         Next.KeepHp = true;
         s_travel_from = MapIndexUnder(Chr);
+        // On a map object the contact carries no map index (kind 1 does,
+        // anything else not): measured 19/09 leaving Eleum Loyce, -1 here
+        // meant the map left could not be taken down and the host died on a
+        // full TargetManager. The streamer's current map says it instead.
+        if (s_travel_from < 0)
+        {
+            s_travel_from = DS2_Backread::IndexOf(CurrentMap());
+        }
         uint64_t InUse = 0;
         uint8_t DestState = 0;
         uint32_t DestMask[4] = {};
