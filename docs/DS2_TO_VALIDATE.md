@@ -67,9 +67,6 @@ leaving Brume Tower. Only those maps, one save. Not checked:
   the effects clear takes it, and the timeact that lit it never spawns it
   again (research: `MapTimeActTrackSfx`, `FUN_1403e56d0`). A scoped kill per
   map owner is mapped out but not written.
-- **The 300 s bit cleared in play.** Proven with a harness kill; a campaign
-  long enough to cross 300 s after a cancelled death has not yet run with it.
-
 - **Other maps and bigger ones.** The map heap read 57-60% with the session's
   map held plus one; a leg can need four maps, and a larger area (Drangleic
   Castle, Shrine of Amana) may not fit. Read `H+0xd0` against `H+0x4f0`,
