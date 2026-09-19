@@ -1212,3 +1212,19 @@ moment, as it does on a load.
 | 603d72a | 20 | 3 | 3 | host died Brume → Heide, effects |
 | 0af479a (guard only) | 12 | 3 | 3 | guard fired, host died on the freed node |
 | 6c419c7 (effects cleared) | 14 | 14 | 14 | seven exits from Brume Tower |
+| 6c419c7 | 24 | 11 | 11 | leg 12: Threshold Bridge landing billed as a death |
+| 6947c52 | 24 | 11 | 11 | leg 12: arrival not recognised after the fall |
+| 4ec5743 | 24 | 24 | 24 | but three landings billed a death the score missed |
+| 0817c13 | 24 | 24 | 24 | no billed death; three post-travel falls absorbed |
+
+**Threshold Bridge's landing.** Its bonfire sits on a bridge whose final
+collision arrives after the first one the character touches, so a landing can
+fall through. Three fixes in `DS2_DeathInterceptHook`, in the order they were
+found: a travel to another map ends only on that map's ground (it used to end
+one frame after the jump, on the contact still reporting the map left); the
+ground is proven by the streamer's last part **or** the collision handle under
+the feet (the first stayed null after a fall while the second named Iron
+Keep); and a landing's death is never billed — the recovery waits out a
+pending death or zero HP, and a fall within 3 s of a travel's end sends the
+character back to the travel's target. `travel-legs.sh` now fails a leg that
+billed a death, which is what the 4ec5743 run scored as clean.
