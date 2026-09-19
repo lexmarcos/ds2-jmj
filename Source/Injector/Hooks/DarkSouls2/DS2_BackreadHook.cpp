@@ -2108,6 +2108,13 @@ void DS2_Backread::Unload(int32_t Index)
             }
         }
     }
+    // The backread's own request forces its map every frame, so a map still
+    // requested would never come down (19/09: the guest waited 30 s with
+    // 0a170000 forced by the request of the travel that took it there).
+    if (DS2_Backread::MapAt(Index) == s_map.load())
+    {
+        DS2_Backread::Release();
+    }
     s_unload_since.store(GetTickCount64());
     s_unload_let_go = -1;
     s_unload_away_since = 0;
