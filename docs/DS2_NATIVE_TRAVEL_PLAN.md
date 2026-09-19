@@ -1275,3 +1275,46 @@ so nothing of the other maps is touched; the flame stays lit.
 
 One exit in four leaving an orphan is the rate at which leaving Brume Tower
 killed the host before any fix, which makes effect 8329 the likely culprit.
+
+## 15. 19/09 — the real map budget is the TargetManager
+
+The host died at `+0x1bee1c4` after a test that went Majula → Frozen Eleum
+Loyce (`32250000`) → `0a170000`. That address is not a stray write: it is the
+game's own fatal-assert trap (`movl $0xdeadba, 0`), reached here from
+`DLFixedVector.inl` line 0x27e, "out of memory." (`rdi` = the message). The
+vector is the **TargetManager** at `*(ctx+0x48)` (vftable `0x1410ed868`): 2048
+16-byte entries inline in a 0x8028-byte object, count at `+0x8018`, checked at
+`0x140248263`. Every enemy generator (`FUN_140411a40`), character and
+targetable map object of every loaded map registers one (`FUN_1404208c0`), and
+the per-frame sweep `FUN_140420b90` removes those a teardown flagged. It cannot
+be enlarged by a byte patch (the layout offsets are baked into ~20 accessors).
+A second inline vector, the chameleon areas at `*(mapmgr+0x208)` (count at
+`+0x78`, capacity 3, `0x1401c5d5e`), is what the four-map guest crash of 18/09
+overflowed. "INAP_LD" in `r9` was the assert's own buffer ("DL_PANI" backwards)
+and never a pool. Of the seven faults logged at this address since 15/09, four
+are the TargetManager, one the chameleon vector, and two a
+`DLReferenceCountInvalid` in teardown.
+
+`DS2_BackreadHook` now logs both counts on every owner state change and when
+the target count settles (`budget:` lines). Measured on 19/09 from Majula, on
+both machines, with identical figures:
+
+| map | id | targets | chameleon |
+| --- | --- | --- | --- |
+| Majula | `0a040000` | 313 | 1 |
+| Heide's Tower of Flame | `0a1f0000` | 274–281 | 1 |
+| Iron Keep | `0a130000` | 451–464 | 1 |
+| `0a110000` (streamed in beside Iron Keep) | `0a110000` | 601–875 | 1 |
+| Brume Tower | `32240000` | 1126 | 1 |
+| `0a220000` | `0a220000` | 226–232 | 1 |
+| `0a170000` | `0a170000` | 794 | 1 |
+| Shrine of Amana | `140b0000` | 441–446 | 1 |
+| Frozen Eleum Loyce | `32250000` | 1389–1392 | 1 |
+
+Every release gave its targets back (the count returned to 313 each time), so
+there is no leak: the limit is the sum of what is loaded at the peak. The
+crash's peak was Majula 313 + Eleum Loyce 1392 + `0a170000` 794 = 2499. The
+closest a clean leg came was 1911 of 2048 (Majula, Iron Keep and Brume Tower
+together, 19/09 11:53). A travel's peak is session map + map left + destination
+(+ any neighbour the game streams in), so the budget has to be checked on that
+sum, not on the number of maps.
