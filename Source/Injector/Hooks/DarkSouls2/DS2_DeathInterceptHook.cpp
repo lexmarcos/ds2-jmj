@@ -1032,6 +1032,75 @@ namespace
         return false;
     }
 
+    // The game's own last step when it places a character at a bonfire
+    // (FUN_140419610): if the spot 1.1 m behind the bonfire lies inside a
+    // relocation region of the map (type 0x1a, FUN_140451830(&pos, map,
+    // 0x1a)), the character goes to that region's point instead
+    // (FUN_140451930(out, map, *(u32*)(*(region+0x58)+0x2c)), position at
+    // out+0x30). Without it the travel put Samuel inside the wooden frame
+    // beside the Undead Refuge bonfire (0a170000/5c62, 19/09).
+    constexpr size_t kFindRegionOffset = 0x451830;
+    constexpr uint8_t kFindRegionBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x05, 0xaf, 0x30, 0x1c, 0x01 };
+    constexpr size_t kRegionPointOffset = 0x451930;
+    constexpr uint8_t kRegionPointBytes[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x05, 0xb3, 0x2f, 0x1c, 0x01 };
+    constexpr int kRelocateRegion = 0x1a;
+    using FindRegion_p = uintptr_t(*)(const float* Position, uint32_t Map, int Type);
+    using RegionPoint_p = uint8_t(*)(void* Out, uint32_t Map, uint32_t Id);
+    FindRegion_p s_find_region = nullptr;
+    RegionPoint_p s_region_point = nullptr;
+
+    uintptr_t CallFindRegion(const float* Position, uint32_t Map)
+    {
+        __try
+        {
+            return s_find_region(Position, Map, kRelocateRegion);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    bool CallRegionPoint(void* Out, uint32_t Map, uint32_t Id)
+    {
+        __try
+        {
+            return s_region_point(Out, Map, Id) != 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // True when the spot was moved.
+    bool Relocate(uint32_t Map, float Spot[3])
+    {
+        if (s_find_region == nullptr || s_region_point == nullptr)
+        {
+            return false;
+        }
+        alignas(16) float Position[4] = { Spot[0], Spot[1], Spot[2], 1.0f };
+        const uintptr_t Region = CallFindRegion(Position, Map);
+        uintptr_t Shape = 0;
+        uint32_t Id = 0;
+        if (Region == 0 || !ReadPointer(Region + 0x58, Shape) || !ReadBytes(Shape + 0x2c, &Id, sizeof(Id)))
+        {
+            return false;
+        }
+        alignas(16) uint8_t Point[0x40] = {};
+        if (!CallRegionPoint(Point, Map, Id))
+        {
+            return false;
+        }
+        float Moved[3] = {};
+        memcpy(Moved, Point + 0x30, sizeof(Moved));
+        Append(StringFormat("%s  bonfire spot (%.3f, %.3f, %.3f) is in relocation region %u of %08x; the game's point (%.3f, %.3f, %.3f) instead\n",
+            Clock().c_str(), Spot[0], Spot[1], Spot[2], Id, Map, Moved[0], Moved[1], Moved[2]));
+        memcpy(Spot, Moved, sizeof(Moved));
+        return true;
+    }
+
     bool FindBonfireSpawn(uint32_t Map, uint32_t Id, float Out[3])
     {
         uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
@@ -1067,6 +1136,7 @@ namespace
                 {
                     Out[k] = Translation[k] - kSpawnBehind * Axis[k];
                 }
+                Relocate(Map, Out);
                 return true;
             }
 
@@ -3023,6 +3093,16 @@ bool DS2_DeathInterceptHook::Install(Injector& injector)
     s_front_end_busy = (Check_p)(s_base + kFrontEndBusyOffset);
     s_hud_reset = (Action_p)(s_base + kHudResetOffset);
     s_part_under = (PartUnder_p)(s_base + kPartUnderOffset);
+    if (memcmp((const void*)(s_base + kFindRegionOffset), kFindRegionBytes, sizeof(kFindRegionBytes)) == 0 &&
+        memcmp((const void*)(s_base + kRegionPointOffset), kRegionPointBytes, sizeof(kRegionPointBytes)) == 0)
+    {
+        s_find_region = (FindRegion_p)(s_base + kFindRegionOffset);
+        s_region_point = (RegionPoint_p)(s_base + kRegionPointOffset);
+    }
+    else
+    {
+        Error("[DS2DeathIntercept] the map region lookup is not the expected code; bonfire spots are not relocated");
+    }
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());

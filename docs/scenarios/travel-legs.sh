@@ -32,10 +32,10 @@ roles() {
 # 140b0000/2d82, which is Tower of Prayer in Shrine of Amana - a label inherited
 # from an old shortcut and never checked against the game's own name. Both are
 # kept under their real names.
-declare -A MAPS=( [majula]="0a040000 122a" [heide]="0a1f0000 7ba2" [ironkeep]="0a130000 4cc7" [brume]="32240000 8f2f" [ironhearth]="0a130000 4cc2" [amana]="140b0000 2d82" [eleum]="32250000 9312" [m1034]="0a220000 875f" [m1023]="0a170000 5c67" )
+declare -A MAPS=( [majula]="0a040000 122a" [heide]="0a1f0000 7ba2" [ironkeep]="0a130000 4cc7" [brume]="32240000 8f2f" [ironhearth]="0a130000 4cc2" [amana]="140b0000 2d82" [eleum]="32250000 9312" [m1034]="0a220000 875f" [m1023]="0a170000 5c67" [refuge]="0a170000 5c62" )
 legs=()
 for n in "$@"; do [ -n "${MAPS[$n]}" ] || { echo "unknown destination: $n"; exit 1; }; legs+=("${MAPS[$n]} $n"); done
-[ ${#legs[@]} -gt 0 ] || { echo "usage: travel-legs.sh <majula|heide|ironkeep|brume|ironhearth|amana|eleum|m1034|m1023>..."; exit 1; }
+[ ${#legs[@]} -gt 0 ] || { echo "usage: travel-legs.sh <majula|heide|ironkeep|brume|ironhearth|amana|eleum|m1034|m1023|refuge>..."; exit 1; }
 ok=0; clean=0
 for leg in "${legs[@]}"; do
   set -- $leg; MAP=$1; FIRE=$2; NAME=$3
