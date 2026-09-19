@@ -1370,3 +1370,44 @@ the way a loading screen would, behind the black screen:
 | c92eb71 | 20 | 20 | 10, every one parked in Majula |
 
 Cost: a travel that has to make room takes about 15 s behind the black screen.
+
+## 17. 19/09, night — the guest's own budget, and the list the game never purges
+
+Testing the player's own route (Undead Refuge `0a170000/5c62`, `0a170000/5c67`,
+Eleum Loyce, Majula, Brume Tower, Heide, Iron Keep) found four more:
+
+1. **A destination already loaded needs no room.** Majula plus Eleum Loyce read
+   1902, over the margin, so a travel to the already loaded Eleum Loyce waited
+   30 s and took maps down around the other player. Room is made only for a
+   destination that is not in yet.
+2. **Room comes from the heaviest map that may go**, never the session's map,
+   the destination, or the one the character waits on. Asking for "the map
+   left" had a guest trying to take Majula down under both players, and the
+   injector marked it unreachable for 32 s while the game kept it.
+3. **The guest makes room too.** Parked in Majula it still held the map it had
+   left, and the probe of `TravelGo` loaded the host's destination beside both
+   (2496 targets). A guest already on the session's map now stays where it is,
+   a guest that parks drops its holds, and when the destination does not fit
+   its budget the probe is skipped so the travel makes room first. A map chosen
+   to go also has the backread's own request released, or it stays forced.
+4. **The sign areas the game never purges.** `*(ctx+0x90)` is the SignManager
+   and `*(+0x80)` its area vector (begin `+0x10`, end `+0x18`); each entry
+   keeps the event id at `+0x50`, a pointer into the map's data at `+0x58` and
+   the map id at `+0x70` (read live). Its per-frame sweep reads byte `+0x18` of
+   that pointer, and the game's own purge for a released map, `FUN_140210ad0`,
+   is a bare `ret`: unmodded, maps only go through a loading screen. With the
+   travel the entries stay, and the guest died every time on the same leg
+   (`+0x3c3b7f`) the moment the map being built reused that memory. Every
+   teardown now drops the entries of the map going down (2 to 10 per teardown
+   in practice) and any whose object is no longer a location.
+
+Also: the travel asks the game's own relocation lookup for the arrival spot
+(`FUN_140451830`/`FUN_140451930`, region type 0x1a), which is the step the game
+takes after "1.1 m behind the bonfire"; at Undead Refuge no region applies, and
+the arrival there is in the open with the character free to walk (checked on
+screen and with `goto`).
+
+| build | legs | clean | route |
+| --- | --- | --- | --- |
+| 48ecc94 | 16 | 15 | one leg's guest hit the full TargetManager, trapped |
+| e5b1adc | 20 | 20 | the same route, no fault, no "NO ROOM" |
