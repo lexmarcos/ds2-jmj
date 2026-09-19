@@ -713,6 +713,22 @@ namespace
         return Map;
     }
 
+    int32_t MapIndexUnder(uint8_t* Chr);
+
+    // Whether the character stands on Map. The streamer's last part says so
+    // most of the time; after a fall on arrival it stayed null for the whole
+    // settle (18/09 21:54, Threshold Bridge) while the contact under the feet,
+    // collision on index 7, named Iron Keep. Either one is enough.
+    bool StandsOn(uint8_t* Chr, uint32_t Map)
+    {
+        if (CurrentMap() == Map)
+        {
+            return true;
+        }
+        const int32_t Under = MapIndexUnder(Chr);
+        return Under >= 0 && Under == DS2_Backread::IndexOf(Map);
+    }
+
     // The handle of what the character stands on, raw: its kind in the low
     // nibble, and for collision (7) or a map object (1) the map index in bits
     // 4..9. False in the air.
@@ -1781,7 +1797,7 @@ namespace
     {
         ++s_settle.Frames;
         const uint32_t Current = CurrentMap();
-        const bool Arrived = Current == s_settle.Map;
+        const bool Arrived = StandsOn(Chr, s_settle.Map);
         if (!Arrived && s_settle.Frames < kSettleGiveUpFrames)
         {
             // Standing, but on another map's ground.
@@ -1833,7 +1849,7 @@ namespace
         // bridge had no floor yet, and the fall 0.8 s later was billed as a
         // real death (hollowing, respawn in Majula). Kept open, that fall is
         // the travel's own, and the retry below puts the character back.
-        const bool OnTarget = !s_settle.Active || CurrentMap() == s_settle.Map;
+        const bool OnTarget = !s_settle.Active || StandsOn(Chr, s_settle.Map);
         const bool Down = OnTarget && Fall != 0 && ReadBytes(Fall + kFallInAir, &InAir, 1) && InAir == 0;
         if (!Down)
         {

@@ -81,4 +81,8 @@ namespace DS2_Backread
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.
     bool Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4]);
+
+    // The owner index of a map (the one collision handles carry in bits 4..9),
+    // or -1 when no owner has that map.
+    int32_t IndexOf(uint32_t MapId);
 }

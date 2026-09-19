@@ -1215,6 +1215,25 @@ bool DS2_Backread::Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4])
     return false;
 }
 
+int32_t DS2_Backread::IndexOf(uint32_t MapId)
+{
+#ifdef _WIN32
+    uintptr_t Owners[kMaxOwners] = {};
+    const int Count = ReadOwners(Owners);
+    for (int i = 0; i < Count; ++i)
+    {
+        uint32_t Map = 0;
+        int32_t Index = -1;
+        if (ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)) && Map == MapId &&
+            ReadBytes(Owners[i] + kOwnerIndexField, &Index, sizeof(Index)))
+        {
+            return Index;
+        }
+    }
+#endif
+    return -1;
+}
+
 bool DS2_BackreadHook::Install(Injector& injector)
 {
 #ifdef _WIN32
