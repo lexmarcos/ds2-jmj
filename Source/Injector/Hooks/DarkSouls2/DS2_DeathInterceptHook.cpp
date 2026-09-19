@@ -519,6 +519,7 @@ namespace
         uint32_t RoomCost = 0;
         int32_t RoomSource = -1;
         bool SourceAsked = false;
+        ULONGLONG RoomAt = 0;
     };
     Recovery s_recovery;
 
@@ -532,6 +533,12 @@ namespace
     // map left is taken down behind the black screen, as a loading screen
     // would, before the destination is asked for.
     constexpr ULONGLONG kRoomHoldsMs = 3000;      // time for the holds to go
+    // A map's release goes on on the game's worker threads after its owner
+    // reads 0: measured 19/09, Brume Tower asked for 16 ms after Eleum Loyce
+    // reached 0 killed the host on a worker thread (+0x833655, under
+    // +0x96ab09 / +0xb4ed3b) 77 ms later. So the room has to stay made this
+    // long before the destination is asked for.
+    constexpr ULONGLONG kRoomSettleMs = 2000;
     // The map left goes only once nobody stands in it, and a guest's copy
     // holds it 5 s after it has gone (kKeepOtherPlayerMs).
     constexpr ULONGLONG kRoomGiveUpMs = 30000;    // then load anyway, and say so
@@ -1870,7 +1877,16 @@ namespace
         const bool Read = DS2_Backread::Targets(InUse);
         const bool Fits = !Read || InUse + s_recovery.RoomCost <= DS2_Backread::TargetLimit();
         const bool SourceBusy = s_recovery.SourceAsked && !DS2_Backread::Unloaded(s_recovery.RoomSource);
-        if ((Fits && !SourceBusy) || Waited > kRoomGiveUpMs)
+        if (!Fits || SourceBusy)
+        {
+            s_recovery.RoomAt = 0;
+        }
+        else if (s_recovery.RoomAt == 0)
+        {
+            s_recovery.RoomAt = Now;
+        }
+        const bool Settled = s_recovery.RoomAt != 0 && Now - s_recovery.RoomAt >= kRoomSettleMs;
+        if (Settled || Waited > kRoomGiveUpMs)
         {
             const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
             DS2_Backread::Request(s_recovery.LoadMap, Every);
