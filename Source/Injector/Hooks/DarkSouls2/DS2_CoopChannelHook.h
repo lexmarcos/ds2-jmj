@@ -101,8 +101,14 @@ namespace DS2_CoopChannel
         // one waits behind its own loading screen after arriving, and every
         // curtain comes down on this one message.
         TravelRelease = 6,
+        // The destination does not fit beside the map everyone stands in:
+        // leave it for a bonfire of the session's map and wait there, behind
+        // the curtain, so it can be taken down before the destination loads.
+        // The map another player stands in is never let go (15/09: that killed
+        // the guest in the CharacterManager), so the guests have to leave it.
+        TravelPark = 7,
     };
-    constexpr uint8_t kHostEventCount = 7;
+    constexpr uint8_t kHostEventCount = 8;
 
     // Other members of a session this machine hosts, seen in the last few
     // seconds. 0 when it hosts nothing.

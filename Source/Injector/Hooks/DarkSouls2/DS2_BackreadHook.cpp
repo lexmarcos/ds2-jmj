@@ -584,7 +584,7 @@ namespace
     std::atomic<uint64_t> s_unload_since{ 0 };
     ULONGLONG s_unload_logged = 0;
     int32_t s_unload_let_go = -1;
-    constexpr ULONGLONG kUnloadWindowMs = 15000;
+    constexpr ULONGLONG kUnloadWindowMs = 32000;
 
     void LoadCosts()
     {

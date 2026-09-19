@@ -102,6 +102,11 @@ namespace DS2_DeathIntercept
     // on the next frame of the local player's controller.
     void GoToBonfire(uint32_t Map, uint32_t Id);
 
+    // Take this machine's player, behind the curtain, to a bonfire of a
+    // loaded map other than the one it stands in (the session's), and have
+    // the streamer believe it, until the next travel starts.
+    void Park();
+
     // False once the move asked for has ended (arrived, or given up).
     bool Moving();
 

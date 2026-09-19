@@ -532,8 +532,12 @@ namespace
     // map left is taken down behind the black screen, as a loading screen
     // would, before the destination is asked for.
     constexpr ULONGLONG kRoomHoldsMs = 3000;      // time for the holds to go
-    constexpr ULONGLONG kRoomGiveUpMs = 18000;    // then load anyway, and say so
+    // The map left goes only once nobody stands in it, and a guest's copy
+    // holds it 5 s after it has gone (kKeepOtherPlayerMs).
+    constexpr ULONGLONG kRoomGiveUpMs = 30000;    // then load anyway, and say so
     bool s_travel_tight = false;
+    std::atomic<bool> s_park_pending{ false };
+    bool s_parked = false;
 
     // A fall in the first seconds after a travel ended is the travel's, not a
     // death. Measured 18/09 22:29: the guest stood on Iron Keep's collision
@@ -1640,6 +1644,11 @@ namespace
     // what follows it), measured between Heide and Majula in both directions.
     void StartTravel(uint8_t* Chr, uint32_t Map, uint32_t Id)
     {
+        if (s_parked)
+        {
+            s_parked = false;
+            DS2_Backread::Unfocus();
+        }
         if (s_recovery.Loading || s_settle.Active)
         {
             DS2_Backread::Unfocus();
@@ -1662,6 +1671,8 @@ namespace
         if (s_travel_tight)
         {
             DS2_Backread::DropKeeps();
+            // Dropped unless this machine hosts the session with guests.
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelPark, Map, Id, 0);
             Append(StringFormat("%s  budget: %llu targets in use + %u for %08x > %llu; holds dropped, the map left is not held\n",
                 Clock().c_str(), (unsigned long long)InUse, Cost, Map, (unsigned long long)DS2_Backread::TargetLimit()));
         }
@@ -1980,6 +1991,28 @@ namespace
         Append(StringFormat("%s  mapa %08x solto depois de %u quadros: %s (%s)\n", Clock().c_str(), s_settle.Map, s_settle.Frames,
             Arrived ? "o personagem esta nele" : StringFormat("desisti, o mapa atual e %08x", Current).c_str(),
             DescribeFooting(Chr).c_str()));
+    }
+
+    // A guest told to wait at the session's map while the host makes room.
+    void ContinuePark(uint8_t* Chr)
+    {
+        if (!s_park_pending.exchange(false))
+        {
+            return;
+        }
+        float Park[3] = {};
+        uint32_t ParkMap = 0;
+        const uint32_t Here = CurrentMap();
+        if (!FindParking(Here, 0, Park, ParkMap))
+        {
+            Append(StringFormat("%s  park: no bonfire of another loaded map; staying in %08x\n", Clock().c_str(), Here));
+            return;
+        }
+        const bool Moved = TeleportLocal(Chr, Park);
+        DS2_Backread::Focus(ParkMap, Park);
+        s_parked = true;
+        Append(StringFormat("%s  park: left %08x for a bonfire of %08x (%.3f, %.3f, %.3f) %s, while the host makes room\n",
+            Clock().c_str(), Here, ParkMap, Park[0], Park[1], Park[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
     }
 
     void ContinueRecovery(uint8_t* Chr, uint8_t* Data)
@@ -2355,6 +2388,11 @@ namespace
                         Clock().c_str(), Map, kArrivalGiveUpFrames));
                 }
             }
+        }
+
+        if (!s_recovery.Active)
+        {
+            ContinuePark(Chr);
         }
 
         if (s_go_pending.load() && Data != nullptr && !s_recovery.Active)
@@ -2804,6 +2842,13 @@ namespace DS2_DeathIntercept
 #else
         (void)Map;
         (void)Id;
+#endif
+    }
+
+    void Park()
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        s_park_pending.store(true);
 #endif
     }
 

@@ -713,7 +713,9 @@ namespace
         ULONGLONG Since = 0;
     };
     CallGuests s_call;
-    constexpr ULONGLONG kCallGiveUpMs = 40000;
+    // Long enough for a travel that first makes room (park, the map left
+    // taken down, up to 30 s) and then loads.
+    constexpr ULONGLONG kCallGiveUpMs = 70000;
 
     // Everybody arrives behind their own loading screen and nobody comes out
     // of it until the last one is standing. The machines do not load at the
@@ -3197,6 +3199,16 @@ void DS2_BonfireInSession_Tick()
         }
         Append(StringFormat("convidado: viagem cancelada pelo host (motivo %u, fogueira %04x)%s\n", (unsigned)Why, (unsigned)Bonfire,
             Show ? "; aviso mostrado" : ""));
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelPark, Said))
+    {
+        if (!s_curtain_up)
+        {
+            Curtain(true);
+        }
+        s_curtain_for_vote = true;
+        DS2_DeathIntercept::Park();
+        Append(StringFormat("convidado: the host needs room for %08x; waiting at the session's map\n", Said.Map));
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelGo, Said))
     {
