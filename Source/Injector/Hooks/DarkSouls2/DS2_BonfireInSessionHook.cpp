@@ -3233,7 +3233,7 @@ void DS2_BonfireInSession_Tick()
         uint32_t DestMask[4] = {};
         const bool DestIn = DS2_Backread::Query(Said.Map, DestState, DestMask) && DestState == 5;
         const uint32_t DestCost = DestIn ? 0 : DS2_Backread::TargetCost(Said.Map);
-        const bool Tight = DS2_Backread::Targets(InUse) && InUse + DestCost > DS2_Backread::TargetLimit();
+        const bool Tight = DestCost > 0 && DS2_Backread::Targets(InUse) && InUse + DestCost > DS2_Backread::TargetLimit();
         if (Tight)
         {
             Append(StringFormat("convidado: %llu targets in use + %u for %08x do not fit; no probe, the travel makes room first\n",

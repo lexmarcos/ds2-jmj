@@ -1888,7 +1888,11 @@ namespace
         const bool DestIn = DS2_Backread::Query(Map, DestState, DestMask) && DestState == 5;
         const uint32_t Cost = DestIn ? 0 : DS2_Backread::TargetCost(Map);
         const bool Read = DS2_Backread::Targets(InUse);
-        s_travel_tight = Read && InUse + Cost > DS2_Backread::TargetLimit();
+        // A destination already loaded adds nothing: there is no room to
+        // make. Measured 19/09: Majula + Eleum Loyce read 1902, over the
+        // margin, and a travel to the already loaded Eleum Loyce waited 30 s
+        // for room it did not need, taking the map down under the host.
+        s_travel_tight = Read && Cost > 0 && InUse + Cost > DS2_Backread::TargetLimit();
         if (s_travel_tight)
         {
             DS2_Backread::DropKeeps();
