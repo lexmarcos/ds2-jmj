@@ -21,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -563,6 +564,55 @@ namespace
     constexpr size_t kChameleonCount = 0x78;
     constexpr uint64_t kChameleonCapacity = 3;
     constexpr ULONGLONG kTargetSettleMs = 1500;
+    // Keep this much free for what spawns later (characters, summons).
+    constexpr uint64_t kTargetMargin = 150;
+    // A map never measured is assumed as heavy as the heaviest one seen,
+    // Frozen Eleum Loyce (1392).
+    constexpr uint32_t kUnknownCost = 1400;
+    // Measured 19/09 (docs/DS2_NATIVE_TRAVEL_PLAN.md, section 15).
+    const std::pair<uint32_t, uint32_t> kSeedCosts[] = {
+        { 0x0a040000, 313 }, { 0x0a1f0000, 281 }, { 0x0a130000, 464 }, { 0x0a110000, 875 },
+        { 0x32240000, 1126 }, { 0x0a220000, 232 }, { 0x0a170000, 794 }, { 0x140b0000, 446 },
+        { 0x32250000, 1392 },
+    };
+    std::mutex s_cost_mutex;
+    std::map<uint32_t, uint32_t> s_costs;
+    std::filesystem::path s_costs_path;
+    uint64_t s_cost_base[64] = {};
+    uint64_t s_cost_pending = 0;
+    std::atomic<int32_t> s_unload_index{ -1 };
+    std::atomic<uint64_t> s_unload_since{ 0 };
+    constexpr ULONGLONG kUnloadWindowMs = 15000;
+
+    void LoadCosts()
+    {
+        std::scoped_lock Lock(s_cost_mutex);
+        for (const auto& Seed : kSeedCosts)
+        {
+            s_costs[Seed.first] = Seed.second;
+        }
+        std::ifstream Stream(s_costs_path);
+        std::string Line;
+        while (std::getline(Stream, Line))
+        {
+            unsigned Map = 0, Cost = 0;
+            if (sscanf_s(Line.c_str(), "%x %u", &Map, &Cost) == 2 && Map != 0 && Cost > 0 && Cost < 0x800)
+            {
+                s_costs[Map] = Cost;
+            }
+        }
+    }
+
+    void LearnCost(uint32_t Map, uint32_t Cost)
+    {
+        {
+            std::scoped_lock Lock(s_cost_mutex);
+            s_costs[Map] = Cost;
+        }
+        std::ofstream Stream(s_costs_path, std::ios::app);
+        Stream << StringFormat("%08x %u\n", Map, Cost);
+    }
+
     uint8_t s_owner_states[64] = {};
     bool s_owner_states_known[64] = {};
     uint64_t s_targets_logged = ~0ull;
@@ -613,6 +663,18 @@ namespace
         const uint8_t Before = s_owner_states_known[Index] ? s_owner_states[Index] : 0xff;
         s_owner_states[Index] = State;
         s_owner_states_known[Index] = true;
+        // A map's cost: the targets it adds between starting to build (4) and
+        // the count settling with it loaded.
+        uint64_t Now = 0, Chameleon = 0;
+        if (State == 4 && ReadBudget(Now, Chameleon))
+        {
+            s_cost_base[Index] = Now;
+            s_cost_pending |= 1ull << Index;
+        }
+        else if (State == 0)
+        {
+            s_cost_pending &= ~(1ull << Index);
+        }
         Append(StringFormat("%s  budget: map %08x [%d] state %u -> %u; %s\n", Clock().c_str(), Map, Index,
             (unsigned)Before, (unsigned)State, DescribeBudget().c_str()));
     }
@@ -657,6 +719,24 @@ namespace
         }
         const long long Delta = s_targets_logged == ~0ull ? 0 : (long long)Targets - (long long)s_targets_logged;
         s_targets_logged = Targets;
+        // Learned only when exactly one map was building since the last time.
+        if (s_cost_pending != 0 && (s_cost_pending & (s_cost_pending - 1)) == 0)
+        {
+            int Index = 0;
+            while (((s_cost_pending >> Index) & 1) == 0)
+            {
+                ++Index;
+            }
+            const uint32_t Map = DS2_Backread::MapAt(Index);
+            if (Map != 0 && s_owner_states[Index] == 5 && Targets > s_cost_base[Index] &&
+                Targets - s_cost_base[Index] < kTargetCapacity)
+            {
+                const uint32_t Cost = (uint32_t)(Targets - s_cost_base[Index]);
+                LearnCost(Map, Cost);
+                Append(StringFormat("%s  budget: map %08x costs %u targets\n", Clock().c_str(), Map, Cost));
+            }
+        }
+        s_cost_pending = 0;
         Append(StringFormat("%s  budget: targets settled at %llu (%+lld), chameleon %llu; maps in:%s\n", Clock().c_str(),
             (unsigned long long)Targets, Delta, (unsigned long long)Chameleon, Loaded.empty() ? " none" : Loaded.c_str()));
     }
@@ -1091,8 +1171,49 @@ namespace
         return Result;
     }
 
+    // A map being taken down for a travel that would not fit beside it.
+    void UnloadAsked(uintptr_t Streamer)
+    {
+        const int32_t Wanted = s_unload_index.load();
+        if (Wanted < 0)
+        {
+            return;
+        }
+        int16_t Count = 0;
+        if (!ReadBytes(Streamer + kStreamerOwnerCount, &Count, sizeof(Count)) || Count <= 0 || Count > kMaxOwners)
+        {
+            return;
+        }
+        for (int i = 0; i < Count && i < 64; ++i)
+        {
+            uintptr_t Owner = 0, Vftable = 0;
+            int32_t Index = -1;
+            uint32_t Map = 0;
+            uint8_t State = 0;
+            if (!ReadPointer(Streamer + kStreamerOwners + i * sizeof(uintptr_t), Owner) || !ReadPointer(Owner, Vftable) ||
+                Vftable != s_base + kOwnerVftable || !ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) ||
+                Index != Wanted || !ReadBytes(Owner + kOwnerMap, &Map, sizeof(Map)) || !ReadBytes(Owner + kOwnerState, &State, 1))
+            {
+                continue;
+            }
+            if (State == 0 || GetTickCount64() - s_unload_since.load() > kUnloadWindowMs || DS2_BonfireInSession_IsSessionMap(Map))
+            {
+                Append(StringFormat("%s  budget: map %08x [%d] %s\n", Clock().c_str(), Map, Index,
+                    State == 0 ? "is down" : "did not come down in time; left as it is"));
+                s_unload_index.store(-1);
+                return;
+            }
+            const uint8_t Zero = 0;
+            WriteBytes(Streamer + kStreamerAllowed + i, &Zero, 1);
+            WriteBytes(Owner + kOwnerForced, &Zero, 1);
+            return;
+        }
+        s_unload_index.store(-1);
+    }
+
     void StreamerMasksHook(void* Streamer, void* Arg)
     {
+        UnloadAsked((uintptr_t)Streamer);
         EvictNeighbours((uintptr_t)Streamer);
         s_original_masks(Streamer, Arg);
     }
@@ -1501,6 +1622,110 @@ bool DS2_Backread::Query(uint32_t MapId, uint8_t& State, uint32_t Mask[4])
     return false;
 }
 
+bool DS2_Backread::Targets(uint64_t& Count)
+{
+#ifdef _WIN32
+    uint64_t Chameleon = 0;
+    return ReadBudget(Count, Chameleon);
+#else
+    return false;
+#endif
+}
+
+uint64_t DS2_Backread::TargetLimit()
+{
+#ifdef _WIN32
+    return kTargetCapacity - kTargetMargin;
+#else
+    return 0;
+#endif
+}
+
+uint32_t DS2_Backread::TargetCost(uint32_t MapId)
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_cost_mutex);
+    const auto Found = s_costs.find(MapId);
+    return Found == s_costs.end() ? kUnknownCost : Found->second;
+#else
+    return 0;
+#endif
+}
+
+uint32_t DS2_Backread::MapAt(int32_t Index)
+{
+#ifdef _WIN32
+    uintptr_t Owners[kMaxOwners] = {};
+    const int Count = ReadOwners(Owners);
+    for (int i = 0; i < Count; ++i)
+    {
+        uint32_t Map = 0;
+        int32_t At = -1;
+        if (ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) && At == Index &&
+            ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)))
+        {
+            return Map;
+        }
+    }
+#endif
+    return 0;
+}
+
+void DS2_Backread::DropKeeps()
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_keep_mutex);
+    for (Kept& Entry : s_kept)
+    {
+        if (Entry.Index >= 0)
+        {
+            Entry.Until = 0;
+        }
+    }
+#endif
+}
+
+void DS2_Backread::Unload(int32_t Index)
+{
+#ifdef _WIN32
+    if (Index < 0 || Index > 0x3f)
+    {
+        return;
+    }
+    {
+        std::scoped_lock Lock(s_keep_mutex);
+        for (Kept& Entry : s_kept)
+        {
+            if (Entry.Index == Index)
+            {
+                Entry = Kept();
+            }
+        }
+    }
+    s_unload_since.store(GetTickCount64());
+    s_unload_index.store(Index);
+#endif
+}
+
+bool DS2_Backread::Unloaded(int32_t Index)
+{
+#ifdef _WIN32
+    uintptr_t Owners[kMaxOwners] = {};
+    const int Count = ReadOwners(Owners);
+    for (int i = 0; i < Count; ++i)
+    {
+        int32_t At = -1;
+        uint8_t State = 0;
+        if (ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) && At == Index &&
+            ReadBytes(Owners[i] + kOwnerState, &State, 1))
+        {
+            return State == 0;
+        }
+    }
+#endif
+    return true;
+}
+
 int32_t DS2_Backread::IndexOf(uint32_t MapId)
 {
 #ifdef _WIN32
@@ -1538,6 +1763,8 @@ bool DS2_BackreadHook::Install(Injector& injector)
     }
 
     s_log_path = injector.GetDllPath() / "DS2_Backread.log";
+    s_costs_path = injector.GetDllPath() / "DS2_TargetCosts.txt";
+    LoadCosts();
 
     // The cap goes up only if the whole compare is the one it was read from.
     if (BytesMatch(s_base + kStreamCapOffset, kStreamCapExpected, sizeof(kStreamCapExpected)))

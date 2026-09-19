@@ -511,8 +511,29 @@ namespace
         uint32_t LoadMap = 0;
         uint32_t LoadId = 0;
         uint32_t LoadFrames = 0;
+        // The destination is not asked for until the target budget has room
+        // for it (DS2_Backread::Targets): first the holds go, then, if that
+        // is not enough, the map being left.
+        bool WaitRoom = false;
+        ULONGLONG RoomSince = 0;
+        uint32_t RoomCost = 0;
+        int32_t RoomSource = -1;
+        bool SourceAsked = false;
     };
     Recovery s_recovery;
+
+    // The travel budget. The TargetManager holds 2048 entries for every
+    // loaded map together, and the game ends the process when it is full:
+    // 19/09, Majula held (313) + Frozen Eleum Loyce (1392) + the next
+    // destination (794) killed the host. A travel's peak is the session's map
+    // + the map left + the destination, so before asking for the destination
+    // the budget is read, and when it would not fit the 30 s holds go first
+    // (the map left is not held) and then, if that is still not enough, the
+    // map left is taken down behind the black screen, as a loading screen
+    // would, before the destination is asked for.
+    constexpr ULONGLONG kRoomHoldsMs = 3000;      // time for the holds to go
+    constexpr ULONGLONG kRoomGiveUpMs = 18000;    // then load anyway, and say so
+    bool s_travel_tight = false;
 
     // A fall in the first seconds after a travel ended is the travel's, not a
     // death. Measured 18/09 22:29: the guest stood on Iron Keep's collision
@@ -1585,7 +1606,20 @@ namespace
         Next.Why = "viagem";
         Next.KeepHp = true;
         s_travel_from = MapIndexUnder(Chr);
-        if (s_travel_from >= 0)
+        uint64_t InUse = 0;
+        uint8_t DestState = 0;
+        uint32_t DestMask[4] = {};
+        const bool DestIn = DS2_Backread::Query(Map, DestState, DestMask) && DestState == 5;
+        const uint32_t Cost = DestIn ? 0 : DS2_Backread::TargetCost(Map);
+        const bool Read = DS2_Backread::Targets(InUse);
+        s_travel_tight = Read && InUse + Cost > DS2_Backread::TargetLimit();
+        if (s_travel_tight)
+        {
+            DS2_Backread::DropKeeps();
+            Append(StringFormat("%s  budget: %llu targets in use + %u for %08x > %llu; holds dropped, the map left is not held\n",
+                Clock().c_str(), (unsigned long long)InUse, Cost, Map, (unsigned long long)DS2_Backread::TargetLimit()));
+        }
+        else if (s_travel_from >= 0)
         {
             DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
         }
@@ -1631,7 +1665,17 @@ namespace
             // so a run of thirty legs looked clean while the guest had really
             // travelled five times.
             const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
-            DS2_Backread::Request(Map, Every);
+            if (s_travel_tight)
+            {
+                Next.WaitRoom = true;
+                Next.RoomSince = GetTickCount64();
+                Next.RoomCost = Cost;
+                Next.RoomSource = s_travel_from;
+            }
+            else
+            {
+                DS2_Backread::Request(Map, Every);
+            }
             Next.Loading = true;
             Next.LoadMap = Map;
             Next.LoadId = Id;
@@ -1745,8 +1789,44 @@ namespace
     // The bonfire's map is coming in. Once it is loaded and the bonfire is in
     // the list, the character goes there; the map stays held until it stands.
     // True on the frame the character was sent.
+    // Waiting for the target budget to have room for the destination.
+    // True while still waiting.
+    bool ContinueRoom()
+    {
+        const ULONGLONG Now = GetTickCount64();
+        const ULONGLONG Waited = Now - s_recovery.RoomSince;
+        uint64_t InUse = 0;
+        const bool Read = DS2_Backread::Targets(InUse);
+        const bool Fits = !Read || InUse + s_recovery.RoomCost <= DS2_Backread::TargetLimit();
+        const bool SourceBusy = s_recovery.SourceAsked && !DS2_Backread::Unloaded(s_recovery.RoomSource);
+        if ((Fits && !SourceBusy) || Waited > kRoomGiveUpMs)
+        {
+            const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };
+            DS2_Backread::Request(s_recovery.LoadMap, Every);
+            s_recovery.WaitRoom = false;
+            s_recovery.LoadFrames = 0;
+            Append(StringFormat("%s  budget: %s after %llu ms (%llu targets in use, %u for %08x); destination asked for\n",
+                Clock().c_str(), Fits ? "room made" : "NO ROOM, loading anyway", (unsigned long long)Waited,
+                (unsigned long long)InUse, s_recovery.RoomCost, s_recovery.LoadMap));
+            return false;
+        }
+        if (!s_recovery.SourceAsked && Waited > kRoomHoldsMs && s_recovery.RoomSource >= 0)
+        {
+            s_recovery.SourceAsked = true;
+            const uint32_t Source = DS2_Backread::MapAt(s_recovery.RoomSource);
+            DS2_Backread::Unload(s_recovery.RoomSource);
+            Append(StringFormat("%s  budget: still %llu targets in use + %u; taking the map left (%08x [%d]) down before the destination\n",
+                Clock().c_str(), (unsigned long long)InUse, s_recovery.RoomCost, Source, s_recovery.RoomSource));
+        }
+        return true;
+    }
+
     bool ContinueLoading(uint8_t* Chr)
     {
+        if (s_recovery.WaitRoom && ContinueRoom())
+        {
+            return false;
+        }
         ++s_recovery.LoadFrames;
         if (s_recovery.LoadFrames % kLoadPollFrames != 0)
         {
@@ -1945,7 +2025,7 @@ namespace
             {
                 s_travel_outcome.compare_exchange_strong(Expected, (uint8_t)DS2_DeathIntercept::Outcome::Arrived);
             }
-            if (s_travel_from >= 0)
+            if (s_travel_from >= 0 && !s_travel_tight)
             {
                 DS2_Backread::KeepIndex(s_travel_from, kTravelHoldMs);
             }

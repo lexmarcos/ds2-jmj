@@ -86,4 +86,25 @@ namespace DS2_Backread
     // The owner index of a map (the one collision handles carry in bits 4..9),
     // or -1 when no owner has that map.
     int32_t IndexOf(uint32_t MapId);
+
+    // The map budget (see the TargetManager in DS2_BackreadHook.cpp): the
+    // entries in use now, the capacity with a margin kept free, and what a
+    // map costs, measured on each load and remembered across boots
+    // (DS2_TargetCosts.txt), with a conservative guess for a map never seen.
+    bool Targets(uint64_t& Count);
+    uint64_t TargetLimit();
+    uint32_t TargetCost(uint32_t MapId);
+
+    // The map id of the owner with this index, 0 when none.
+    uint32_t MapAt(int32_t Index);
+
+    // Ends every KeepIndex hold now; their maps go through the normal release.
+    void DropKeeps();
+
+    // Takes the map with this index down even if the player stands in it, the
+    // way a loading screen would: its keep is dropped, its force byte cleared
+    // and the streamer is told it cannot reach it, until it is gone or 15 s
+    // pass. For a travel that would not fit beside the map it leaves.
+    void Unload(int32_t Index);
+    bool Unloaded(int32_t Index);
 }
