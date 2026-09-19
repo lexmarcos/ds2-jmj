@@ -103,3 +103,7 @@ void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map);
 /// bindings assume it never unloads while the session lives.
 bool DS2_BonfireInSession_IsSessionMap(uint32_t Map);
 
+/// Writes down the loaded bonfires' map effects (flames) so they can be
+/// spawned again after every live effect is cleared. Game thread only.
+void DS2_BonfireInSession_CaptureFlames();
+

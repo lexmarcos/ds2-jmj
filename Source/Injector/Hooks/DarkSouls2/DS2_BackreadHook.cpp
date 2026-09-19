@@ -867,6 +867,7 @@ namespace
             }
             else
             {
+                DS2_BonfireInSession_CaptureFlames();
                 ((SfxClearAll_p)Slot)((void*)Manager);
                 s_effects_cleared.fetch_add(1);
             }

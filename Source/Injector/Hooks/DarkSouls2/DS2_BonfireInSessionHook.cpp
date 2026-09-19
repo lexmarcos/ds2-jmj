@@ -1247,95 +1247,79 @@ namespace
         s_job_unpatched_at = 0;
     }
 
-    uintptr_t SlotComponentOf(uintptr_t Entity)
+    // What a bonfire's map effects were just before the clear. Read from the
+    // slot component's cache before, because after the clear the game sweeps
+    // the entries nobody touches any more: measured 19/09 at Heide's Tower of
+    // Flame, minutes after a clear, both entries of its cache were free.
+    struct CachedEffect
     {
-        __try
-        {
-            return s_slot_component(Entity);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return 0;
-        }
-    }
-
-    // Whether a slot record with this serial is still alive (slot < 0).
-    bool SlotHandleAlive(uintptr_t Component, uint32_t Handle)
-    {
-        uintptr_t Record = 0;
-        if (!ReadPointer(Component + kSlotRecords, Record))
-        {
-            return false;
-        }
-        for (int Guard = 0; Record != 0 && Guard < 256; ++Guard)
-        {
-            uint32_t Flags = 0, Serial = 0;
-            if (!ReadBytes(Record, &Flags, sizeof(Flags)) || !ReadBytes(Record + kSlotRecordSerial, &Serial, sizeof(Serial)))
-            {
-                return false;
-            }
-            if (Serial == Handle && (Flags & kSlotRecordAlive) != 0)
-            {
-                return true;
-            }
-            if (!ReadPointer(Record + kSlotRecordNext, Record))
-            {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    // Every loaded bonfire's cached map effects, spawned again.
-    void RelightBonfires()
-    {
-        const uintptr_t Manager = BonfireManager();
         uintptr_t Component = 0;
-        if (Manager == 0 || s_slot_component == nullptr || s_slot_spawn == nullptr || s_sfx_cache_set == nullptr ||
-            !ReadPointer(Manager + kBonfireList, Component))
+        int16_t Slot = 0;
+        int32_t Effect = 0;
+        int16_t Dummy = 0;
+    };
+    constexpr size_t kMaxCachedEffects = 128;
+    constexpr size_t kSlotCtrlVftable = 0x10e86d8;   // MapSfxSlotCtrl, at comp+0x50
+    CachedEffect s_cached[kMaxCachedEffects];
+    size_t s_cached_count = 0;
+
+    bool IsSlotComponent(uintptr_t Component)
+    {
+        uintptr_t Vftable = 0;
+        return ReadPointer(Component + kSlotCtrl, Vftable) && Vftable == s_base + kSlotCtrlVftable;
+    }
+
+    void CaptureComponent(uintptr_t Slots)
+    {
+        uintptr_t Entry = 0;
+        if (!IsSlotComponent(Slots) || !ReadPointer(Slots + kSfxCache + kSfxCacheFirst, Entry))
         {
             return;
         }
-        unsigned Bonfires = 0, Spawned = 0, Alive = 0;
+        for (int Inner = 0; Entry != 0 && Inner < 64 && s_cached_count < kMaxCachedEffects; ++Inner)
+        {
+            CachedEffect Found;
+            uint16_t Flags = 0;
+            if (!ReadBytes(Entry + 0x14, &Found.Effect, 4) || !ReadBytes(Entry + 0x18, &Found.Slot, 2) ||
+                !ReadBytes(Entry + 0x1a, &Found.Dummy, 2) || !ReadBytes(Entry + 0x1c, &Flags, 2))
+            {
+                return;
+            }
+            if ((Flags & kSfxCacheValid) != 0)
+            {
+                Found.Component = Slots;
+                s_cached[s_cached_count++] = Found;
+            }
+            if (!ReadPointer(Entry, Entry))
+            {
+                return;
+            }
+        }
+    }
+
+    // Every loaded bonfire's cached map effects, written down.
+    void CaptureBonfires()
+    {
+        s_cached_count = 0;
+        const uintptr_t Manager = BonfireManager();
+        uintptr_t Component = 0;
+        if (Manager == 0 || !ReadPointer(Manager + kBonfireList, Component))
+        {
+            return;
+        }
         for (int Guard = 0; Component != 0 && Guard < 64; ++Guard)
         {
-            uintptr_t Entity = 0;
+            uintptr_t Entity = 0, Part = 0;
             if (!ReadPointer(Component + kComponentEntity, Entity))
             {
                 break;
             }
-            const uintptr_t Slots = Entity != 0 ? SlotComponentOf(Entity) : 0;
-            uintptr_t Entry = 0;
-            if (Slots != 0 && ReadPointer(Slots + kSfxCache + kSfxCacheFirst, Entry))
+            if (Entity != 0 && ReadPointer(Entity + 0x18, Part))
             {
-                ++Bonfires;
-                for (int Inner = 0; Entry != 0 && Inner < 64; ++Inner)
+                for (int Inner = 0; Part != 0 && Inner < 32; ++Inner)
                 {
-                    uint32_t Handle = 0, Effect = 0, Flags = 0;
-                    int16_t Slot = 0, Dummy = 0;
-                    if (!ReadBytes(Entry + 0x10, &Handle, 4) || !ReadBytes(Entry + 0x14, &Effect, 4) ||
-                        !ReadBytes(Entry + 0x18, &Slot, 2) || !ReadBytes(Entry + 0x1a, &Dummy, 2) ||
-                        !ReadBytes(Entry + 0x1c, &Flags, 4))
-                    {
-                        break;
-                    }
-                    if ((Flags & kSfxCacheValid) != 0)
-                    {
-                        if (Slot < 0 && Handle != 0xffffffffu && SlotHandleAlive(Slots, Handle))
-                        {
-                            ++Alive;
-                        }
-                        else
-                        {
-                            const uint32_t New = s_slot_spawn(Slots + kSlotCtrl, Slot, (int32_t)Effect, Dummy, 0, 0, 0);
-                            if (Slot < 0 && New != 0xffffffffu)
-                            {
-                                s_sfx_cache_set(Slots + kSfxCache, Entry, New);
-                            }
-                            ++Spawned;
-                        }
-                    }
-                    if (!ReadPointer(Entry, Entry))
+                    CaptureComponent(Part);
+                    if (!ReadPointer(Part + 0x10, Part))
                     {
                         break;
                     }
@@ -1346,8 +1330,28 @@ namespace
                 break;
             }
         }
-        Append(StringFormat("effects cleared: %u bonfire(s) with cached effects, %u spawned again, %u still alive\n",
-            Bonfires, Spawned, Alive));
+    }
+
+    // What was written down, spawned again through each component's slot
+    // controller. For a slot >= 0 the game's own spawn returns early when the
+    // slot already has its record; a slot < 0 is spawned only once per clear.
+    void RelightBonfires()
+    {
+        unsigned Spawned = 0, Gone = 0;
+        for (size_t i = 0; i < s_cached_count; ++i)
+        {
+            const CachedEffect& Effect = s_cached[i];
+            if (s_slot_spawn == nullptr || !IsSlotComponent(Effect.Component))
+            {
+                ++Gone;
+                continue;
+            }
+            s_slot_spawn(Effect.Component + kSlotCtrl, Effect.Slot, Effect.Effect, Effect.Dummy, 0, 0, 0);
+            ++Spawned;
+        }
+        Append(StringFormat("effects cleared: %zu bonfire effect(s) written down before, %u spawned again, %u whose component is gone\n",
+            s_cached_count, Spawned, Gone));
+        s_cached_count = 0;
     }
 
     // Whether the local character stands within a few metres of a loaded bonfire.
@@ -2587,6 +2591,13 @@ namespace
         s_seen_map = Map;
         s_seen_block = Block;
     }
+#endif
+}
+
+void DS2_BonfireInSession_CaptureFlames()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    CaptureBonfires();
 #endif
 }
 
