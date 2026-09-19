@@ -1318,3 +1318,55 @@ closest a clean leg came was 1911 of 2048 (Majula, Iron Keep and Brume Tower
 together, 19/09 11:53). A travel's peak is session map + map left + destination
 (+ any neighbour the game streams in), so the budget has to be checked on that
 sum, not on the number of maps.
+
+## 16. 19/09, evening — making room: park, let the map go, then load
+
+A travel's peak is session map + map left + destination, and the TargetManager
+holds 2048 (§15). When the destination does not fit, the travel now makes room
+the way a loading screen would, behind the black screen:
+
+1. **Budget** (`DS2_Backread::Targets`, `TargetCost`): each map's cost is
+   learned on load and kept in `DS2_TargetCosts.txt` (seeded with §15's
+   figures; 1400 for a map never seen). If in use + destination > 2048 − 150,
+   every 30 s hold goes and the map left is not held.
+2. **Park** (new host event `TravelPark`): the guests, then the host, wait at a
+   bonfire **of the session's map** (Majula) — teleport plus streamer focus.
+   The game never takes down the map under a player, and a map another
+   player's copy stands in is kept for it (letting it go under the copy killed
+   the guest on 15/09), so everyone has to leave it. A parking bonfire of any
+   other map is wrong: from Iron Keep the first one found was the neighbour
+   `0a110000`, the game kept the player in Iron Keep and no room was made.
+3. **Wait until the player is really off it**: streamer player map and current
+   part (`streamer+0x20`, freed by the teardown, read by ~25 functions) must
+   name another map for **6 s**. The map's objects keep their effects lit while
+   the game still has the player near them; a teardown 0.7 s after parking
+   orphaned four of them (8524, 218, 251 were Eleum Loyce's own object effects,
+   not common ones) and killed the host every time.
+4. **Lighting**: a character's lighting cube (render slot 9) is an entry of the
+   bank of the map it stands in (`owner+0x1a0`), cached raw on the character
+   (`+0x460/+0x468/+0x470`) and its model (`M=*(chr+0xf0)`: `+0x2a0` current,
+   `+0x2a8` previous, `+0x228/+0x230` drawn, `+0x4a0` last pushed), refreshed
+   only when the floor's region byte changes. Every character still holding an
+   entry of the map being taken down has it cleared (the players at parking,
+   anyone else — enemies, the guest's copy — on each update); otherwise the
+   renderer bound the freed cube 300 ms after the destination was requested
+   (`+0x833655`, AddRef on 7).
+5. **Release** through the normal let-go (parts given back, force byte cleared,
+   streamer allowed byte zeroed), then **2 s** before the destination is asked.
+6. **Effects of a DLC map's own bank** are killed **before** its teardown: the
+   ids its binders supplied (`SfxSystem+0x68`, path `sfx<5000+area>`, ids at
+   `+0xf0`), every live tree whose top effect is one of them. Killing orphans
+   after the teardown read freed memory and corrupted the heap; leaving them
+   (8519, a per-map emitter) crashed the effects update. A detour on the handle
+   unlink (`FUN_140a060f0`) during the teardown is the second net.
+7. **World rebuild resets everything**: a new local controller clears the
+   focus, the request, keeps, a pending unload and the parking. A guest parked
+   when the host died went home to Heide with the streamer still focused on
+   Majula: characters floating in a grey void.
+
+| build | legs | clean | tight travels (room made) |
+| --- | --- | --- | --- |
+| a3ee517 | 14 | 13 | Iron Keep → Brume parked at `0a110000`, no room; guest's TargetManager reached 2040 (trapped) |
+| c92eb71 | 20 | 20 | 10, every one parked in Majula |
+
+Cost: a travel that has to make room takes about 15 s behind the black screen.

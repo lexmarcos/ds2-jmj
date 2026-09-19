@@ -57,6 +57,10 @@ maps, one save, two players. Not checked:
 - **Other DLC maps.** The effects clear runs for every `0x32xxxxxx` teardown,
   but only Brume Tower has been left. Shulva and Frozen Eleum Loyce are the
   same shape and untested.
+- **Making room (§16) on other routes.** Validated on Eleum Loyce, Brume Tower,
+  Iron Keep, `0a170000` and the four bonfires, one save, two players; Shulva
+  and a session begun somewhere other than Majula are untried. A travel that
+  makes room waits ~15 s behind the black screen.
 - **The orphan kill on other DLC maps.** Only Brume Tower has been left;
   Shulva and Eleum Loyce may orphan other effects, or orphan them later than
   the teardown call.
