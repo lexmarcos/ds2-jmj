@@ -1151,39 +1151,70 @@ namespace
         s_fx_kill_node(Fx, Node);
     }
 
+    // The top of a node's tree.
+    uintptr_t TopOf(uintptr_t Node)
+    {
+        for (int Guard = 0; Guard < 64; ++Guard)
+        {
+            uintptr_t Parent = 0;
+            if (!ReadBytes(Node + 0x80, &Parent, 8) || Parent == 0)
+            {
+                return Node;
+            }
+            Node = Parent;
+        }
+        return Node;
+    }
+
     void HandleUnlinkHook(uintptr_t Handle)
     {
-        uintptr_t Manager = 0;
-        if (s_in_teardown.load() && s_unlink_depth == 0 && GetCurrentThreadId() == s_teardown_thread &&
-            ReadBytes(Handle + 0x08, &Manager, 8) && Manager == s_teardown_fx)
+        uintptr_t Manager = 0, Nodes[2] = {};
+        const bool Watch = s_in_teardown.load() && s_unlink_depth == 0 && GetCurrentThreadId() == s_teardown_thread &&
+            ReadBytes(Handle + 0x08, &Manager, 8) && Manager == s_teardown_fx;
+        if (Watch)
         {
-            ++s_unlink_depth;
-            for (const size_t At : { (size_t)0x10, (size_t)0x18 })
-            {
-                uintptr_t Node = 0, First = 0, Next = 1;
-                uint32_t Flags = 0;
-                if (!ReadBytes(Handle + At, &Node, 8) || Node == 0 ||
-                    !ReadBytes(Node + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0 ||
-                    !ReadBytes(Node + kFxNodeHandles, &First, 8) || First != Handle ||
-                    !ReadBytes(Handle + 0x28, &Next, 8) || Next != 0)
-                {
-                    continue;
-                }
-                uintptr_t RootPtr = 0;
-                uint32_t Id = 0;
-                if (ReadBytes(Node + 0xc8, &RootPtr, 8) && RootPtr != 0)
-                {
-                    ReadBytes(RootPtr + kFxRootId, &Id, 4);
-                }
-                KillTree(s_teardown_fx, Node);
-                if (++s_unlink_killed <= 24)
-                {
-                    s_unlink_ids += StringFormat(" %u", Id);
-                }
-            }
-            --s_unlink_depth;
+            ReadBytes(Handle + 0x10, &Nodes[0], 8);
+            ReadBytes(Handle + 0x18, &Nodes[1], 8);
         }
         s_original_unlink(Handle);
+        if (!Watch)
+        {
+            return;
+        }
+        // Checked after the unlink, on the tree's top: the handle can sit on
+        // a child, and a tree's handles can go in any order (19/09: 8519, a
+        // per-map emitter, was killed at one teardown and missed at the next
+        // by a test on the node's own list head, and the missed one took the
+        // host down 0.1 s later). A live top with no handle left is what the
+        // teardown just orphaned; the entry it came from is still alive here.
+        ++s_unlink_depth;
+        for (const uintptr_t Node : Nodes)
+        {
+            if (Node == 0)
+            {
+                continue;
+            }
+            const uintptr_t Top = TopOf(Node);
+            uint32_t Flags = 0;
+            uintptr_t Held = 1;
+            if (!ReadBytes(Top + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0 ||
+                !ReadBytes(Top + kFxNodeHandles, &Held, 8) || Held != 0)
+            {
+                continue;
+            }
+            uintptr_t RootPtr = 0;
+            uint32_t Id = 0;
+            if (ReadBytes(Top + 0xc8, &RootPtr, 8) && RootPtr != 0)
+            {
+                ReadBytes(RootPtr + kFxRootId, &Id, 4);
+            }
+            KillTree(s_teardown_fx, Top);
+            if (++s_unlink_killed <= 24)
+            {
+                s_unlink_ids += StringFormat(" %u", Id);
+            }
+        }
+        --s_unlink_depth;
     }
 
     bool TeardownHook(void* Owner)
