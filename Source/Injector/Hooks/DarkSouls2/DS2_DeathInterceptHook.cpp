@@ -549,6 +549,7 @@ namespace
     // player's copy standing near it has left the map too.
     float s_park_spot[3] = {};
     bool s_park_spot_valid = false;
+    uint32_t s_park_map = 0;
     constexpr float kParkNear = 40.0f;
     uint64_t s_keep_skipped = 0;
 
@@ -1662,6 +1663,7 @@ namespace
             s_parked = false;
             DS2_Backread::Unfocus();
         }
+        s_park_spot_valid = false;
         if (s_recovery.Loading || s_settle.Active)
         {
             DS2_Backread::Unfocus();
@@ -1912,6 +1914,7 @@ namespace
             {
                 memcpy(s_park_spot, Park, sizeof(Park));
                 s_park_spot_valid = true;
+                s_park_map = ParkMap;
                 memcpy(s_recovery.Target, Park, sizeof(Park));
                 TeleportLocal(Chr, s_recovery.Target);
                 // The streamer keeps the map of the last part the player
@@ -2316,16 +2319,30 @@ namespace
                 // contact can go on naming the map it left (measured 19/09,
                 // leaving Eleum Loyce for Brume Tower, the map stayed kept for
                 // 27 s with both players waiting in Majula).
+                //
+                // Nor is a map that is not loaded here: a copy cannot stand
+                // on it, and keeping it loads it. Measured 19/09: 25 ms after
+                // Eleum Loyce reached state 0, the copy's stale contact kept
+                // index 36, the game started loading it again, and the host
+                // died on a worker thread (+0x833655) 45 ms later.
                 const int32_t Going = DS2_Backread::Unloading();
                 float Where[3] = {};
                 bool AtPark = false;
-                if (Going >= 0 && s_park_spot_valid && ReadBytes((uintptr_t)Character + 0x90, Where, sizeof(Where)))
+                if (s_park_spot_valid && ReadBytes((uintptr_t)Character + 0x90, Where, sizeof(Where)))
                 {
                     const float Dx = Where[0] - s_park_spot[0], Dy = Where[1] - s_park_spot[1], Dz = Where[2] - s_park_spot[2];
                     AtPark = Dx * Dx + Dy * Dy + Dz * Dz <= kParkNear * kParkNear;
                 }
                 const int32_t Under = MapIndexUnder((uint8_t*)Character);
-                if (AtPark && Under == Going)
+                uint8_t UnderState = 0;
+                uint32_t UnderMask[4] = {};
+                const uint32_t UnderMap = Under >= 0 ? DS2_Backread::MapAt(Under) : 0;
+                const bool UnderLoaded = UnderMap != 0 && DS2_Backread::Query(UnderMap, UnderState, UnderMask) && UnderState != 0;
+                if (Under >= 0 && !UnderLoaded)
+                {
+                    // Not loaded here; nothing to hold.
+                }
+                else if (AtPark && Under >= 0 && (Under == Going || DS2_Backread::IndexOf(s_park_map) != Under))
                 {
                     if (s_keep_skipped++ % 300 == 0)
                     {
