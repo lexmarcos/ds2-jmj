@@ -1325,9 +1325,89 @@ namespace
         --s_unlink_depth;
     }
 
+    // The sign areas the game never purges. *(ctx+0x90) is the SignManager
+    // and *(+0x80) its SignEventAreaManager: a vector (begin +0x10, end
+    // +0x18) of MapGeneralLocation objects, each with the map's owner index
+    // at +0x50 and a pointer into that map's location data at +0x58. Its
+    // per-frame sweep (FUN_140211350 -> FUN_1402052c0 -> FUN_14020c820 ->
+    // FUN_1403c3b60) reads byte +0x18 of that pointer. The teardown's own
+    // purge, FUN_140210ad0, is a bare `ret`: nothing removes a released map's
+    // entries. In the unmodded game maps only go through a loading screen,
+    // which rebuilds everything; with the travel they stay, and the guest
+    // died every time on the same leg (+0x3c3b7f, reading 0x18) the moment
+    // the map being built reused that memory. Entries of the map going down,
+    // and any whose object no longer looks like one, are dropped here.
+    constexpr size_t kSignManager = 0x90;
+    constexpr size_t kSignAreas = 0x80;
+    constexpr size_t kAreasBegin = 0x10;
+    constexpr size_t kAreasEnd = 0x18;
+    constexpr size_t kAreaOwnerIndex = 0x50;
+    constexpr size_t kLocationVftableFirst = 0x10c7d50;
+    constexpr size_t kLocationVftableLast = 0x10c9090;
+    constexpr size_t kLocationVftableA = 0x10e8528;
+    constexpr size_t kLocationVftableB = 0x10f0158;
+
+    bool LooksLikeLocation(uintptr_t Entry)
+    {
+        uintptr_t Vftable = 0;
+        if (Entry == 0 || (Entry & 7) != 0 || !ReadBytes(Entry, &Vftable, 8) || Vftable < s_base)
+        {
+            return false;
+        }
+        const size_t At = Vftable - s_base;
+        return (At >= kLocationVftableFirst && At <= kLocationVftableLast) || At == kLocationVftableA || At == kLocationVftableB;
+    }
+
+    unsigned PurgeSignAreas(int32_t Index)
+    {
+        uintptr_t Context = 0, Signs = 0, Areas = 0, Begin = 0, End = 0;
+        if (!ReadBytes(s_base + kContextOffset, &Context, 8) || Context == 0 ||
+            !ReadBytes(Context + kSignManager, &Signs, 8) || Signs == 0 ||
+            !ReadBytes(Signs + kSignAreas, &Areas, 8) || Areas == 0 ||
+            !ReadBytes(Areas + kAreasBegin, &Begin, 8) || !ReadBytes(Areas + kAreasEnd, &End, 8) ||
+            Begin == 0 || End < Begin || End - Begin > 8 * 4096)
+        {
+            return 0;
+        }
+        unsigned Dropped = 0;
+        uintptr_t Write = Begin;
+        for (uintptr_t At = Begin; At < End; At += 8)
+        {
+            uintptr_t Entry = 0;
+            int32_t Owner = -1;
+            const bool Read = ReadBytes(At, &Entry, 8);
+            const bool Sound = Read && LooksLikeLocation(Entry) && ReadBytes(Entry + kAreaOwnerIndex, &Owner, 4);
+            if (!Sound || Owner == Index)
+            {
+                ++Dropped;
+                continue;
+            }
+            if (Write != At)
+            {
+                WriteBytes(Write, &Entry, 8);
+            }
+            Write += 8;
+        }
+        if (Dropped != 0)
+        {
+            WriteBytes(Areas + kAreasEnd, &Write, 8);
+        }
+        return Dropped;
+    }
+
     bool TeardownHook(void* Owner)
     {
         uint32_t Map = 0;
+        int32_t Index = -1;
+        if (Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerIndexField, &Index, sizeof(Index)) && Index >= 0)
+        {
+            const unsigned Dropped = PurgeSignAreas(Index);
+            if (Dropped != 0)
+            {
+                Append(StringFormat("%s  teardown [%d]: %u sign area(s) of it (or already broken) dropped; the game's own purge is empty\n",
+                    Clock().c_str(), Index, Dropped));
+            }
+        }
         if (Owner == nullptr || !ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) ||
             (Map & 0xff000000u) != 0x32000000u || s_fx_kill_subtree == nullptr || s_fx_kill_node == nullptr)
         {
