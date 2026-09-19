@@ -3223,7 +3223,23 @@ void DS2_BonfireInSession_Tick()
             s_open_vote.Active = false;
         }
         s_proposal.Active = false;
-        if (s_original_import != nullptr && s_travel_build != nullptr)
+        // The probe loads the destination at once, beside whatever this
+        // machine still holds. When that would not fit the target budget the
+        // travel itself goes instead, which makes room before it loads
+        // (19/09: the guest probed Eleum Loyce with 0a170000 and Majula still
+        // in, 2496 targets, and the TargetManager was full).
+        uint64_t InUse = 0;
+        uint8_t DestState = 0;
+        uint32_t DestMask[4] = {};
+        const bool DestIn = DS2_Backread::Query(Said.Map, DestState, DestMask) && DestState == 5;
+        const uint32_t DestCost = DestIn ? 0 : DS2_Backread::TargetCost(Said.Map);
+        const bool Tight = DS2_Backread::Targets(InUse) && InUse + DestCost > DS2_Backread::TargetLimit();
+        if (Tight)
+        {
+            Append(StringFormat("convidado: %llu targets in use + %u for %08x do not fit; no probe, the travel makes room first\n",
+                (unsigned long long)InUse, DestCost, Said.Map));
+        }
+        if (!Tight && s_original_import != nullptr && s_travel_build != nullptr)
         {
             // Ask the streamer for the map and watch its load state; the road
             // is chosen from the answer, below, with nobody moved yet.

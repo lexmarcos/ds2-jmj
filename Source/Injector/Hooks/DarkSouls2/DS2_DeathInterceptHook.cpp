@@ -2168,6 +2168,15 @@ namespace
         float Park[3] = {};
         uint32_t ParkMap = 0;
         const uint32_t Here = CurrentMap();
+        // Already on the session's map: stay. Looking for a bonfire of
+        // another map from there sent the guest into Eleum Loyce, the map the
+        // host was taking down (19/09).
+        if (DS2_BonfireInSession_IsSessionMap(Here))
+        {
+            DS2_Backread::DropKeeps();
+            Append(StringFormat("%s  park: already on the session's map %08x; staying\n", Clock().c_str(), Here));
+            return;
+        }
         if (!FindParking(Here, 0, Park, ParkMap))
         {
             Append(StringFormat("%s  park: no bonfire of another loaded map; staying in %08x\n", Clock().c_str(), Here));
@@ -2178,6 +2187,19 @@ namespace
         ResetLighting(Chr);
         memset(s_lit_copies, 0, sizeof(s_lit_copies));
         s_parked = true;
+        memcpy(s_park_spot, Park, sizeof(Park));
+        s_park_spot_valid = true;
+        s_park_map = ParkMap;
+        // The map left goes on this machine too, as on the host's: its holds
+        // are dropped and it is taken down once the player has been off it
+        // for a while. Kept, it was still loaded when the host's destination
+        // came in (0a170000 + Eleum Loyce + Majula, 2496 targets).
+        DS2_Backread::DropKeeps();
+        const int32_t Left = DS2_Backread::IndexOf(Here);
+        if (Left >= 0)
+        {
+            DS2_Backread::Unload(Left);
+        }
         Append(StringFormat("%s  park: left %08x for a bonfire of %08x (%.3f, %.3f, %.3f) %s, while the host makes room\n",
             Clock().c_str(), Here, ParkMap, Park[0], Park[1], Park[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
     }
