@@ -43,6 +43,9 @@ for leg in "${legs[@]}"; do
   e1=$(count "$I1/DS2_Crash.log" excecao); e2=$(count "$I2/DS2_Crash.log" excecao)
   f1=$(count "$I1/DS2_Backread.log" "FALHA APARADA"); f2=$(count "$I2/DS2_Backread.log" "FALHA APARADA")
   b1=$(wc -l < "$HI/DS2_Bonfire.log")
+  # A travel costs nothing: a death billed during the leg means the landing
+  # was taken for a real death, even when the leg then reports an arrival.
+  c1=$(count "$I1/DS2_Death.log" "custos da morte"); c2=$(count "$I2/DS2_Death.log" "custos da morte")
   echo "=== $NAME ($MAP/$FIRE) host=$HOST ==="
   printf 'votar %s %s\n' "$MAP" "$FIRE" > "$HI/DS2_Bonfire.req"
   sleep 3
@@ -64,10 +67,11 @@ for leg in "${legs[@]}"; do
   games=$($D status 2>&1 | grep "processos do jogo" | grep -o "[0-9]\+" | wc -l)
   sess=$($D session 2>&1 | grep -c "p2pSessionVerified: Some(true)")
   arrived=$(tail -n +$((b1+1)) "$HI/DS2_Bonfire.log" | grep -ac "host: cheguei na fogueira")
-  echo "  games=$games session=$sess arrived=$arrived | exceptions host +$((n1-e1)) guest +$((n2-e2)) | trapped host +$((g1-f1)) guest +$((g2-f2))"
+  d1=$(count "$I1/DS2_Death.log" "custos da morte"); d2=$(count "$I2/DS2_Death.log" "custos da morte")
+  echo "  games=$games session=$sess arrived=$arrived | exceptions host +$((n1-e1)) guest +$((n2-e2)) | trapped host +$((g1-f1)) guest +$((g2-f2)) | billed deaths 1:+$((d1-c1)) 2:+$((d2-c2))"
   if [ "$games" = 2 ] && [ "$sess" = 1 ] && [ "$arrived" -ge 1 ]; then
     ok=$((ok+1))
-    if [ $((n1-e1)) = 0 ] && [ $((n2-e2)) = 0 ] && [ $((g1-f1)) = 0 ] && [ $((g2-f2)) = 0 ]; then
+    if [ $((n1-e1)) = 0 ] && [ $((n2-e2)) = 0 ] && [ $((g1-f1)) = 0 ] && [ $((g2-f2)) = 0 ] && [ $((d1-c1)) = 0 ] && [ $((d2-c2)) = 0 ]; then
       clean=$((clean+1)); echo "  CLEAN"
     else
       echo "  ARRIVED WITH FAULTS"; [ "${KEEP_GOING:-0}" = 1 ] || break

@@ -514,6 +514,15 @@ namespace
     };
     Recovery s_recovery;
 
+    // A fall in the first seconds after a travel ended is the travel's, not a
+    // death. Measured 18/09 22:29: the guest stood on Iron Keep's collision
+    // at Threshold Bridge, the travel ended, and half a second later the
+    // character fell through and the death was billed and respawned. The
+    // ground it first touched was not the ground that stayed.
+    constexpr ULONGLONG kAfterTravelMs = 3000;
+    ULONGLONG s_travel_done_ms = 0;
+    float s_travel_target[3] = {};
+
     // A travel asked for by DS2_BonfireInSessionHook, from the game's thread;
     // taken by the local player's next frame.
     std::atomic<bool> s_go_pending{ false };
@@ -1878,6 +1887,18 @@ namespace
             return;
         }
 
+        // Down, but the landing may have zeroed the HP on this very frame: the
+        // HP source runs before this and the pending byte is checked after, so
+        // ending here would make that death look new, and it was billed as one
+        // (18/09 22:24 and 22:36, Threshold Bridge: hollowing and a respawn in
+        // Majula right after "cheguei"). The cancel below still sees the
+        // recovery and treats it as the same death; the next frame ends it.
+        int32_t HpNow = 0;
+        if (Data[kPending] != 0 || (ReadBytes((uintptr_t)Chr + kHp, &HpNow, sizeof(HpNow)) && HpNow <= 0))
+        {
+            return;
+        }
+
         uint64_t Bits = 0;
         const bool HadBits = ReadBytes((uintptr_t)Data + kFallBits, &Bits, sizeof(Bits));
         const uint64_t Before = Bits;
@@ -1912,6 +1933,8 @@ namespace
         s_recovery.Active = false;
         if (s_go_moving.exchange(false))
         {
+            s_travel_done_ms = GetTickCount64();
+            memcpy(s_travel_target, s_recovery.Target, sizeof(s_travel_target));
             // A bonfire of the map already under the character has no settle
             // to run, so this is the arrival. Every other travel is judged by
             // ContinueSettle, on the physics contact.
@@ -2232,7 +2255,9 @@ namespace
                 // back is the same death still being held: a fall zeroes the HP
                 // on every frame the character is in the air.
                 const bool NewDeath = !s_recovery.Active;
-                if (Mode == Respawn && NewDeath)
+                const bool AfterTravel = NewDeath && Fell && s_travel_done_ms != 0 &&
+                    GetTickCount64() - s_travel_done_ms < kAfterTravelMs;
+                if (Mode == Respawn && NewDeath && !AfterTravel)
                 {
                     ApplyDeathCosts(Chr, Data);
                     if (Enabled(FeatureBanner))
@@ -2269,7 +2294,21 @@ namespace
                         Fell ? " queda" : "", Hp, Max, Params.c_str()));
                 }
 
-                if (NewDeath && (Mode == Respawn || Fell))
+                if (AfterTravel)
+                {
+                    Recovery Next;
+                    Next.Active = true;
+                    Next.Why = "queda depois da viagem";
+                    Next.Where = "destino da viagem";
+                    memcpy(Next.Target, s_travel_target, sizeof(Next.Target));
+                    s_recovery = Next;
+                    const bool Moved = TeleportLocal(Chr, s_recovery.Target);
+                    Append(StringFormat("%s  fall %llu ms after the travel ended: the travel's, not a death; back to (%.3f, %.3f, %.3f) %s\n",
+                        Clock().c_str(), (unsigned long long)(GetTickCount64() - s_travel_done_ms),
+                        s_travel_target[0], s_travel_target[1], s_travel_target[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
+                    s_travel_done_ms = 0;
+                }
+                else if (NewDeath && (Mode == Respawn || Fell))
                 {
                     if (Mode == Respawn)
                     {
