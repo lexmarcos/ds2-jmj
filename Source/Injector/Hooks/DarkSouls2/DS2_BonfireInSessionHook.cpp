@@ -155,8 +155,28 @@ namespace
     constexpr size_t kHudDropOffset = 0x4fe920;
     constexpr uint8_t kHudDropPrologue[] = { 0x80, 0xb9, 0x0f, 0x03, 0x00, 0x00, 0x00, 0x75, 0x12, 0x8b, 0x81, 0x1c, 0x03, 0x00, 0x00 };
     constexpr uint32_t kHudMask = 0xffdffbff;
+    // The fade to black the game's own warp starts before anything else
+    // (FUN_1401c2a80 -> FUN_14039a510(ctx, seconds, 1), FUN_140b24000 on the
+    // fade object at ctx+0x1160: {alpha +0, target +4, remaining +8}). Its
+    // loader waits for the fade to finish, and four frames more, before it
+    // raises the curtain above (FUN_140481900 state 2). Without it, measured
+    // 19/09 on both players, the curtain was only letterbox bars: the world
+    // kept drawing and the camera flew across the map to the bonfire. With
+    // flag 1 the black quad is drawn over the front end, so the loading
+    // screen's own art stays under it; black is what matters here.
+    constexpr size_t kFadeOutOffset = 0x39a510;
+    constexpr size_t kFadeInOffset = 0x39a4d0;
+    constexpr uint8_t kFadePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x89, 0x60, 0x11, 0x00, 0x00 };
+    constexpr size_t kFadeObject = 0x1160;
+    constexpr float kFadeSeconds = 0.3f;
+    // Nobody moves before the screen is black, but never wait on it longer.
+    constexpr ULONGLONG kFadeWaitMs = 1500;
+    // Four frames of black before moving, as the game's loader waits.
+    constexpr ULONGLONG kFadeBlackMs = 70;
     // Never leave the screen black: the curtain comes down anyway after this.
-    constexpr ULONGLONG kCurtainGiveUpMs = 25000;
+    // Longer than the travel's own give-up (1800 frames, 30 s at 60 fps), so
+    // a slow load never teleports the character in plain view.
+    constexpr ULONGLONG kCurtainGiveUpMs = 40000;
     // A moment more after arriving, so the map left behind goes away behind it.
     constexpr ULONGLONG kCurtainHoldMs = 1200;
     // The game's own "the world is in", what its load machine waits for
@@ -560,6 +580,14 @@ namespace
     using FrontEndOnly_p = void(*)(void* FrontEnd);
     using FrontEndMask_p = void(*)(void* FrontEnd, uint32_t Mask);
     FrontEndOnly_p s_loading_open = nullptr;
+    using Fade_p = void(*)(void* Context, float Seconds, int OnTop);
+    Fade_p s_fade_out = nullptr;
+    Fade_p s_fade_in = nullptr;
+    ULONGLONG s_black_since = 0;
+    // A guest that said yes goes black at once instead of when the host has
+    // arrived: before, for 0.5 to 1.8 s it watched the host's copy vanish
+    // with its HUD on. Cleared when its own travel starts, or on a cancel.
+    bool s_curtain_for_vote = false;
     FrontEndOnly_p s_loading_close = nullptr;
     FrontEndMask_p s_hud_hide = nullptr;
     FrontEndMask_p s_hud_show = nullptr;
@@ -1266,6 +1294,11 @@ namespace
         const bool Screen = s_loading_open != nullptr && ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0;
         if (Up)
         {
+            if (s_fade_out != nullptr)
+            {
+                s_fade_out((void*)Context, kFadeSeconds, 1);
+            }
+            s_black_since = 0;
             memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
             s_curtain((void*)Switch, 1);
             if (Screen && !s_loading_screen)
@@ -1286,6 +1319,10 @@ namespace
             s_loading_screen = false;
             s_curtain((void*)Switch, 0);
             memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+            if (s_fade_in != nullptr)
+            {
+                s_fade_in((void*)Context, kFadeSeconds, 1);
+            }
         }
         s_curtain_up = Up;
         s_curtain_since = GetTickCount64();
@@ -1321,6 +1358,28 @@ namespace
         return true;
     }
 
+    // True once the fade has covered the screen for a few frames, or when
+    // there is no fade to wait for, or it has taken too long.
+    bool ScreenBlack(ULONGLONG Now)
+    {
+        uintptr_t Context = 0, Fade = 0;
+        float State[3] = {};
+        const bool Black = s_fade_out == nullptr ||
+            !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kFadeObject, Fade) || Fade == 0 ||
+            (ReadBytes(Fade, State, sizeof(State)) && State[0] >= 0.999f && State[2] <= 0.0f);
+        if (!Black)
+        {
+            s_black_since = 0;
+            return s_curtain_up && Now - s_curtain_since > kFadeWaitMs;
+        }
+        if (s_black_since == 0)
+        {
+            s_black_since = Now;
+        }
+        return Now - s_black_since >= kFadeBlackMs;
+    }
+
     void KeepCurtain(ULONGLONG Now)
     {
         if (!s_curtain_up)
@@ -1328,7 +1387,7 @@ namespace
             return;
         }
         // Nobody leaves the loading screen while the group is still gathering.
-        const bool Waiting = s_barrier.Active || s_await.Active;
+        const bool Waiting = s_barrier.Active || s_await.Active || s_curtain_for_vote || s_probe.Active;
         const bool Arrived = !s_go.Active && !DS2_DeathIntercept::Moving() && !Waiting;
         if (!Arrived)
         {
@@ -1404,6 +1463,7 @@ namespace
     void StartGo(uint32_t Map, uint16_t Bonfire)
     {
         const bool Closed = CloseBonfireMenu();
+        s_curtain_for_vote = false;
         if (!s_curtain_up)
         {
             Curtain(true);
@@ -2258,6 +2318,16 @@ bool DS2_BonfireInSessionHook::Install(Injector& injector)
         {
             Error("[DS2BonfireInSession] a tela de carregamento do jogo nao tem o codigo esperado; a cortina so desliga o desenho");
         }
+        if (Matches(Base + kFadeOutOffset, kFadePrologue, sizeof(kFadePrologue)) &&
+            Matches(Base + kFadeInOffset, kFadePrologue, sizeof(kFadePrologue)))
+        {
+            s_fade_out = (Fade_p)(Base + kFadeOutOffset);
+            s_fade_in = (Fade_p)(Base + kFadeInOffset);
+        }
+        else
+        {
+            Error("[DS2BonfireInSession] the game's fade is not the expected code; the travel is not faded to black");
+        }
         s_original_inner_script = (Script_p)(Base + kInnerScriptOffset);
         s_original_pick = (Pick_p)(Base + kPickOffset);
         s_choice = (Choice_p)(Base + kChoiceOffset);
@@ -2676,7 +2746,7 @@ void DS2_BonfireInSession_Tick()
         }
     }
 
-    if (s_go.Active && Now >= s_go.At)
+    if (s_go.Active && Now >= s_go.At && ScreenBlack(Now))
     {
         s_go.Active = false;
         DS2_DeathIntercept::GoToBonfire(s_go.Map, s_go.Bonfire);
@@ -3039,6 +3109,10 @@ void DS2_BonfireInSession_Tick()
                 DS2_CoopChannel::SendGuestAnswer(s_open_vote.Vote, Yes);
                 s_answered_vote = s_open_vote.Vote;
                 s_answered_yes = Yes;
+                if (Yes && !s_curtain_up && Curtain(true))
+                {
+                    s_curtain_for_vote = true;
+                }
             }
             Append(StringFormat("%s: votacao %u respondida %s (botao %llu%s)\n", s_open_vote.Host ? "host" : "convidado", s_open_vote.Vote,
                 Yes ? "sim" : "nao", (unsigned long long)Button, Ours ? "" : ", a caixa foi trocada"));
@@ -3061,6 +3135,10 @@ void DS2_BonfireInSession_Tick()
             DS2_CoopChannel::SendGuestAnswer(Vote, true);
             s_answered_vote = Vote;
             s_answered_yes = true;
+            if (!s_curtain_up && Curtain(true))
+            {
+                s_curtain_for_vote = true;
+            }
             Append(StringFormat("convidado: votacao %u e a minha proposta; respondo sim\n", Vote));
         }
         else
@@ -3071,6 +3149,14 @@ void DS2_BonfireInSession_Tick()
     }
     if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said))
     {
+        if (s_curtain_for_vote)
+        {
+            s_curtain_for_vote = false;
+            if (s_curtain_up && !s_go.Active)
+            {
+                Curtain(false);
+            }
+        }
         const Cancel Why = (Cancel)Said.Id;
         const uint16_t Bonfire = (uint16_t)Said.Type;
         const bool Mine = s_proposal.Active && s_proposal.Bonfire == Bonfire;
