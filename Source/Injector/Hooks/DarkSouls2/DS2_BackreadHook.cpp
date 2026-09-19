@@ -1111,123 +1111,78 @@ namespace
     uintptr_t s_orphans_before[kMaxOrphans];
     uintptr_t s_orphans_after[kMaxOrphans];
 
-    // The effect nodes the dying map's own entities hold, read before the
-    // teardown: owner+0x160 is the entity container (MapEntity* array at
-    // +0x10, int16 count at +0x2c); each entity's components are a list at
-    // +0x18 (next +0x10); a slot component has a MapSfxSlotCtrl at +0x50,
-    // whose list A (+0x20, entries next at +0x78) holds two FX handles
-    // inline at +0x08 and +0x38 and list B (+0x30, next at +0xc8) two at
-    // +0x58 and +0x88; a handle's node is at its +0x10.
-    //
-    // Only these may be killed after the teardown. Measured 19/09: leaving
-    // Eleum Loyce with the players waiting in Majula, the teardown also left
-    // ids 218 and 251 without a holder - common effects, not the map's -
-    // and three teardowns of three that killed them took the host down 90 ms
-    // later with a corrupted heap; the ones that killed only the map's own
-    // 8519 were clean.
-    constexpr size_t kOwnerEntities = 0x160;
-    constexpr size_t kSlotCtrlVftableOffset = 0x10e86d8;
-    constexpr size_t kMaxMapNodes = 4096;
-    uintptr_t s_map_nodes[kMaxMapNodes];
-    size_t s_map_node_count = 0;
-    uintptr_t s_map_handles[kMaxMapNodes];
-    size_t s_map_handle_count = 0;
-    size_t s_map_handles_foreign = 0;
-    uintptr_t s_collect_fx = 0;
+    // FUN_140a060f0, `void(handle)`: unlinks an FX handle (FXCGSfxCtrl:
+    // +0x08 FXManager, +0x10 node, +0x18 second node, +0x20/+0x28 links in the
+    // node's list at +0xf8). During a map's teardown the slot controllers
+    // hard-kill their effects and then unlink the handles, except entries
+    // flagged 0x20000, which are only unlinked: those trees keep running with
+    // nobody holding them and read the map's memory once it is gone - the
+    // "effect outlives its map" crash. Killing them after the teardown read
+    // memory the teardown had already freed (heap corruption, 19/09, three
+    // of three); clearing every effect before it took the arrival map's
+    // flames. So the kill happens here, at the unlink, on the teardown's own
+    // thread, while the entry is still alive, and only when this handle is
+    // the node's last holder: a tree another map also holds survives.
+    constexpr size_t kHandleUnlinkOffset = 0xa060f0;
+    constexpr uint8_t kHandleUnlinkBytes[] = { 0x48, 0x8b, 0x51, 0x10, 0x48, 0x8d, 0x05, 0x7d, 0x54, 0x78, 0x00, 0x45, 0x33, 0xc0 };
+    using HandleUnlink_p = void(*)(uintptr_t Handle);
+    HandleUnlink_p s_original_unlink = nullptr;
+    std::atomic<bool> s_in_teardown{ false };
+    DWORD s_teardown_thread = 0;
+    uintptr_t s_teardown_fx = 0;
+    int s_unlink_depth = 0;
+    unsigned s_unlink_killed = 0;
+    std::string s_unlink_ids;
 
-    // A handle counts only when it names this FXManager at +0x08.
-    void AddMapNode(uintptr_t Handle)
+    void KillTree(uintptr_t Fx, uintptr_t Node)
+    {
+        uintptr_t Child = 0;
+        ReadBytes(Node + kFxNodeChild, &Child, 8);
+        for (int Guard = 0; Child != 0 && Guard < 256; ++Guard)
+        {
+            uintptr_t Next = 0;
+            ReadBytes(Child + kFxNodeSibling, &Next, 8);
+            s_fx_kill_subtree(Fx, Child);
+            s_fx_kill_node(Fx, Child);
+            Child = Next;
+        }
+        s_fx_kill_node(Fx, Node);
+    }
+
+    void HandleUnlinkHook(uintptr_t Handle)
     {
         uintptr_t Manager = 0;
-        if (!ReadBytes(Handle + 0x08, &Manager, 8) || Manager == 0)
+        if (s_in_teardown.load() && s_unlink_depth == 0 && GetCurrentThreadId() == s_teardown_thread &&
+            ReadBytes(Handle + 0x08, &Manager, 8) && Manager == s_teardown_fx)
         {
-            return;
-        }
-        if (Manager != s_collect_fx)
-        {
-            ++s_map_handles_foreign;
-            return;
-        }
-        if (s_map_handle_count < kMaxMapNodes)
-        {
-            s_map_handles[s_map_handle_count++] = Handle;
-        }
-        for (const size_t At : { (size_t)0x10, (size_t)0x18 })
-        {
-            uintptr_t Node = 0;
-            if (ReadBytes(Handle + At, &Node, 8) && Node != 0 && s_map_node_count < kMaxMapNodes)
+            ++s_unlink_depth;
+            for (const size_t At : { (size_t)0x10, (size_t)0x18 })
             {
-                bool Seen = false;
-                for (size_t i = 0; i < s_map_node_count && !Seen; ++i)
+                uintptr_t Node = 0, First = 0, Next = 1;
+                uint32_t Flags = 0;
+                if (!ReadBytes(Handle + At, &Node, 8) || Node == 0 ||
+                    !ReadBytes(Node + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0 ||
+                    !ReadBytes(Node + kFxNodeHandles, &First, 8) || First != Handle ||
+                    !ReadBytes(Handle + 0x28, &Next, 8) || Next != 0)
                 {
-                    Seen = s_map_nodes[i] == Node;
+                    continue;
                 }
-                if (!Seen)
+                uintptr_t RootPtr = 0;
+                uint32_t Id = 0;
+                if (ReadBytes(Node + 0xc8, &RootPtr, 8) && RootPtr != 0)
                 {
-                    s_map_nodes[s_map_node_count++] = Node;
+                    ReadBytes(RootPtr + kFxRootId, &Id, 4);
+                }
+                KillTree(s_teardown_fx, Node);
+                if (++s_unlink_killed <= 24)
+                {
+                    s_unlink_ids += StringFormat(" %u", Id);
                 }
             }
+            --s_unlink_depth;
         }
+        s_original_unlink(Handle);
     }
-
-    void CollectMapNodes(uintptr_t Owner, uintptr_t Fx)
-    {
-        s_map_node_count = 0;
-        s_map_handle_count = 0;
-        s_map_handles_foreign = 0;
-        s_collect_fx = Fx;
-        uintptr_t Container = 0, Array = 0;
-        int16_t Count = 0;
-        if (!ReadBytes(Owner + kOwnerEntities, &Container, 8) || Container == 0 ||
-            !ReadBytes(Container + 0x10, &Array, 8) || Array == 0 ||
-            !ReadBytes(Container + 0x2c, &Count, 2) || Count <= 0)
-        {
-            return;
-        }
-        for (int e = 0; e < Count && e < 8192; ++e)
-        {
-            uintptr_t Entity = 0, Component = 0;
-            if (!ReadBytes(Array + e * 8, &Entity, 8) || Entity == 0 || !ReadBytes(Entity + 0x18, &Component, 8))
-            {
-                continue;
-            }
-            for (int c = 0; Component != 0 && c < 64; ++c)
-            {
-                uintptr_t Vftable = 0;
-                if (ReadBytes(Component + 0x50, &Vftable, 8) && Vftable == s_base + kSlotCtrlVftableOffset)
-                {
-                    const uintptr_t Ctrl = Component + 0x50;
-                    uintptr_t Entry = 0;
-                    ReadBytes(Ctrl + 0x20, &Entry, 8);
-                    for (int k = 0; Entry != 0 && k < 256; ++k)
-                    {
-                        AddMapNode(Entry + 0x08);
-                        AddMapNode(Entry + 0x38);
-                        if (!ReadBytes(Entry + 0x78, &Entry, 8))
-                        {
-                            break;
-                        }
-                    }
-                    Entry = 0;
-                    ReadBytes(Ctrl + 0x30, &Entry, 8);
-                    for (int k = 0; Entry != 0 && k < 256; ++k)
-                    {
-                        AddMapNode(Entry + 0x58);
-                        AddMapNode(Entry + 0x88);
-                        if (!ReadBytes(Entry + 0xc8, &Entry, 8))
-                        {
-                            break;
-                        }
-                    }
-                }
-                if (!ReadBytes(Component + 0x10, &Component, 8))
-                {
-                    break;
-                }
-            }
-        }
-    }
-
 
     bool TeardownHook(void* Owner)
     {
@@ -1244,56 +1199,14 @@ namespace
             return s_original_teardown(Owner);
         }
         DumpEffects("before the teardown");
-        CollectMapNodes((uintptr_t)Owner, Fx);
-
-        // Killed **before** the teardown, while their parameter blocks still
-        // exist: the kill itself reads them (FUN_140a11190 reads
-        // *(node+0x50)+0x10), and the teardown frees them. Killing after it
-        // (a1feffc) read freed blocks - clean with one orphan, heap corruption
-        // with four (19/09, three of three) - and not killing left the update
-        // reading them. The handles are then emptied the way FUN_140a067c0
-        // would, so the teardown's own stop finds nothing to stop.
-        unsigned Killed = 0;
-        std::string Ids;
-        for (size_t i = 0; i < s_map_node_count; ++i)
-        {
-            const uintptr_t Node = s_map_nodes[i];
-            uint32_t Flags = 0;
-            if (!ReadBytes(Node + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0)
-            {
-                continue;
-            }
-            uintptr_t RootPtr = 0;
-            uint32_t Id = 0;
-            if (ReadBytes(Node + 0xc8, &RootPtr, 8) && RootPtr != 0)
-            {
-                ReadBytes(RootPtr + kFxRootId, &Id, 4);
-            }
-            uintptr_t Child = 0;
-            ReadBytes(Node + kFxNodeChild, &Child, 8);
-            for (int Guard = 0; Child != 0 && Guard < 256; ++Guard)
-            {
-                uintptr_t Next = 0;
-                ReadBytes(Child + kFxNodeSibling, &Next, 8);
-                s_fx_kill_subtree(Fx, Child);
-                s_fx_kill_node(Fx, Child);
-                Child = Next;
-            }
-            s_fx_kill_node(Fx, Node);
-            ++Killed;
-            if (Killed <= 24)
-            {
-                Ids += StringFormat(" %u", Id);
-            }
-        }
-        const uint64_t Zero = 0;
-        for (size_t i = 0; i < s_map_handle_count; ++i)
-        {
-            WriteBytes(s_map_handles[i] + 0x10, &Zero, 8);
-            WriteBytes(s_map_handles[i] + 0x18, &Zero, 8);
-        }
         const size_t Before = Orphans(Fx, s_orphans_before, kMaxOrphans);
+        s_teardown_fx = Fx;
+        s_teardown_thread = GetCurrentThreadId();
+        s_unlink_killed = 0;
+        s_unlink_ids.clear();
+        s_in_teardown.store(s_original_unlink != nullptr);
         const bool Result = s_original_teardown(Owner);
+        s_in_teardown.store(false);
         const size_t After = Orphans(Fx, s_orphans_after, kMaxOrphans);
         std::string Left;
         size_t New = 0;
@@ -1320,8 +1233,8 @@ namespace
                 Left += StringFormat(" %u", Id);
             }
         }
-        Append(StringFormat("%s  mapa %08x teardown: %zu handle(s) of its entities (%zu naming another manager), %u live effect(s) killed before it (ids%s); %zu left without a holder after it (ids%s), not touched\n",
-            Clock().c_str(), Map, s_map_handle_count, s_map_handles_foreign, Killed, Ids.empty() ? " none" : Ids.c_str(),
+        Append(StringFormat("%s  mapa %08x teardown: %u effect(s) killed as their last holder let go (ids%s); %zu still without a holder after it (ids%s), not touched\n",
+            Clock().c_str(), Map, s_unlink_killed, s_unlink_ids.empty() ? " none" : s_unlink_ids.c_str(),
             New, Left.empty() ? " none" : Left.c_str()));
         return Result;
     }
@@ -1365,6 +1278,26 @@ namespace
             // unforced, unwanted and off the player's map, Eleum Loyce sat at
             // state 5 for 15 s). The normal release gives them back and drops
             // the force byte 700 ms later.
+            // The streamer's current part (+0x20) changes only when the
+            // player stands on a part, and after a teleport it can still be
+            // one of this map's; every frame ~25 readers go through it, and
+            // the teardown frees it. So the map goes only once it points
+            // elsewhere, or after 5 s it is cleared (null reads as "none").
+            uintptr_t Current = 0, Info = 0;
+            uint32_t CurrentMap = 0;
+            const bool OnIt = ReadPointer(Streamer + 0x20, Current) && Current != 0 &&
+                ReadPointer(Current + 0x28, Info) && Info != 0 &&
+                ReadBytes(Info + 8, &CurrentMap, 4) && CurrentMap == Map;
+            if (OnIt && GetTickCount64() - s_unload_since.load() < 5000)
+            {
+                return;
+            }
+            if (OnIt)
+            {
+                const uint64_t Null = 0;
+                WriteBytes(Streamer + 0x20, &Null, 8);
+                Append(StringFormat("%s  budget: the streamer's current part was still %08x's; cleared\n", Clock().c_str(), Map));
+            }
             if (s_unload_let_go != Wanted)
             {
                 s_unload_let_go = Wanted;
@@ -2025,6 +1958,15 @@ bool DS2_BackreadHook::Install(Injector& injector)
     DetourAttach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
     DetourAttach(&(PVOID&)s_original_masks, StreamerMasksHook);
     DetourAttach(&(PVOID&)s_original_teardown, TeardownHook);
+    if (BytesMatch(s_base + kHandleUnlinkOffset, kHandleUnlinkBytes, sizeof(kHandleUnlinkBytes)))
+    {
+        s_original_unlink = (HandleUnlink_p)(s_base + kHandleUnlinkOffset);
+        DetourAttach(&(PVOID&)s_original_unlink, HandleUnlinkHook);
+    }
+    else
+    {
+        Error("[DS2_BackreadHook] the FX handle unlink is not the expected code; a DLC map's detached effects are left running");
+    }
     if (DetourTransactionCommit() != NO_ERROR)
     {
         Error("[DS2_BackreadHook] nao consegui instalar o detour");
@@ -2059,6 +2001,10 @@ void DS2_BackreadHook::Uninstall()
         DetourDetach(&(PVOID&)s_original_streamer, StreamerUpdateHook);
         DetourDetach(&(PVOID&)s_original_masks, StreamerMasksHook);
         DetourDetach(&(PVOID&)s_original_teardown, TeardownHook);
+        if (s_original_unlink != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_unlink, HandleUnlinkHook);
+        }
         DetourTransactionCommit();
         s_original_update = nullptr;
     }
