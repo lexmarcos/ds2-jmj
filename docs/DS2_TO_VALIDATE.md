@@ -60,6 +60,13 @@ leaving Brume Tower. Only those maps, one save. Not checked:
   teardown, the phantom's glow and the bonfire flames included; whether each
   comes back by itself has not been looked at on screen, nor whether anything
   held a pointer (not a handle) to an effect it removed.
+- **The "duty fulfilled" guard.** Written after one occurrence at Threshold
+  Bridge; not exercised since. Nor has a boss actually been killed in a
+  session with it in place.
+- **The arrival bonfire's flame after leaving Brume Tower.** Measured 18/09:
+  the effects clear takes it, and the timeact that lit it never spawns it
+  again (research: `MapTimeActTrackSfx`, `FUN_1403e56d0`). A scoped kill per
+  map owner is mapped out but not written.
 - **The 300 s bit cleared in play.** Proven with a harness kill; a campaign
   long enough to cross 300 s after a cancelled death has not yet run with it.
 

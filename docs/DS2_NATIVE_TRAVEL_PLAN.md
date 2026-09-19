@@ -1216,6 +1216,19 @@ moment, as it does on a load.
 | 6947c52 | 24 | 11 | 11 | leg 12: arrival not recognised after the fall |
 | 4ec5743 | 24 | 24 | 24 | but three landings billed a death the score missed |
 | 0817c13 | 24 | 24 | 24 | no billed death; three post-travel falls absorbed |
+| 0817c13 | 24 | 19 | 19 | leg 20: the guest left on "duty fulfilled" |
+| 9e9528b | 24 | 24 | 24 | then a legal `session end`, both games still up |
+
+**"Duty fulfilled" sent the phantom home.** The player watching leg 20 saw the
+game's message: the host's world has Iron Keep's bosses dead, and on arriving at
+Threshold Bridge the guest's client took the phantom's "duty fulfilled" path
+(reason 1 at the terminal `FUN_140190950`, which the respawn hook logged as
+`morte de fantasma: motivo=1`) and left the session. The seamless brief keeps
+the phantom past the boss, so `DS2_RespawnInSessionHook` now marks that record
+done and does nothing else while the session is playing. The call reaching the
+terminal comes through Arxan-obfuscated code with no static reference, so what
+raises it on arrival is not read; it did not recur in the next 24 legs, so the
+guard itself is not yet exercised.
 
 **Threshold Bridge's landing.** Its bonfire sits on a bridge whose final
 collision arrives after the first one the character touches, so a landing can
