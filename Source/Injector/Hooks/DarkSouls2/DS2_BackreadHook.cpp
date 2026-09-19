@@ -1111,6 +1111,102 @@ namespace
     uintptr_t s_orphans_before[kMaxOrphans];
     uintptr_t s_orphans_after[kMaxOrphans];
 
+    // The effect nodes the dying map's own entities hold, read before the
+    // teardown: owner+0x160 is the entity container (MapEntity* array at
+    // +0x10, int16 count at +0x2c); each entity's components are a list at
+    // +0x18 (next +0x10); a slot component has a MapSfxSlotCtrl at +0x50,
+    // whose list A (+0x20, entries next at +0x78) holds two FX handles
+    // inline at +0x08 and +0x38 and list B (+0x30, next at +0xc8) two at
+    // +0x58 and +0x88; a handle's node is at its +0x10.
+    //
+    // Only these may be killed after the teardown. Measured 19/09: leaving
+    // Eleum Loyce with the players waiting in Majula, the teardown also left
+    // ids 218 and 251 without a holder - common effects, not the map's -
+    // and three teardowns of three that killed them took the host down 90 ms
+    // later with a corrupted heap; the ones that killed only the map's own
+    // 8519 were clean.
+    constexpr size_t kOwnerEntities = 0x160;
+    constexpr size_t kSlotCtrlVftableOffset = 0x10e86d8;
+    constexpr size_t kMaxMapNodes = 4096;
+    uintptr_t s_map_nodes[kMaxMapNodes];
+    size_t s_map_node_count = 0;
+
+    void AddMapNode(uintptr_t Handle)
+    {
+        uintptr_t Node = 0;
+        if (ReadBytes(Handle + 0x10, &Node, 8) && Node != 0 && s_map_node_count < kMaxMapNodes)
+        {
+            s_map_nodes[s_map_node_count++] = Node;
+        }
+    }
+
+    void CollectMapNodes(uintptr_t Owner)
+    {
+        s_map_node_count = 0;
+        uintptr_t Container = 0, Array = 0;
+        int16_t Count = 0;
+        if (!ReadBytes(Owner + kOwnerEntities, &Container, 8) || Container == 0 ||
+            !ReadBytes(Container + 0x10, &Array, 8) || Array == 0 ||
+            !ReadBytes(Container + 0x2c, &Count, 2) || Count <= 0)
+        {
+            return;
+        }
+        for (int e = 0; e < Count && e < 8192; ++e)
+        {
+            uintptr_t Entity = 0, Component = 0;
+            if (!ReadBytes(Array + e * 8, &Entity, 8) || Entity == 0 || !ReadBytes(Entity + 0x18, &Component, 8))
+            {
+                continue;
+            }
+            for (int c = 0; Component != 0 && c < 64; ++c)
+            {
+                uintptr_t Vftable = 0;
+                if (ReadBytes(Component + 0x50, &Vftable, 8) && Vftable == s_base + kSlotCtrlVftableOffset)
+                {
+                    const uintptr_t Ctrl = Component + 0x50;
+                    uintptr_t Entry = 0;
+                    ReadBytes(Ctrl + 0x20, &Entry, 8);
+                    for (int k = 0; Entry != 0 && k < 256; ++k)
+                    {
+                        AddMapNode(Entry + 0x08);
+                        AddMapNode(Entry + 0x38);
+                        if (!ReadBytes(Entry + 0x78, &Entry, 8))
+                        {
+                            break;
+                        }
+                    }
+                    Entry = 0;
+                    ReadBytes(Ctrl + 0x30, &Entry, 8);
+                    for (int k = 0; Entry != 0 && k < 256; ++k)
+                    {
+                        AddMapNode(Entry + 0x58);
+                        AddMapNode(Entry + 0x88);
+                        if (!ReadBytes(Entry + 0xc8, &Entry, 8))
+                        {
+                            break;
+                        }
+                    }
+                }
+                if (!ReadBytes(Component + 0x10, &Component, 8))
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    bool IsMapNode(uintptr_t Node)
+    {
+        for (size_t i = 0; i < s_map_node_count; ++i)
+        {
+            if (s_map_nodes[i] == Node)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool TeardownHook(void* Owner)
     {
         uint32_t Map = 0;
@@ -1126,12 +1222,13 @@ namespace
             return s_original_teardown(Owner);
         }
         DumpEffects("before the teardown");
+        CollectMapNodes((uintptr_t)Owner);
         const size_t Before = Orphans(Fx, s_orphans_before, kMaxOrphans);
         const bool Result = s_original_teardown(Owner);
         const size_t After = Orphans(Fx, s_orphans_after, kMaxOrphans);
 
-        unsigned Killed = 0;
-        std::string Ids;
+        unsigned Killed = 0, Spared = 0;
+        std::string Ids, SparedIds;
         for (size_t i = 0; i < After; ++i)
         {
             const uintptr_t Top = s_orphans_after[i];
@@ -1151,6 +1248,15 @@ namespace
             {
                 ReadBytes(RootPtr + kFxRootId, &Id, 4);
             }
+            if (!IsMapNode(Top))
+            {
+                ++Spared;
+                if (Spared <= 16)
+                {
+                    SparedIds += StringFormat(" %u", Id);
+                }
+                continue;
+            }
             uintptr_t Child = 0;
             ReadBytes(Top + kFxNodeChild, &Child, 8);
             for (int Guard = 0; Child != 0 && Guard < 256; ++Guard)
@@ -1168,8 +1274,9 @@ namespace
                 Ids += StringFormat(" %u", Id);
             }
         }
-        Append(StringFormat("%s  mapa %08x teardown: %u effect tree(s) it left with no holder killed (ids%s); %zu orphan(s) from before left alone\n",
-            Clock().c_str(), Map, Killed, Ids.empty() ? " none" : Ids.c_str(), Before));
+        Append(StringFormat("%s  mapa %08x teardown: %u effect tree(s) of its own entities left with no holder killed (ids%s); %u not the map's spared (ids%s); %zu of its nodes read; %zu orphan(s) from before left alone\n",
+            Clock().c_str(), Map, Killed, Ids.empty() ? " none" : Ids.c_str(), Spared, SparedIds.empty() ? " none" : SparedIds.c_str(),
+            s_map_node_count, Before));
         return Result;
     }
 
