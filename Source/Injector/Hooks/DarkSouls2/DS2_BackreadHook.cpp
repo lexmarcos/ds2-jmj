@@ -1152,6 +1152,112 @@ namespace
         s_fx_kill_node(Fx, Node);
     }
 
+    // The effect ids a DLC map's own sfx bank supplied: the binders in the
+    // SfxSystem's list (+0x68..+0x70) whose path (*(bank+8), wide) names
+    // sfx<5000+area>, and in each the u32 vector of ids at +0xf0..+0xf8
+    // (FUN_1403d20e0 loads them, FUN_1403d1400 releases them).
+    constexpr size_t kMaxBankIds = 4096;
+    uint32_t s_bank_ids[kMaxBankIds];
+    size_t s_bank_id_count = 0;
+
+    size_t CollectBankIds(uint32_t Map)
+    {
+        s_bank_id_count = 0;
+        uintptr_t Context = 0, Sfx = 0, First = 0, Last = 0;
+        if (!ReadBytes(s_base + kContextOffset, &Context, 8) || Context == 0 ||
+            !ReadBytes(Context + kContextSfxSystem, &Sfx, 8) || Sfx == 0 ||
+            !ReadBytes(Sfx + 0x68, &First, 8) || !ReadBytes(Sfx + 0x70, &Last, 8) || First == 0 || Last < First)
+        {
+            return 0;
+        }
+        wchar_t Name[16] = {};
+        swprintf_s(Name, L"sfx%04u", 5000u + ((Map >> 16) & 0xffu));
+        for (uintptr_t At = First; At < Last && At < First + 8 * 256; At += 8)
+        {
+            uintptr_t Bank = 0, PathPtr = 0;
+            wchar_t Path[160] = {};
+            if (!ReadBytes(At, &Bank, 8) || Bank == 0 || !ReadBytes(Bank + 8, &PathPtr, 8) || PathPtr == 0 ||
+                !ReadBytes(PathPtr, Path, sizeof(Path) - sizeof(wchar_t)) || wcsstr(Path, Name) == nullptr)
+            {
+                continue;
+            }
+            uintptr_t IdsFirst = 0, IdsLast = 0;
+            if (!ReadBytes(Bank + 0xf0, &IdsFirst, 8) || !ReadBytes(Bank + 0xf8, &IdsLast, 8) || IdsFirst == 0 ||
+                IdsLast < IdsFirst || IdsLast - IdsFirst > 4 * 8192)
+            {
+                continue;
+            }
+            for (uintptr_t Id = IdsFirst; Id < IdsLast && s_bank_id_count < kMaxBankIds; Id += 4)
+            {
+                ReadBytes(Id, &s_bank_ids[s_bank_id_count], 4);
+                ++s_bank_id_count;
+            }
+        }
+        return s_bank_id_count;
+    }
+
+    bool IsBankId(uint32_t Id)
+    {
+        for (size_t i = 0; i < s_bank_id_count; ++i)
+        {
+            if (s_bank_ids[i] == Id)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Before a DLC map's teardown, while everything it owns is alive: every
+    // live tree whose top effect comes from the map's own bank. The base
+    // game's effects (bonfire flames, torches) come from the common bank and
+    // are not touched. Measured 19/09: 8519, an emitter of Eleum Loyce from
+    // its bank, went through an unlink no detour sees and, left running,
+    // took the host down 0.1 s after the teardown - three times.
+    unsigned KillBankTrees(uintptr_t Fx, std::string& Ids)
+    {
+        unsigned Killed = 0;
+        uintptr_t Tops[kMaxOrphans];
+        size_t Count = 0;
+        uintptr_t Root = 0;
+        if (!ReadBytes(Fx + kFxRoots, &Root, 8))
+        {
+            return 0;
+        }
+        for (int Guard = 0; Root != 0 && Guard < 4000 && Count < kMaxOrphans; ++Guard)
+        {
+            uintptr_t Top = 0, DefPtr = 0;
+            uint32_t Flags = 0, Id = 0;
+            if (ReadBytes(Root + 0x10, &Top, 8) && Top != 0 &&
+                ReadBytes(Top + kFxNodeFlags, &Flags, 4) && (Flags & (1u << 30)) != 0 &&
+                ReadBytes(Top + 0x98, &DefPtr, 8) && DefPtr != 0 && ReadBytes(DefPtr + 8, &Id, 4) && IsBankId(Id))
+            {
+                Tops[Count++] = Top;
+            }
+            if (!ReadBytes(Root + 8, &Root, 8))
+            {
+                break;
+            }
+        }
+        for (size_t i = 0; i < Count; ++i)
+        {
+            uint32_t Flags = 0, Id = 0;
+            uintptr_t DefPtr = 0;
+            if (!ReadBytes(Tops[i] + kFxNodeFlags, &Flags, 4) || (Flags & (1u << 30)) == 0)
+            {
+                continue;
+            }
+            ReadBytes(Tops[i] + 0x98, &DefPtr, 8);
+            ReadBytes(DefPtr + 8, &Id, 4);
+            KillTree(Fx, Tops[i]);
+            if (++Killed <= 24)
+            {
+                Ids += StringFormat(" %u", Id);
+            }
+        }
+        return Killed;
+    }
+
     // The top of a node's tree.
     uintptr_t TopOf(uintptr_t Node)
     {
@@ -1233,6 +1339,11 @@ namespace
             return s_original_teardown(Owner);
         }
         DumpEffects("before the teardown");
+        std::string BankKilledIds;
+        const size_t BankIds = CollectBankIds(Map);
+        const unsigned BankKilled = BankIds != 0 ? KillBankTrees(Fx, BankKilledIds) : 0;
+        Append(StringFormat("%s  mapa %08x teardown: its sfx bank lists %zu effect id(s); %u live tree(s) of them killed before it (ids%s)\n",
+            Clock().c_str(), Map, BankIds, BankKilled, BankKilledIds.empty() ? " none" : BankKilledIds.c_str()));
         const size_t Before = Orphans(Fx, s_orphans_before, kMaxOrphans);
         s_teardown_fx = Fx;
         s_teardown_thread = GetCurrentThreadId();
