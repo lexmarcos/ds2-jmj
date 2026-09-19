@@ -1341,7 +1341,11 @@ namespace
     constexpr size_t kSignAreas = 0x80;
     constexpr size_t kAreasBegin = 0x10;
     constexpr size_t kAreasEnd = 0x18;
-    constexpr size_t kAreaOwnerIndex = 0x50;
+    // Measured live 19/09 on a loaded Undead Refuge: +0x50 is the event id
+    // (45000, 45010, ...), +0x58 the pointer into the map's data, +0x70 the
+    // map id (0a170000) and +0x74 a flag. An earlier version matched +0x50
+    // as an owner index and never dropped anything.
+    constexpr size_t kAreaMapId = 0x70;
     constexpr size_t kLocationVftableFirst = 0x10c7d50;
     constexpr size_t kLocationVftableLast = 0x10c9090;
     constexpr size_t kLocationVftableA = 0x10e8528;
@@ -1358,7 +1362,7 @@ namespace
         return (At >= kLocationVftableFirst && At <= kLocationVftableLast) || At == kLocationVftableA || At == kLocationVftableB;
     }
 
-    unsigned PurgeSignAreas(int32_t Index)
+    unsigned PurgeSignAreas(uint32_t Map)
     {
         uintptr_t Context = 0, Signs = 0, Areas = 0, Begin = 0, End = 0;
         if (!ReadBytes(s_base + kContextOffset, &Context, 8) || Context == 0 ||
@@ -1374,10 +1378,10 @@ namespace
         for (uintptr_t At = Begin; At < End; At += 8)
         {
             uintptr_t Entry = 0;
-            int32_t Owner = -1;
+            uint32_t Owner = 0;
             const bool Read = ReadBytes(At, &Entry, 8);
-            const bool Sound = Read && LooksLikeLocation(Entry) && ReadBytes(Entry + kAreaOwnerIndex, &Owner, 4);
-            if (!Sound || Owner == Index)
+            const bool Sound = Read && LooksLikeLocation(Entry) && ReadBytes(Entry + kAreaMapId, &Owner, 4);
+            if (!Sound || Owner == Map)
             {
                 ++Dropped;
                 continue;
@@ -1398,16 +1402,16 @@ namespace
     bool TeardownHook(void* Owner)
     {
         uint32_t Map = 0;
-        int32_t Index = -1;
-        if (Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerIndexField, &Index, sizeof(Index)) && Index >= 0)
+        if (Owner != nullptr && ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) && Map != 0)
         {
-            const unsigned Dropped = PurgeSignAreas(Index);
+            const unsigned Dropped = PurgeSignAreas(Map);
             if (Dropped != 0)
             {
-                Append(StringFormat("%s  teardown [%d]: %u sign area(s) of it (or already broken) dropped; the game's own purge is empty\n",
-                    Clock().c_str(), Index, Dropped));
+                Append(StringFormat("%s  teardown %08x: %u sign area(s) of it (or already broken) dropped; the game's own purge is empty\n",
+                    Clock().c_str(), Map, Dropped));
             }
         }
+        Map = 0;
         if (Owner == nullptr || !ReadBytes((uintptr_t)Owner + kOwnerMapId, &Map, sizeof(Map)) ||
             (Map & 0xff000000u) != 0x32000000u || s_fx_kill_subtree == nullptr || s_fx_kill_node == nullptr)
         {
