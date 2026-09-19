@@ -584,6 +584,8 @@ namespace
     std::atomic<uint64_t> s_unload_since{ 0 };
     ULONGLONG s_unload_logged = 0;
     int32_t s_unload_let_go = -1;
+    ULONGLONG s_unload_away_since = 0;
+    constexpr ULONGLONG kUnloadAwayMs = 6000;
     constexpr ULONGLONG kUnloadWindowMs = 32000;
 
     void LoadCosts()
@@ -1285,18 +1287,41 @@ namespace
             // elsewhere, or after 5 s it is cleared (null reads as "none").
             uintptr_t Current = 0, Info = 0;
             uint32_t CurrentMap = 0;
+            int32_t PlayerNow = -1;
+            ReadBytes(Streamer + kStreamerPlayerMap, &PlayerNow, sizeof(PlayerNow));
             const bool OnIt = ReadPointer(Streamer + 0x20, Current) && Current != 0 &&
                 ReadPointer(Current + 0x28, Info) && Info != 0 &&
                 ReadBytes(Info + 8, &CurrentMap, 4) && CurrentMap == Map;
-            if (OnIt && GetTickCount64() - s_unload_since.load() < 5000)
+            // And the player has to have been out of it for a while. The map's
+            // objects keep their effects lit while the game thinks the player
+            // is near them, and the teardown only detaches those, leaving
+            // them running on the map's freed data (19/09: four orphans, three
+            // of them effects of Eleum Loyce's own objects, every time the
+            // teardown came 0.7 s after the players were parked; one, and
+            // clean, when it came 6 s or more later). Walking away gives the
+            // game that time; a travel has to wait for it.
+            const ULONGLONG Now = GetTickCount64();
+            if (OnIt || PlayerNow == Wanted)
+            {
+                s_unload_away_since = 0;
+                if (Now - s_unload_since.load() < 12000)
+                {
+                    return;
+                }
+                if (OnIt)
+                {
+                    const uint64_t Null = 0;
+                    WriteBytes(Streamer + 0x20, &Null, 8);
+                    Append(StringFormat("%s  budget: the streamer's current part was still %08x's after 12 s; cleared\n", Clock().c_str(), Map));
+                }
+            }
+            else if (s_unload_away_since == 0)
+            {
+                s_unload_away_since = Now;
+            }
+            if (s_unload_away_since != 0 && Now - s_unload_away_since < kUnloadAwayMs)
             {
                 return;
-            }
-            if (OnIt)
-            {
-                const uint64_t Null = 0;
-                WriteBytes(Streamer + 0x20, &Null, 8);
-                Append(StringFormat("%s  budget: the streamer's current part was still %08x's; cleared\n", Clock().c_str(), Map));
             }
             if (s_unload_let_go != Wanted)
             {
@@ -1305,7 +1330,6 @@ namespace
             }
             // Once a second, what keeps it: the streamer's player map, and the
             // owner's wanted byte (+0x1ea, FUN_1403dc930).
-            const ULONGLONG Now = GetTickCount64();
             if (Now - s_unload_logged >= 1000)
             {
                 s_unload_logged = Now;
@@ -1837,6 +1861,7 @@ void DS2_Backread::Unload(int32_t Index)
     }
     s_unload_since.store(GetTickCount64());
     s_unload_let_go = -1;
+    s_unload_away_since = 0;
     s_unload_index.store(Index);
 #endif
 }
