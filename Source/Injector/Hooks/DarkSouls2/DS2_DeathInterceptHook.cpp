@@ -840,6 +840,52 @@ namespace
     // (0.000 m, measured on 13/09). The map is compared too, the way
     // FUN_1401caf50 records it (`*(*(obj+0x28)+8)`, 0x0a1f0000 for all three
     // of Heide, read on 14/09): an id alone is only an object of some map.
+    // A place to stand while the map left is taken down: the spawn of the
+    // first loaded bonfire whose map is neither of these two. In a session
+    // that is the session's map, which is never let go.
+    bool FindParking(uint32_t NotMap, uint32_t NorMap, float Out[3], uint32_t& Map)
+    {
+        uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kBonfireRecord, Record) ||
+            !ReadPointer(Record + kRecordList, List) ||
+            !ReadPointer(List + kListFirst, Node))
+        {
+            return false;
+        }
+        for (int i = 0; i < 256 && Node != 0; ++i)
+        {
+            uintptr_t Object = 0, MapAt = 0;
+            uint8_t Kind = 0;
+            uint32_t NodeMap = 0;
+            if (ReadPointer(Node + kNodeObject, Object) &&
+                ReadBytes(Object + kObjectKind, &Kind, 1) && (Kind == 1 || Kind == 5) &&
+                ReadPointer(Object + kObjectMap, MapAt) &&
+                ReadBytes(MapAt + kMapId, &NodeMap, sizeof(NodeMap)) && NodeMap != 0 &&
+                NodeMap != NotMap && NodeMap != NorMap)
+            {
+                float Axis[4] = {}, Translation[4] = {};
+                if (ReadBytes(Object + kObjectAxisZ, Axis, sizeof(Axis)) &&
+                    ReadBytes(Object + kObjectTranslation, Translation, sizeof(Translation)))
+                {
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        Out[k] = Translation[k] - kSpawnBehind * Axis[k];
+                    }
+                    Map = NodeMap;
+                    return true;
+                }
+            }
+            uintptr_t Next = 0;
+            if (!ReadBytes(Node + kNodeNext, &Next, sizeof(Next)))
+            {
+                break;
+            }
+            Node = Next;
+        }
+        return false;
+    }
+
     bool FindBonfireSpawn(uint32_t Map, uint32_t Id, float Out[3])
     {
         uintptr_t Context = 0, Record = 0, List = 0, Node = 0;
@@ -1791,7 +1837,7 @@ namespace
     // True on the frame the character was sent.
     // Waiting for the target budget to have room for the destination.
     // True while still waiting.
-    bool ContinueRoom()
+    bool ContinueRoom(uint8_t* Chr)
     {
         const ULONGLONG Now = GetTickCount64();
         const ULONGLONG Waited = Now - s_recovery.RoomSince;
@@ -1814,16 +1860,30 @@ namespace
         {
             s_recovery.SourceAsked = true;
             const uint32_t Source = DS2_Backread::MapAt(s_recovery.RoomSource);
+            // The game never takes down the map under the player (measured
+            // 19/09: 15 s of an unreachable, unforced Eleum Loyce and it
+            // stayed at state 5), so the character goes somewhere else first:
+            // a bonfire of another loaded map, the session's in practice.
+            float Park[3] = {};
+            uint32_t ParkMap = 0;
+            const bool Parked = FindParking(Source, s_recovery.LoadMap, Park, ParkMap);
+            if (Parked)
+            {
+                memcpy(s_recovery.Target, Park, sizeof(Park));
+                TeleportLocal(Chr, s_recovery.Target);
+            }
             DS2_Backread::Unload(s_recovery.RoomSource);
-            Append(StringFormat("%s  budget: still %llu targets in use + %u; taking the map left (%08x [%d]) down before the destination\n",
-                Clock().c_str(), (unsigned long long)InUse, s_recovery.RoomCost, Source, s_recovery.RoomSource));
+            Append(StringFormat("%s  budget: still %llu targets in use + %u; the map left (%08x [%d]) goes before the destination, %s\n",
+                Clock().c_str(), (unsigned long long)InUse, s_recovery.RoomCost, Source, s_recovery.RoomSource,
+                Parked ? StringFormat("the character waits at a bonfire of %08x", ParkMap).c_str()
+                       : "with nowhere else to stand"));
         }
         return true;
     }
 
     bool ContinueLoading(uint8_t* Chr)
     {
-        if (s_recovery.WaitRoom && ContinueRoom())
+        if (s_recovery.WaitRoom && ContinueRoom(Chr))
         {
             return false;
         }
