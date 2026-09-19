@@ -1241,3 +1241,37 @@ Keep); and a landing's death is never billed — the recovery waits out a
 pending death or zero HP, and a fall within 3 s of a travel's end sends the
 character back to the travel's target. `travel-legs.sh` now fails a leg that
 billed a death, which is what the 4ec5743 run scored as clean.
+
+## 14. 19/09 — a travel you cannot see, and the effects it no longer takes
+
+**The loading screen was only letterbox bars.** Rapid captures of both
+players during a travel showed the world still drawing while "the curtain" was
+up: each camera flew across the map to the bonfire. The curtain copied the
+game's loader (`FUN_140483250`) but not what the game's warp does first: a fade
+to black on the fade object at `ctx+0x1160` (`FUN_14039a510`, `{alpha, target,
+remaining}`), which the loader waits out, plus four frames, before raising its
+curtain. `DS2_BonfireInSessionHook` now fades to black with the curtain, starts
+the travel only once the fade is black (at most 1.5 s), and fades back in when
+the curtain comes down. A guest goes black the moment it answers yes; before,
+it watched the host's copy vanish for up to 1.8 s with its HUD on. Captured
+afterwards: both screens black for ~3 s, then the destination with its area
+name, no frame of the flight. The black quad is drawn over the front end, so
+the loading screen's own art does not show during the wait.
+
+**The bonfire flames.** Clearing every effect before a DLC teardown (§13) took
+the arrival map's effects for good: a census at Heide counted 71 live effect
+trees before the clear and 14 after — the bonfire flames (ids 3020/13020, one
+per loaded bonfire), the torches (3019) and more, because their spawners never
+spawn them again. The teardown itself soft-stops the map's effects and unlinks
+their handles, and a stopped tree keeps ticking with nobody holding it. So the
+clear is gone: the teardown runs first, and only the live top nodes it left
+without a handle (`node+0xf8` empty now, not before) are killed, the way
+`FUN_140a09d50` kills a tree. Every tree of the census was held by its entity,
+so nothing of the other maps is touched; the flame stays lit.
+
+| build | legs | clean | Brume exits | orphans killed |
+| --- | --- | --- | --- | --- |
+| a1feffc | 25 | 25 | 12 | host: id 8329 in 4 of 12; guest: none |
+
+One exit in four leaving an orphan is the rate at which leaving Brume Tower
+killed the host before any fix, which makes effect 8329 the likely culprit.

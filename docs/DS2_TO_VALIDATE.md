@@ -57,17 +57,15 @@ maps, one save, two players. Not checked:
 - **Other DLC maps.** The effects clear runs for every `0x32xxxxxx` teardown,
   but only Brume Tower has been left. Shulva and Frozen Eleum Loyce are the
   same shape and untested.
-- **What else the effects clear costs.** Besides the flame below, nothing
-  else has been looked at on screen; no crash has followed a clear in 60+
-  legs, but whether anything held a pointer (not a handle) to a removed effect
-  is not read.
+- **The orphan kill on other DLC maps.** Only Brume Tower has been left;
+  Shulva and Eleum Loyce may orphan other effects, or orphan them later than
+  the teardown call.
 - **The "duty fulfilled" guard.** Written after one occurrence at Threshold
   Bridge; not exercised since. Nor has a boss actually been killed in a
   session with it in place.
-- **The arrival bonfire's flame after leaving Brume Tower.** Measured 18/09:
-  the effects clear takes it, and the timeact that lit it never spawns it
-  again (research: `MapTimeActTrackSfx`, `FUN_1403e56d0`). A scoped kill per
-  map owner is mapped out but not written.
+- **The loading screen's art.** The travel's fade draws black over the front
+  end, so the area name and art only show after arrival; putting the fade
+  under the front end (`ctx+0x1168`) is untried.
 - **Other maps and bigger ones.** The map heap read 57-60% with the session's
   map held plus one; a leg can need four maps, and a larger area (Drangleic
   Castle, Shrine of Amana) may not fit. Read `H+0xd0` against `H+0x4f0`,
