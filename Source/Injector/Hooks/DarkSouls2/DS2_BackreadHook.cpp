@@ -1406,7 +1406,21 @@ namespace
 
     void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
     {
-        const uint32_t Map = s_focus_map.load();
+        uint32_t Map = s_focus_map.load();
+        // A focus only means something while its map is loaded. Otherwise
+        // the streamer would search from a map that is not there and never
+        // build the ground the player really stands on (the grey void of
+        // 19/09): the game's own arguments go through instead.
+        if (Map != 0)
+        {
+            uint8_t FocusState = 0;
+            uint32_t FocusMask[4] = {};
+            if (!DS2_Backread::Query(Map, FocusState, FocusMask) || FocusState != 5)
+            {
+                s_focus_cell = -1;
+                Map = 0;
+            }
+        }
         if (Map != 0)
         {
             // The nav search reads the position with aligned SSE: measured

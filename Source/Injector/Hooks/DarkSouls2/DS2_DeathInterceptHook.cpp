@@ -2394,11 +2394,19 @@ namespace
         {
             s_local_ctrl = Ctrl;
             s_local_state = Before;
-            if (s_recovery.Loading || s_settle.Active)
-            {
-                DS2_Backread::Unfocus();
-                DS2_Backread::Release();
-            }
+            // A new local controller means the game rebuilt the world (a
+            // warp, a return home, a load). Nothing the travel left may carry
+            // over. Measured 19/09: a guest parked at Majula's bonfire for a
+            // travel, the host died, and the guest went home to Heide with the
+            // streamer still focused on Majula's bonfire - characters and
+            // signs floating in a grey void, Heide's ground never built; an
+            // `unfocus` drew it at once. The focus lives in the injector, so no
+            // world rebuild resets it.
+            DS2_Backread::Unfocus();
+            DS2_Backread::Release();
+            s_parked = false;
+            s_park_pending.store(false);
+            s_park_spot_valid = false;
             s_recovery = Recovery();
             s_settle.Active = false;
             s_banner_wait.Active = false;
