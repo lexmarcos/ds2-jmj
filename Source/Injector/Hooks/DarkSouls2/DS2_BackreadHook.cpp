@@ -545,6 +545,122 @@ namespace
         return KeepVerdict::None;
     }
 
+    // Two fixed tables every loaded map draws from, and the game ends the
+    // process ("out of memory." in DLFixedVector.inl, the trap at
+    // +0x1bee1c4) when either is full. Measured and read 19/09 after the host
+    // died with Majula held, Frozen Eleum Loyce loaded and 0a170000 being
+    // built: the TargetManager (*(ctx+0x48), 2048 entries, count at +0x8018)
+    // takes one entry per enemy generator, character and targetable map
+    // object of every loaded map; the chameleon areas (*(mapmgr+0x208), 3
+    // entries, count at +0x78) one per map with chameleon data. Written down
+    // on every owner state change and once the count settles, so each map's
+    // cost and whether a release gives it back can be read from the log.
+    constexpr size_t kTargetManager = 0x48;
+    constexpr size_t kTargetCount = 0x8018;
+    constexpr size_t kTargetVftable = 0x10ed868;
+    constexpr uint64_t kTargetCapacity = 0x800;
+    constexpr size_t kChameleon = 0x208;
+    constexpr size_t kChameleonCount = 0x78;
+    constexpr uint64_t kChameleonCapacity = 3;
+    constexpr ULONGLONG kTargetSettleMs = 1500;
+    uint8_t s_owner_states[64] = {};
+    bool s_owner_states_known[64] = {};
+    uint64_t s_targets_logged = ~0ull;
+    uint64_t s_targets_last = ~0ull;
+    ULONGLONG s_targets_changed_at = 0;
+    ULONGLONG s_targets_sampled_at = 0;
+
+    // False when either table cannot be read.
+    bool ReadBudget(uint64_t& Targets, uint64_t& Chameleon)
+    {
+        uintptr_t Context = 0, Manager = 0, Vftable = 0, Maps = 0, Areas = 0;
+        Targets = 0;
+        Chameleon = 0;
+        return ReadPointer(s_base + kContextOffset, Context) && Context != 0 &&
+            ReadPointer(Context + kTargetManager, Manager) && Manager != 0 &&
+            ReadPointer(Manager, Vftable) && Vftable == s_base + kTargetVftable &&
+            ReadBytes(Manager + kTargetCount, &Targets, sizeof(Targets)) &&
+            ReadPointer(Context + kMapManager, Maps) && Maps != 0 &&
+            ReadPointer(Maps + kChameleon, Areas) && Areas != 0 &&
+            ReadBytes(Areas + kChameleonCount, &Chameleon, sizeof(Chameleon));
+    }
+
+    std::string DescribeBudget()
+    {
+        uint64_t Targets = 0, Chameleon = 0;
+        if (!ReadBudget(Targets, Chameleon))
+        {
+            return "targets ?, chameleon ?";
+        }
+        return StringFormat("targets %llu/%llu, chameleon %llu/%llu", (unsigned long long)Targets,
+            (unsigned long long)kTargetCapacity, (unsigned long long)Chameleon, (unsigned long long)kChameleonCapacity);
+    }
+
+    // Every owner's state change, with the tables beside it.
+    void WatchOwnerState(uintptr_t Owner, uint32_t Map)
+    {
+        int32_t Index = -1;
+        uint8_t State = 0;
+        if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 63 ||
+            !ReadBytes(Owner + kOwnerState, &State, 1))
+        {
+            return;
+        }
+        if (s_owner_states_known[Index] && s_owner_states[Index] == State)
+        {
+            return;
+        }
+        const uint8_t Before = s_owner_states_known[Index] ? s_owner_states[Index] : 0xff;
+        s_owner_states[Index] = State;
+        s_owner_states_known[Index] = true;
+        Append(StringFormat("%s  budget: map %08x [%d] state %u -> %u; %s\n", Clock().c_str(), Map, Index,
+            (unsigned)Before, (unsigned)State, DescribeBudget().c_str()));
+    }
+
+    int ReadOwners(uintptr_t Owners[kMaxOwners]);
+
+    // The target count once it has stopped moving, with the maps it serves.
+    void WatchTargets()
+    {
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_targets_sampled_at < 100)
+        {
+            return;
+        }
+        s_targets_sampled_at = Now;
+        uint64_t Targets = 0, Chameleon = 0;
+        if (!ReadBudget(Targets, Chameleon))
+        {
+            return;
+        }
+        if (Targets != s_targets_last)
+        {
+            s_targets_last = Targets;
+            s_targets_changed_at = Now;
+            return;
+        }
+        if (Targets == s_targets_logged || Now - s_targets_changed_at < kTargetSettleMs)
+        {
+            return;
+        }
+        std::string Loaded;
+        uintptr_t Owners[kMaxOwners] = {};
+        const int Count = ReadOwners(Owners);
+        for (int i = 0; i < Count; ++i)
+        {
+            uint32_t Map = 0;
+            uint8_t State = 0;
+            if (ReadBytes(Owners[i] + kOwnerMap, &Map, 4) && ReadBytes(Owners[i] + kOwnerState, &State, 1) && State != 0)
+            {
+                Loaded += StringFormat(" %08x:%u", Map, (unsigned)State);
+            }
+        }
+        const long long Delta = s_targets_logged == ~0ull ? 0 : (long long)Targets - (long long)s_targets_logged;
+        s_targets_logged = Targets;
+        Append(StringFormat("%s  budget: targets settled at %llu (%+lld), chameleon %llu; maps in:%s\n", Clock().c_str(),
+            (unsigned long long)Targets, Delta, (unsigned long long)Chameleon, Loaded.empty() ? " none" : Loaded.c_str()));
+    }
+
     void OwnerUpdateHook(void* Owner, void* Arg)
     {
         // Proof, not assumption, before anything is written. Everything below
@@ -685,6 +801,12 @@ namespace
                     Clock().c_str(), Map, Owner));
             }
         }
+
+        if (HaveMap)
+        {
+            WatchOwnerState((uintptr_t)Owner, Map);
+        }
+        WatchTargets();
 
         if (HaveMap && Map == s_map.load())
         {
