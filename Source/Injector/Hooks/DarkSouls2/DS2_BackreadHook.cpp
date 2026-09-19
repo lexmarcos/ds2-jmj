@@ -844,6 +844,8 @@ namespace
         }
     }
 
+    void DumpEffects(const char* Why);
+
     bool TeardownHook(void* Owner)
     {
         uint32_t Map = 0;
@@ -867,6 +869,7 @@ namespace
             }
             else
             {
+                DumpEffects("before the clear");
                 DS2_BonfireInSession_CaptureFlames();
                 ((SfxClearAll_p)Slot)((void*)Manager);
                 s_effects_cleared.fetch_add(1);
@@ -966,6 +969,70 @@ namespace
         Append(Text);
     }
 
+    // The live effects, one line per root effect id: how many trees, how
+    // many of their top nodes someone holds a handle to (node+0xf8), and how
+    // many carry the default parameter block. A measuring tool: which effect
+    // is a bonfire's flame, and who holds it, is not read anywhere yet.
+    // Guarded reads from whichever thread asks; the lists can move under it.
+    void DumpEffects(const char* Why)
+    {
+        uintptr_t Context = 0, Sfx = 0, Manager = 0, Fx = 0, Root = 0;
+        if (!ReadBytes(s_base + kContextOffset, &Context, 8) || Context == 0 ||
+            !ReadBytes(Context + kContextSfxSystem, &Sfx, 8) || Sfx == 0 ||
+            !ReadBytes(Sfx + kSfxManagerBase, &Manager, 8) || Manager == 0 ||
+            !ReadBytes(Manager + 8, &Fx, 8) || Fx == 0 || !ReadBytes(Fx + 0x10, &Root, 8))
+        {
+            Append(StringFormat("%s  effects (%s): no effects manager\n", Clock().c_str(), Why));
+            return;
+        }
+        struct Row { uint32_t Id; uint32_t Def; unsigned Trees; unsigned Held; unsigned Default; };
+        Row Rows[96] = {};
+        size_t Count = 0;
+        unsigned Total = 0;
+        for (int Guard = 0; Root != 0 && Guard < 2000; ++Guard)
+        {
+            uint32_t Id = 0, Def = 0;
+            uintptr_t Node = 0, DefPtr = 0, Handles = 0, Params = 0;
+            ReadBytes(Root + 0x34, &Id, 4);
+            if (ReadBytes(Root + 0x10, &Node, 8) && Node != 0)
+            {
+                if (ReadBytes(Node + 0x98, &DefPtr, 8) && DefPtr != 0)
+                {
+                    ReadBytes(DefPtr + 8, &Def, 4);
+                }
+                ReadBytes(Node + 0xf8, &Handles, 8);
+                ReadBytes(Node + 0x50, &Params, 8);
+            }
+            ++Total;
+            size_t i = 0;
+            while (i < Count && !(Rows[i].Id == Id && Rows[i].Def == Def))
+            {
+                ++i;
+            }
+            if (i == Count && Count < 96)
+            {
+                Rows[Count++] = { Id, Def, 0, 0, 0 };
+            }
+            if (i < Count)
+            {
+                ++Rows[i].Trees;
+                Rows[i].Held += Handles != 0 ? 1 : 0;
+                Rows[i].Default += Params == s_base + 0x1673048 ? 1 : 0;
+            }
+            if (!ReadBytes(Root + 8, &Root, 8))
+            {
+                break;
+            }
+        }
+        std::string Text = StringFormat("%s  effects (%s): %u tree(s)\n", Clock().c_str(), Why, Total);
+        for (size_t i = 0; i < Count; ++i)
+        {
+            Text += StringFormat("    root id %u, top def %u: %u tree(s), %u held, %u default params\n",
+                Rows[i].Id, Rows[i].Def, Rows[i].Trees, Rows[i].Held, Rows[i].Default);
+        }
+        Append(Text);
+    }
+
     void Apply(const std::string& Line)
     {
         std::istringstream Parts(Line);
@@ -1033,6 +1100,10 @@ namespace
         else if (Verb == "status")
         {
             WriteStatus();
+        }
+        else if (Verb == "fx")
+        {
+            DumpEffects("asked");
         }
         else if (!Verb.empty())
         {
