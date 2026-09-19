@@ -2066,6 +2066,37 @@ size_t DS2_Backread::LightingEntries(int32_t Index, uintptr_t* Out, size_t Room)
     return Count;
 }
 
+uint32_t DS2_Backread::Heaviest(uint32_t NotA, uint32_t NotB, uint32_t NotC, int32_t& Index)
+{
+    Index = -1;
+    uint32_t Best = 0, BestCost = 0;
+#ifdef _WIN32
+    uintptr_t Owners[kMaxOwners] = {};
+    const int Count = ReadOwners(Owners);
+    for (int i = 0; i < Count; ++i)
+    {
+        uint32_t Map = 0;
+        int32_t At = -1;
+        uint8_t State = 0;
+        if (!ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)) || Map == 0 || Map == NotA || Map == NotB || Map == NotC ||
+            !ReadBytes(Owners[i] + kOwnerState, &State, 1) || State == 0 ||
+            !ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) || At < 0 ||
+            DS2_BonfireInSession_IsSessionMap(Map))
+        {
+            continue;
+        }
+        const uint32_t Cost = DS2_Backread::TargetCost(Map);
+        if (Best == 0 || Cost > BestCost)
+        {
+            Best = Map;
+            BestCost = Cost;
+            Index = At;
+        }
+    }
+#endif
+    return Best;
+}
+
 void DS2_Backread::CancelUnload()
 {
 #ifdef _WIN32

@@ -2101,17 +2101,26 @@ namespace
                 (unsigned long long)InUse, s_recovery.RoomCost, s_recovery.LoadMap));
             return false;
         }
-        if (!s_recovery.SourceAsked && Waited > kRoomHoldsMs && s_recovery.RoomSource >= 0)
+        // One map at a time, the heaviest that may go: never the session's
+        // map, never the destination, never the one being waited on. Asking
+        // for the map left without that test had a guest trying to take
+        // Majula, the session's map, down under both players (19/09), and
+        // marking it unreachable for 32 s while the game kept it.
+        const bool Idle = DS2_Backread::Unloading() < 0;
+        if (Idle && Waited > kRoomHoldsMs)
         {
             s_recovery.SourceAsked = true;
-            const uint32_t Source = DS2_Backread::MapAt(s_recovery.RoomSource);
+            int32_t Victim = -1;
+            const uint32_t Source = DS2_Backread::Heaviest(s_recovery.LoadMap, s_park_spot_valid ? s_park_map : 0,
+                s_parked ? 0 : CurrentMap(), Victim);
+            s_recovery.RoomSource = Victim;
             // The game never takes down the map under the player (measured
             // 19/09: 15 s of an unreachable, unforced Eleum Loyce and it
             // stayed at state 5), so the character goes somewhere else first:
             // a bonfire of another loaded map, the session's in practice.
             float Park[3] = {};
             uint32_t ParkMap = 0;
-            const bool Parked = FindParking(Source, s_recovery.LoadMap, Park, ParkMap);
+            const bool Parked = !s_parked && FindParking(Source, s_recovery.LoadMap, Park, ParkMap);
             if (Parked)
             {
                 memcpy(s_park_spot, Park, sizeof(Park));
@@ -2126,9 +2135,14 @@ namespace
                 // go (measured 19/09: teleported alone, Eleum Loyce stayed).
                 DS2_Backread::Focus(ParkMap, Park);
             }
-            DS2_Backread::Unload(s_recovery.RoomSource);
-            Append(StringFormat("%s  budget: still %llu targets in use + %u; the map left (%08x [%d]) goes before the destination, %s\n",
-                Clock().c_str(), (unsigned long long)InUse, s_recovery.RoomCost, Source, s_recovery.RoomSource,
+            if (Victim >= 0)
+            {
+                DS2_Backread::Unload(Victim);
+            }
+            Append(StringFormat("%s  budget: still %llu targets in use + %u; %s, %s\n",
+                Clock().c_str(), (unsigned long long)InUse, s_recovery.RoomCost,
+                Victim >= 0 ? StringFormat("%08x [%d] goes before the destination", Source, Victim).c_str()
+                            : "nothing else may be taken down",
                 Parked ? StringFormat("the character waits at a bonfire of %08x", ParkMap).c_str()
                        : "with nowhere else to stand"));
         }
@@ -2268,12 +2282,9 @@ namespace
         // are dropped and it is taken down once the player has been off it
         // for a while. Kept, it was still loaded when the host's destination
         // came in (0a170000 + Eleum Loyce + Majula, 2496 targets).
+        // Only the holds: which map may go is decided by the travel itself,
+        // where the session's map is ruled out.
         DS2_Backread::DropKeeps();
-        const int32_t Left = DS2_Backread::IndexOf(Here);
-        if (Left >= 0)
-        {
-            DS2_Backread::Unload(Left);
-        }
         Append(StringFormat("%s  park: left %08x for a bonfire of %08x (%.3f, %.3f, %.3f) %s, while the host makes room\n",
             Clock().c_str(), Here, ParkMap, Park[0], Park[1], Park[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
     }
