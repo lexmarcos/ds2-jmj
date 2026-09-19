@@ -10,6 +10,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
@@ -987,6 +988,15 @@ namespace
         {
             return false;
         }
+        // Two passes: a bonfire of the session's map first, the map that is
+        // never let go (19/09: from Iron Keep the first loaded bonfire found
+        // was one of 0a110000, the neighbour the game streams in beside it,
+        // the game kept the player in Iron Keep and no room was made), then
+        // any other loaded map's.
+        const uintptr_t FirstNode = Node;
+        for (int Pass = 0; Pass < 2; ++Pass)
+        {
+        Node = FirstNode;
         for (int i = 0; i < 256 && Node != 0; ++i)
         {
             uintptr_t Object = 0, MapAt = 0;
@@ -996,7 +1006,8 @@ namespace
                 ReadBytes(Object + kObjectKind, &Kind, 1) && (Kind == 1 || Kind == 5) &&
                 ReadPointer(Object + kObjectMap, MapAt) &&
                 ReadBytes(MapAt + kMapId, &NodeMap, sizeof(NodeMap)) && NodeMap != 0 &&
-                NodeMap != NotMap && NodeMap != NorMap)
+                NodeMap != NotMap && NodeMap != NorMap &&
+                (Pass == 1 || DS2_BonfireInSession_IsSessionMap(NodeMap)))
             {
                 float Axis[4] = {}, Translation[4] = {};
                 if (ReadBytes(Object + kObjectAxisZ, Axis, sizeof(Axis)) &&
@@ -1016,6 +1027,7 @@ namespace
                 break;
             }
             Node = Next;
+        }
         }
         return false;
     }

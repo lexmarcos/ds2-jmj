@@ -586,6 +586,7 @@ namespace
     ULONGLONG s_unload_logged = 0;
     int32_t s_unload_let_go = -1;
     ULONGLONG s_unload_away_since = 0;
+    uint64_t s_unload_part_cleared = 0;
     constexpr ULONGLONG kUnloadAwayMs = 6000;
     constexpr ULONGLONG kUnloadWindowMs = 32000;
 
@@ -1473,7 +1474,10 @@ namespace
                 {
                     const uint64_t Null = 0;
                     WriteBytes(Streamer + 0x20, &Null, 8);
-                    Append(StringFormat("%s  budget: the streamer's current part was still %08x's after 12 s; cleared\n", Clock().c_str(), Map));
+                    if (s_unload_part_cleared++ == 0)
+                    {
+                        Append(StringFormat("%s  budget: the streamer's current part was still %08x's after 12 s; cleared\n", Clock().c_str(), Map));
+                    }
                 }
             }
             else if (s_unload_away_since == 0)
@@ -2023,6 +2027,7 @@ void DS2_Backread::Unload(int32_t Index)
     s_unload_since.store(GetTickCount64());
     s_unload_let_go = -1;
     s_unload_away_since = 0;
+    s_unload_part_cleared = 0;
     s_unload_index.store(Index);
 #endif
 }
