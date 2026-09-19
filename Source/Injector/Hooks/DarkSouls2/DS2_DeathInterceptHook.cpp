@@ -858,6 +858,46 @@ namespace
     // (0.000 m, measured on 13/09). The map is compared too, the way
     // FUN_1401caf50 records it (`*(*(obj+0x28)+8)`, 0x0a1f0000 for all three
     // of Heide, read on 14/09): an id alone is only an object of some map.
+    // A character's lighting environment (the cube bound to render slot 9)
+    // is an entry of the bank of the map it stands in (owner+0x1a0), cached
+    // on the character (FUN_140312920: entry +0x460, floor hit +0x468,
+    // region +0x470; the region byte *(chr+0xb8)+0x250 is sticky) and on its
+    // model (M = *(chr+0xf0): current +0x2a0, previous +0x2a8, weight
+    // +0x2b0, draw snapshot +0x228/+0x230/+0x238, last pushed +0x4a0). The
+    // cache is refreshed only when the region byte changes, so a character
+    // teleported to a spot of another map with the same region index keeps
+    // the old map's entry. Measured 19/09: 300 ms after Eleum Loyce was
+    // released with both players parked in Majula, the renderer bound a
+    // freed cube and the host died (+0x833655). Cleared here, the next frame
+    // resolves the entry again from where the character stands, or binds the
+    // default cube when there is none; the current entry and its snapshot
+    // are left for that frame to replace.
+    void ResetLighting(uint8_t* Chr)
+    {
+        const uint64_t Zero = 0;
+        const uint8_t None = 0xff, Off = 0;
+        const float NoWeight = 0.0f;
+        WriteBytes((uintptr_t)Chr + 0x460, &Zero, 8);
+        WriteBytes((uintptr_t)Chr + 0x468, &Zero, 8);
+        WriteBytes((uintptr_t)Chr + 0x470, &None, 1);
+        uintptr_t Physics = 0, Model = 0;
+        if (ReadPointer((uintptr_t)Chr + 0xb8, Physics))
+        {
+            WriteBytes(Physics + 0x250, &None, 1);
+        }
+        if (ReadPointer((uintptr_t)Chr + 0xf0, Model))
+        {
+            WriteBytes(Model + 0x2a8, &Zero, 8);
+            WriteBytes(Model + 0x230, &Zero, 8);
+            WriteBytes(Model + 0x4a0, &Zero, 8);
+            WriteBytes(Model + 0x2b0, &NoWeight, 4);
+            WriteBytes(Model + 0x238, &Off, 1);
+        }
+    }
+
+    // Copies whose lighting was reset for this parking.
+    uintptr_t s_lit_copies[8] = {};
+
     // A place to stand while the map left is taken down: the spawn of the
     // first loaded bonfire whose map is neither of these two. In a session
     // that is the session's map, which is never let go.
@@ -1917,6 +1957,8 @@ namespace
                 s_park_map = ParkMap;
                 memcpy(s_recovery.Target, Park, sizeof(Park));
                 TeleportLocal(Chr, s_recovery.Target);
+                ResetLighting(Chr);
+                memset(s_lit_copies, 0, sizeof(s_lit_copies));
                 // The streamer keeps the map of the last part the player
                 // stood on; told the player stands here, it lets the map left
                 // go (measured 19/09: teleported alone, Eleum Loyce stayed).
@@ -2045,6 +2087,8 @@ namespace
         }
         const bool Moved = TeleportLocal(Chr, Park);
         DS2_Backread::Focus(ParkMap, Park);
+        ResetLighting(Chr);
+        memset(s_lit_copies, 0, sizeof(s_lit_copies));
         s_parked = true;
         Append(StringFormat("%s  park: left %08x for a bonfire of %08x (%.3f, %.3f, %.3f) %s, while the host makes room\n",
             Clock().c_str(), Here, ParkMap, Park[0], Park[1], Park[2], Moved ? "teleportado" : "TELEPORTE FALHOU"));
@@ -2338,6 +2382,30 @@ namespace
                 uint32_t UnderMask[4] = {};
                 const uint32_t UnderMap = Under >= 0 ? DS2_Backread::MapAt(Under) : 0;
                 const bool UnderLoaded = UnderMap != 0 && DS2_Backread::Query(UnderMap, UnderState, UnderMask) && UnderState != 0;
+                if (AtPark)
+                {
+                    bool Done = false;
+                    for (uintptr_t& Slot : s_lit_copies)
+                    {
+                        if (Slot == (uintptr_t)Character)
+                        {
+                            Done = true;
+                            break;
+                        }
+                    }
+                    if (!Done)
+                    {
+                        for (uintptr_t& Slot : s_lit_copies)
+                        {
+                            if (Slot == 0)
+                            {
+                                Slot = (uintptr_t)Character;
+                                ResetLighting((uint8_t*)Character);
+                                break;
+                            }
+                        }
+                    }
+                }
                 if (Under >= 0 && !UnderLoaded)
                 {
                     // Not loaded here; nothing to hold.
