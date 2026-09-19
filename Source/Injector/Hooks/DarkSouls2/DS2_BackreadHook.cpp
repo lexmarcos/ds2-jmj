@@ -583,6 +583,7 @@ namespace
     std::atomic<int32_t> s_unload_index{ -1 };
     std::atomic<uint64_t> s_unload_since{ 0 };
     ULONGLONG s_unload_logged = 0;
+    int32_t s_unload_let_go = -1;
     constexpr ULONGLONG kUnloadWindowMs = 15000;
 
     void LoadCosts()
@@ -1206,7 +1207,16 @@ namespace
             }
             const uint8_t Zero = 0;
             WriteBytes(Streamer + kStreamerAllowed + i, &Zero, 1);
-            WriteBytes(Owner + kOwnerForced, &Zero, 1);
+            // The parts this backread asked for stay in the owner's masks
+            // until they are given back, and with them the map stays (19/09:
+            // unforced, unwanted and off the player's map, Eleum Loyce sat at
+            // state 5 for 15 s). The normal release gives them back and drops
+            // the force byte 700 ms later.
+            if (s_unload_let_go != Wanted)
+            {
+                s_unload_let_go = Wanted;
+                BeginLetGo(Owner, Map, "the travel budget needs it gone");
+            }
             // Once a second, what keeps it: the streamer's player map, and the
             // owner's wanted byte (+0x1ea, FUN_1403dc930).
             const ULONGLONG Now = GetTickCount64();
@@ -1717,6 +1727,7 @@ void DS2_Backread::Unload(int32_t Index)
         }
     }
     s_unload_since.store(GetTickCount64());
+    s_unload_let_go = -1;
     s_unload_index.store(Index);
 #endif
 }
