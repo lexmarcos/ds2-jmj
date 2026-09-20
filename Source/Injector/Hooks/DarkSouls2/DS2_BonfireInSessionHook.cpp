@@ -7,6 +7,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_EnemySyncHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
@@ -3031,6 +3032,26 @@ void DS2_BonfireInSession_Tick()
                     Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
                         Bonfire, Map, Owner ? "sim" : "nao",
                         Went ? "iniciada" : "a fogueira nao esta na tabela"));
+                }
+                else if (Line.rfind("sincronia", 0) == 0)
+                {
+                    // M8 6b steps 2 and 9 by hand, the pair. Nothing calls
+                    // either outside the teardown yet, and the question step 9
+                    // actually has to answer is what arming does and does not
+                    // do: FUN_140517040 writes the armed byte and clears the
+                    // gate, and nothing in it binds. Which map the records
+                    // come back for has to be watched, not assumed.
+                    const bool Guest = DS2_RespawnInSession_PlayingSession() != nullptr;
+                    Append(StringFormat("pedido: sincronia, antes: %s\n", DS2_EnemySync::Describe().c_str()));
+                    if (Line.find("desligar") != std::string::npos)
+                    {
+                        DS2_EnemySync::Unbind("pedido pela bancada");
+                    }
+                    else if (Line.find("armar") != std::string::npos)
+                    {
+                        DS2_EnemySync::Rearm(Guest, "pedido pela bancada");
+                    }
+                    Append(StringFormat("pedido: sincronia, depois: %s\n", DS2_EnemySync::Describe().c_str()));
                 }
                 else if (sscanf_s(Line.c_str(), "repontar %x", &Map) == 1)
                 {

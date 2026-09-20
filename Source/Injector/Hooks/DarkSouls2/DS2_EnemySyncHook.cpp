@@ -53,6 +53,11 @@ namespace
     constexpr size_t kSyncState = 0x08;
     constexpr size_t kSyncCount = 0x0c;
     constexpr size_t kSyncBoundMap = 0x18;
+    constexpr size_t kSyncTable = 0x10;
+    constexpr size_t kSyncArmed = 0x74;
+    constexpr size_t kSyncGuestGate = 0x198;
+    constexpr size_t kSyncSlotStride = 0x18;
+    constexpr size_t kSyncSlotRecord = 0x10;
 
     // What the release's second argument actually is, settled by the log on
     // 20/09: not a map id but a pointer. FUN_1403bb3d0, the slot lookup the
@@ -326,6 +331,57 @@ namespace DS2_EnemySync
         {
             Read(Manager + kCreateQueue, Out, 4);
         }
+#endif
+    }
+
+    std::string Describe()
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        void* Sync = Manager();
+        if (Sync == nullptr)
+        {
+            return "sem manager";
+        }
+        std::string Text = StringFormat("estado %u, mapa %08x, %u registros, armado %u, portao %u",
+            Field(kSyncState), Field(kSyncBoundMap), Field(kSyncCount),
+            (unsigned)Field(kSyncArmed) & 0xff, (unsigned)Field(kSyncGuestGate) & 0xff);
+        uintptr_t Table = 0;
+        if (Read((uintptr_t)Sync + kSyncTable, &Table, sizeof(Table)) && Table != 0)
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                uintptr_t Record = 0;
+                Read(Table + (uintptr_t)i * kSyncSlotStride + kSyncSlotRecord, &Record, sizeof(Record));
+                Text += StringFormat("; [%d]=%016llx", i, (unsigned long long)Record);
+            }
+        }
+        return Text;
+#else
+        return "";
+#endif
+    }
+
+    bool Rearm(bool Guest, const char* Why)
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        if (!Arm(Why))
+        {
+            return false;
+        }
+        // The order is not a preference: the arm writes +0x198 = 0, so a gate
+        // opened before it would be closed by it.
+        if (Guest && !OpenGuestGate())
+        {
+            Append(StringFormat("%s  o portao do convidado nao pode ser aberto depois de armar\n", Clock().c_str()));
+            return false;
+        }
+        Append(StringFormat("%s  sync rearmado (%s, papel %s): %s\n",
+            Clock().c_str(), Why == nullptr ? "" : Why, Guest ? "convidado" : "host", Describe().c_str()));
+        return true;
+#else
+        (void)Guest;
+        (void)Why;
+        return false;
 #endif
     }
 

@@ -11,6 +11,7 @@
 #include "Injector/Hooks/Hook.h"
 
 #include <cstdint>
+#include <string>
 
 /// The enemy replication table, and the one thing that must happen before its
 /// map goes away.
@@ -103,6 +104,21 @@ namespace DS2_EnemySync
     /// The count of generator list 7, `mgr+0x3c6`: "something is still dying
     /// from the last map change". The create queue only drains while it is 0.
     uint32_t DyingCount();
+
+    /// Step 9 of M8 6b: arm the sync again and, on a guest, open its gate -
+    /// in that order, because arming writes `+0x198 = 0` and the gate is what
+    /// puts it back. `Guest` is the caller's answer to "is this machine a
+    /// guest in a session"; the sync's own state cannot be asked, because
+    /// after an unbind it reads 0 on both roles.
+    ///
+    /// What arming does **not** do is bind: `FUN_140517040` writes `+0x74 = 1`
+    /// and clears the gate, and nothing else. Which map the records come back
+    /// for is decided elsewhere, and that is measured rather than assumed.
+    bool Rearm(bool Guest, const char* Why);
+
+    /// Everything worth reading at once, for the log: state, bound map, count
+    /// and the first few record pointers.
+    std::string Describe();
 
     /// The four-slot create queue at `mgr+0x332`; 0xff is an empty slot. A
     /// fifth request while all four are taken is dropped with no retry.
