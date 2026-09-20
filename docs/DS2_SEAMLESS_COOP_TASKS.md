@@ -591,10 +591,13 @@ unloading gets the release the warp would have given it.
    registers (`kKindMapFlags` on the co-op channel); a leg to Brume Tower read
    identical on both sides afterwards, including the two bits only the host
    had.
-1. **Operate a real mechanism** and see whether its state is a flag: a lever or
-   door that one of the two has not opened yet, pulled by the host before and
-   during the session, with `25cec0`/`25ce10` in the trace and the
-   `EventFlagManager` read on both. If it is, M4 is a test and not code.
+1. ~~**Operate a real mechanism** and see whether its state is a flag.~~ Done
+   19/09 on a lever in Heide, pulled by hand with the trace armed. It is a
+   flag: the lever went from state 10 to **30 on both machines**, and
+   `105400` was set through the emevd dispatcher on each, the host hitting
+   `25cec0` to send it and the guest `25ce10` to receive it. The guest never
+   sent, which is right — `105400` is a global and the filter refuses a
+   non-host those.
 2. **Whatever is not a flag** (`MapObjStateActComponent` keeps per-object
    state): find where the guest receives it, or does not receive it.
    **Narrowed 19/09 to one object with a position.** With the map flags now
