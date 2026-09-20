@@ -748,6 +748,104 @@ namespace
         }
     }
 
+    // The map the local player stands in, 0 when the streamer does not say.
+    uint32_t PlayerMap()
+    {
+        uintptr_t Context = 0, Manager = 0, Streamer = 0;
+        int32_t Index = -1;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kMapManager, Manager) ||
+            !ReadPointer(Manager + kStreamer, Streamer) ||
+            !ReadBytes(Streamer + kStreamerPlayerMap, &Index, sizeof(Index)) || Index < 0)
+        {
+            return 0;
+        }
+        return DS2_Backread::MapAt(Index);
+    }
+
+    // A map the streamer wants that does not fit in the TargetManager.
+    //
+    // The travel budget only guards the map a travel asks for. The streamer
+    // brings in neighbours by itself, and nothing budgeted those. Measured
+    // 19/09 at Threshold Bridge, with Forest of Fallen Giants as the session's
+    // map (940 targets, against Majula's 312): with 1406 entries in use the
+    // streamer asked for 0a110000, which costs 875, and both games hit the
+    // game's own "out of memory" trap at +0x1bee1c4. The same leg had passed
+    // three times that afternoon over Majula, at 771 in use.
+    //
+    // So a map that does not fit is held at the gate: its wanted byte
+    // (+0x1ea) is cleared for the frame, the streamer keeps asking, and it
+    // goes in the moment there is room. Held for kGateGiveUpMs, the heaviest
+    // map nobody needs is taken down to make room - and the map the player
+    // stands in, the session's map and any map a travel is already taking
+    // down are never touched, in either role.
+    constexpr size_t kOwnerWanted = 0x1ea;
+    constexpr ULONGLONG kGateGiveUpMs = 3000;
+    ULONGLONG s_gate_since[64] = {};
+    ULONGLONG s_gate_logged[64] = {};
+
+    void GateOwnerLoad(uintptr_t Owner, uint32_t Map)
+    {
+        int32_t Index = -1;
+        uint8_t State = 0, Wanted = 0, Forced = 0;
+        if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 63 ||
+            !ReadBytes(Owner + kOwnerState, &State, 1) ||
+            !ReadBytes(Owner + kOwnerWanted, &Wanted, 1) ||
+            !ReadBytes(Owner + kOwnerForced, &Forced, 1))
+        {
+            return;
+        }
+        // Only a map that has not started coming in, and only one the game
+        // wants by itself: a forced map is one this hook or a travel asked
+        // for, and those have their own budget.
+        if (State != 0 || Wanted == 0 || Forced != 0 || Map == PlayerMap() ||
+            DS2_BonfireInSession_IsSessionMap(Map))
+        {
+            s_gate_since[Index] = 0;
+            return;
+        }
+        uint64_t InUse = 0;
+        const uint32_t Cost = DS2_Backread::TargetCost(Map);
+        if (Cost == 0 || !DS2_Backread::Targets(InUse) || InUse + Cost <= DS2_Backread::TargetLimit())
+        {
+            if (s_gate_since[Index] != 0)
+            {
+                Append(StringFormat("%s  budget: map %08x fits now (%llu + %u); letting it in\n", Clock().c_str(),
+                    Map, (unsigned long long)InUse, Cost));
+            }
+            s_gate_since[Index] = 0;
+            return;
+        }
+        const uint8_t Zero = 0;
+        WriteBytes(Owner + kOwnerWanted, &Zero, 1);
+        const ULONGLONG Now = GetTickCount64();
+        if (s_gate_since[Index] == 0)
+        {
+            s_gate_since[Index] = Now;
+            s_gate_logged[Index] = 0;
+        }
+        if (Now - s_gate_logged[Index] >= 1000)
+        {
+            s_gate_logged[Index] = Now;
+            Append(StringFormat("%s  budget: map %08x held at the gate, %u would not fit in %llu/%llu\n",
+                Clock().c_str(), Map, Cost, (unsigned long long)InUse, (unsigned long long)DS2_Backread::TargetLimit()));
+        }
+        if (Now - s_gate_since[Index] < kGateGiveUpMs || DS2_Backread::Unloading() >= 0)
+        {
+            return;
+        }
+        int32_t Victim = -1;
+        const uint32_t Heaviest = DS2_Backread::Heaviest(Map, PlayerMap(), 0, Victim);
+        if (Heaviest == 0 || Victim < 0)
+        {
+            return;
+        }
+        s_gate_since[Index] = Now;
+        Append(StringFormat("%s  budget: making room for %08x; taking %08x [%d] down\n", Clock().c_str(),
+            Map, Heaviest, Victim));
+        DS2_Backread::Unload(Victim);
+    }
+
     // Every owner's state change, with the tables beside it.
     void WatchOwnerState(uintptr_t Owner, uint32_t Map)
     {
@@ -883,6 +981,9 @@ namespace
         const KeepVerdict Verdict = HaveMap ? CheckKept((uintptr_t)Owner, KeptMask) : KeepVerdict::None;
         if (HaveMap)
         {
+            // Before anything else: a map that does not fit waits outside.
+            GateOwnerLoad((uintptr_t)Owner, Map);
+
             // A release that began a few frames ago finishes here.
             FinishLetGo((uintptr_t)Owner, Map);
 
