@@ -1845,11 +1845,26 @@ or unproven, for whoever picks this up.
    is assumed to cost 1400. The 150-entry margin is a guess.
 5. **The chameleon limit of three maps is read and logged but not enforced.**
    Only the TargetManager decides whether a destination fits.
-6. **"NO ROOM, loading anyway".** When room cannot be made in 30 s the
-   destination is loaded regardless, which is what killed the host and the
-   guest before. It has not fired since the fixes of §17, but the path is
-   still there and its ending is a crash. It needs a decision: wait longer,
-   take another map down, or refuse the leg.
+6. ~~**"NO ROOM, loading anyway".**~~ It fired on 19/09 and killed the host,
+   exactly as this item said it would: Brume Tower (1126) asked for on top of
+   941 in use, 25 s of making no room, loaded anyway, `out of memory` at
+   `+0x1bee1c4`. The leg is now refused **at the vote** when the destination
+   cannot fit beside the session's map, and the give-up path never loads over
+   budget again.
+
+   **What made it fire after a week of clean routes is worth keeping in
+   mind**: the map the session began in is never released, so its cost is
+   spent for the whole session. Every route that had ever been run started in
+   **Majula, which costs 312**; this session started in **Forest of Fallen
+   Giants, which costs 940**. That leaves 958 of the 1898, and Brume Tower
+   needs 1126. Nothing in the travel code had changed. A budget measured from
+   one starting point says nothing about another.
+
+6b. **A heavy session map now makes heavy destinations impossible**, which is
+   the honest consequence of the refusal above and not a good ending. The
+   piece that would give those legs back is releasing the session's map while
+   everybody is travelling — the game's join bindings assume it never
+   unloads, so it needs the same care the rest of §17 took.
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
