@@ -31,6 +31,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomActionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_GhostNpcHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_NetSyncGuardHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PartNotifyGuardHook.h"
@@ -225,6 +226,8 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_HollowSummonHook>());
                 // ... nor keep a phantom away from levers and doors (M4).
                 Hooks.push_back(std::make_unique<DS2_PhantomActionHook>());
+                // ... nor show the world's NPCs to a guest as white ghosts.
+                Hooks.push_back(std::make_unique<DS2_GhostNpcHook>());
                 // Entering without a soapstone (M3).
                 Hooks.push_back(std::make_unique<DS2_PartyHook>());
                 // What was done together goes into the guest's save (M7);
