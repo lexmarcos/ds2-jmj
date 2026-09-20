@@ -77,7 +77,10 @@ namespace DS2_Backread
     // longer. For the maps other players stand in, which must not unload under
     // them. Without a mask, only the force byte: the map stays exactly as the
     // game loaded it.
-    void KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask = nullptr);
+    // ForOtherPlayer marks the hold as "the other player's copy is standing
+    // there"; Heaviest() refuses to make room by taking such a map down.
+    void KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask = nullptr,
+        bool ForOtherPlayer = false);
 
     // The owner of a map as last seen: its load state (+0x1e8, 5 loaded) and
     // parts mask. False when no owner has that map.
@@ -99,7 +102,11 @@ namespace DS2_Backread
     uint32_t MapAt(int32_t Index);
 
     // Ends every KeepIndex hold now; their maps go through the normal release.
-    void DropKeeps();
+    // Ends the holds this machine took for itself. A hold marking the map
+    // another player stands in survives, and lapses on its own once his copy
+    // stops being seen there - pass true only when the indices themselves
+    // stopped meaning anything, as a reload makes them.
+    void DropKeeps(bool IncludingOtherPlayers = false);
 
     // Takes the map with this index down even if the player stands in it, the
     // way a loading screen would: its keep is dropped, its force byte cleared

@@ -1896,9 +1896,14 @@ namespace
         s_travel_tight = Read && Cost > 0 && InUse + Cost > DS2_Backread::TargetLimit();
         if (s_travel_tight)
         {
-            DS2_Backread::DropKeeps();
+            // Tell first, then let go: the vanilla order, and the reverse of
+            // what this did. The guests have to hear "park" before the holds
+            // that keep their ground loaded end; the hold on a map one of
+            // them is standing on outlives this call either way now, and
+            // lapses once he is seen to have left.
             // Dropped unless this machine hosts the session with guests.
             DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelPark, Map, Id, 0);
+            DS2_Backread::DropKeeps();
             Append(StringFormat("%s  budget: %llu targets in use + %u for %08x > %llu; holds dropped, the map left is not held\n",
                 Clock().c_str(), (unsigned long long)InUse, Cost, Map, (unsigned long long)DS2_Backread::TargetLimit()));
         }
@@ -2634,11 +2639,11 @@ namespace
                 }
                 else if (PartsUnder((uint8_t*)Character, Index, Parts))
                 {
-                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs, Parts);
+                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs, Parts, true);
                 }
                 else if ((Index = MapIndexUnder((uint8_t*)Character)) >= 0)
                 {
-                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs);
+                    DS2_Backread::KeepIndex(Index, kKeepOtherPlayerMs, nullptr, true);
                 }
             }
 
@@ -2687,8 +2692,9 @@ namespace
             DS2_Backread::Unfocus();
             DS2_Backread::Release();
             // Keeps and a pending unload are by owner index, and a load builds
-            // a new streamer whose indices mean other maps.
-            DS2_Backread::DropKeeps();
+            // a new streamer whose indices mean other maps - including the
+            // ones marking where another player stands, so those go too.
+            DS2_Backread::DropKeeps(true);
             DS2_Backread::CancelUnload();
             s_parked = false;
             s_park_pending.store(false);

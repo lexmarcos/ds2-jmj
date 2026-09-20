@@ -269,6 +269,12 @@ namespace
     {
         int32_t Index = -1;
         ULONGLONG Until = 0;
+        // When this hold is because *the other player* is standing there, and
+        // until when. A hold has one entry per map index whoever asked for it,
+        // so this is a second deadline rather than a flag: a travel keep and a
+        // remote keep on the same map must not make each other look like the
+        // other kind.
+        ULONGLONG RemoteUntil = 0;
         bool Forced = false;
         uint32_t Mask[4] = {};
     };
@@ -557,6 +563,29 @@ namespace
                 WriteBytes(Owner + At, Mask, sizeof(Mask));
             }
         }
+    }
+
+    // Is this map index held right now, and is the other player standing on
+    // it? His copy renews a hold of its own every frame he is seen there
+    // (DS2_DeathInterceptHook, kKeepOtherPlayerMs), so the second answer is
+    // the cheapest honest "is somebody on it" this machine has.
+    bool IsKeptNow(int32_t Index, bool OnlyForOtherPlayer)
+    {
+        if (Index < 0)
+        {
+            return false;
+        }
+        const ULONGLONG Now = GetTickCount64();
+        std::scoped_lock Lock(s_keep_mutex);
+        for (const Kept& Entry : s_kept)
+        {
+            if (Entry.Index != Index)
+            {
+                continue;
+            }
+            return OnlyForOtherPlayer ? Now < Entry.RemoteUntil : Now < Entry.Until;
+        }
+        return false;
     }
 
     // Game's thread: is this owner's map kept, with which parts, and should its
@@ -2137,14 +2166,7 @@ namespace
                 ReadBytes(Streamer + kStreamerPlayerMap, &PlayerIndex, sizeof(PlayerIndex));
                 ReadBytes(Owner + 0x1ea, &Wanted, 1);
                 ReadBytes(Owner + kOwnerForced, &Forced, 1);
-                bool Kept = false;
-                {
-                    std::scoped_lock Lock(s_keep_mutex);
-                    for (const auto& Entry : s_kept)
-                    {
-                        Kept = Kept || (Entry.Index == Index && Now < Entry.Until);
-                    }
-                }
+                const bool Kept = IsKeptNow(Index, false);
                 Append(StringFormat("%s  budget: map %08x [%d] still state %u; wanted %u, forced %u, kept %u, player map [%d]\n",
                     Clock().c_str(), Map, Index, (unsigned)State, (unsigned)Wanted, (unsigned)Forced, (unsigned)Kept, PlayerIndex));
             }
@@ -2454,7 +2476,7 @@ void DS2_Backread::Release()
 #endif
 }
 
-void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask)
+void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_t* Mask, bool ForOtherPlayer)
 {
 #ifdef _WIN32
     if (Index < 0 || Index > 0x3f)
@@ -2486,6 +2508,7 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
             Entry = Free;
             Entry->Index = Index;
             Entry->Forced = false;
+            Entry->RemoteUntil = 0;
             // With nothing to say which parts, no parts at all: the force
             // byte alone holds a map that is already in, and that is every
             // case this keep serves - the other player is standing in it.
@@ -2528,6 +2551,10 @@ void DS2_Backread::KeepIndex(int32_t Index, uint32_t Milliseconds, const uint32_
             if (Until > Entry->Until)
             {
                 Entry->Until = Until;
+            }
+            if (ForOtherPlayer && Until > Entry->RemoteUntil)
+            {
+                Entry->RemoteUntil = Until;
             }
             memcpy(Now, Entry->Mask, sizeof(Now));
         }
@@ -2630,16 +2657,34 @@ uint32_t DS2_Backread::MapAt(int32_t Index)
     return 0;
 }
 
-void DS2_Backread::DropKeeps()
+void DS2_Backread::DropKeeps(bool IncludingOtherPlayers)
 {
 #ifdef _WIN32
     std::scoped_lock Lock(s_keep_mutex);
     for (Kept& Entry : s_kept)
     {
-        if (Entry.Index >= 0)
+        if (Entry.Index < 0)
         {
-            Entry.Until = 0;
+            continue;
         }
+        // The hold that says "the other player is standing here" is not ours
+        // to drop. Dropping it was how the travel undid the one rule the
+        // parking exists to keep - TravelPark's own comment says the map
+        // another player stands in is never let go, and on 15/09 letting it
+        // go killed the guest in the CharacterManager. Making room is allowed
+        // to end every hold this machine took for itself; it is not allowed
+        // to make the other player's map eligible while he is still on it.
+        //
+        // So the wait in "tell, wait, release" is not a timer here: the hold
+        // lapses by itself, a few seconds after his copy stops being seen on
+        // that map, which is the machine's own evidence that he left.
+        if (!IncludingOtherPlayers && Entry.RemoteUntil > GetTickCount64())
+        {
+            Entry.Until = Entry.RemoteUntil;
+            continue;
+        }
+        Entry.Until = 0;
+        Entry.RemoteUntil = 0;
     }
 #endif
 }
@@ -2726,6 +2771,19 @@ uint32_t DS2_Backread::Heaviest(uint32_t NotA, uint32_t NotB, uint32_t NotC, int
             !ReadBytes(Owners[i] + kOwnerState, &State, 1) || State == 0 ||
             !ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) || At < 0 ||
             DS2_BonfireInSession_IsSessionMap(Map))
+        {
+            continue;
+        }
+        // Never the map somebody is standing on. This used to look only at the
+        // three maps the caller names - the session's, the destination, the
+        // parking - and at the local player's, so the other player's copy was
+        // invisible to the choice: the budget could pick exactly the map under
+        // the guest's feet and let it go, on a local timer, with nothing sent
+        // to the machine that owns him. That is the "release before telling"
+        // shape that M8 6b's reading names as the likeliest cause of a guest
+        // dying on a release, and here it is not even a race - it is a missing
+        // predicate.
+        if (IsKeptNow(At, true))
         {
             continue;
         }

@@ -3365,10 +3365,13 @@ void DS2_BonfireInSession_Tick()
             }
             else
             {
-                DS2_Backread::Release();
+                // Tell first, then let go. The host takes its copy of this
+                // guest out on WarpNotice, and it should have the message
+                // before this machine starts dropping the map underneath.
                 Append(StringFormat("convidado: o mapa %08x nao veio (estado %u depois de %llu ms); vou de warp (votacao %u)\n",
                     Asked.Map, Known ? (unsigned)State : 0xffu, (unsigned long long)(Now - Asked.Since), Asked.Vote));
                 DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Asked.Map, Asked.Vote);
+                DS2_Backread::Release();
                 RemovePresences("vou de warp; o mapa nao vem ate aqui");
                 s_pending_warp = PendingWarp();
                 s_pending_warp.Active = true;
