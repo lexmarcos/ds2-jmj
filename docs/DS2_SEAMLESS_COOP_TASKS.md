@@ -1897,8 +1897,17 @@ or unproven, for whoever picks this up.
    piece that would give those legs back is releasing the session's map while
    everybody is travelling — the game's join bindings assume it never
    unloads, so it needs the same care the rest of §17 took.
-6c. **The party hook fires two summons 16 ms apart, and the second poisons
-   the first.** Measured repeatedly on 20/09: the server's poll says
+6c. **The party hook fired two summons 16 ms apart, and the second poisoned
+   the first.** — **fixed on 20/09** (`ab9cee17`). A summon now claims a
+   twenty second window and nothing else is summoned inside it, so the
+   duplicate is logged and dropped; and because the host side was purely edge
+   driven, one lost edge used to be final, so it now sweeps the sign
+   collection itself every five seconds. A sign still in the collection is a
+   summon that did not happen; a sign that was taken is gone from it, so a
+   live session produces no sweep and no summon. Confirmed on the first boot
+   with the fix: one `invocando a placa 80000001`, no second handle, and
+   `p2pSessionVerified: true` with no intervention. What follows is the
+   measurement that found it. Measured repeatedly on 20/09: the server's poll says
    `1 signs cached, sent 1`, and the host's log shows
 
    ```
@@ -1922,7 +1931,7 @@ or unproven, for whoever picks this up.
    first attempt.
 
    This made the bench unusable for most of 20/09 and blocked the M8 6b
-   measurements. It is the first thing to fix before any of that work.
+   measurements.
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
