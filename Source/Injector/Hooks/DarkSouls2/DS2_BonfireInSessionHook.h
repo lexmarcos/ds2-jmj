@@ -108,3 +108,17 @@ bool DS2_BonfireInSession_IsSessionMap(uint32_t Map);
 /// session lives, and a destination has to fit beside it.
 uint32_t DS2_BonfireInSession_SessionMap();
 
+/// Step 7 of M8 6b: point the guest's join controller at another map.
+///
+/// `NetSummonJoinMultiplayCtrl + 0x19c` names the map the session began in
+/// and is never written again by the game, so it rebinds straight back to the
+/// map a release is trying to free. This is the four-byte write that stops
+/// that, and it is the guest's alone - a host's holder reads 0.
+///
+/// `Expected` is the value `+0x19c` must currently hold, or 0 to skip the
+/// check; a mismatch refuses rather than writes. The sixteen bytes at
+/// `+0x1a0` - the map and the position to return to - are read before and
+/// after and restored if they moved, because that block is what sends the
+/// guest home and four bytes must not be able to reach it.
+bool DS2_BonfireInSession_RepointSessionMap(uint32_t NewMap, uint32_t Expected);
+

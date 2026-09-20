@@ -341,6 +341,22 @@ namespace
     constexpr int32_t kAcceptPlaying = 0x10;
     constexpr int32_t kAcceptExported = 0xe;
     constexpr size_t kJoinMap = 0x19c;
+    // The way home, and the reason step 7 of M8 6b says four bytes and never
+    // eight. Read on a live guest on 20/09, summoned into 0a130000 from
+    // Majula:
+    //
+    //     +0x19c = 0a130000          the session's map
+    //     +0x1a0 = 0a040000          the map to go back to
+    //     +0x1a4 = 41286bac  10.526  the position to go back to
+    //     +0x1a8 = 40bd8f2b   5.924
+    //     +0x1ac = c1820962 -16.255
+    //
+    // - which is Majula's bonfire spawn to three decimals. So the way home is
+    // a sixteen-byte block, not one field: eight bytes at +0x19c would send
+    // the guest home to the map being freed, and more would drop him at the
+    // session map's coordinates in whatever map he landed in.
+    constexpr size_t kJoinHome = 0x1a0;
+    constexpr size_t kJoinHomeBytes = 16;
     constexpr int32_t kJoinImporting = 4;
     constexpr int32_t kJoinPresences = 5;
     constexpr size_t kPresenceArea = 0x5b8;
@@ -2503,6 +2519,68 @@ bool DS2_BonfireInSession_IsSessionMap(uint32_t Map)
 #endif
 }
 
+bool DS2_BonfireInSession_RepointSessionMap(uint32_t NewMap, uint32_t Expected)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    const uintptr_t Session = (uintptr_t)DS2_RespawnInSession_PlayingSession();
+    uintptr_t Vftable = 0;
+    if (NewMap == 0 || Session == 0 || !ReadPointer(Session, Vftable) ||
+        Vftable != s_base + kJoinCtrlVftable)
+    {
+        // A host's holder reads 0 here and there is nothing to repoint: the
+        // staleness this fixes is the guest's alone.
+        return false;
+    }
+
+    uint32_t Before = 0;
+    uint8_t Home[kJoinHomeBytes] = {};
+    if (!ReadBytes(Session + kJoinMap, &Before, sizeof(Before)) ||
+        !ReadBytes(Session + kJoinHome, Home, sizeof(Home)))
+    {
+        return false;
+    }
+    if (Before == NewMap)
+    {
+        return true;
+    }
+    // The same rule a .text patch follows: refuse on a value that is not the
+    // one this was measured against, rather than write over something else.
+    if (Expected != 0 && Before != Expected)
+    {
+        Append(StringFormat("convidado: nao repontei o mapa da sessao; +0x19c vale %08x e eu esperava %08x\n",
+            Before, Expected));
+        return false;
+    }
+
+    memcpy((void*)(Session + kJoinMap), &NewMap, sizeof(NewMap));
+
+    uint32_t After = 0;
+    uint8_t HomeAfter[kJoinHomeBytes] = {};
+    const bool ReadBack = ReadBytes(Session + kJoinMap, &After, sizeof(After)) &&
+        ReadBytes(Session + kJoinHome, HomeAfter, sizeof(HomeAfter));
+    const bool HomeKept = ReadBack && memcmp(Home, HomeAfter, sizeof(Home)) == 0;
+    if (!HomeKept)
+    {
+        // Four bytes cannot reach the block next door, so this can only mean
+        // the write was not four bytes or somebody else moved it in between.
+        // Either way the guest's way home is worth more than the repoint.
+        memcpy((void*)(Session + kJoinHome), Home, sizeof(Home));
+        Append(StringFormat("convidado: o caminho de volta MUDOU ao repontar o mapa da sessao; devolvi e desisti\n"));
+        memcpy((void*)(Session + kJoinMap), &Before, sizeof(Before));
+        return false;
+    }
+    uint32_t HomeMap = 0;
+    memcpy(&HomeMap, Home, sizeof(HomeMap));
+    Append(StringFormat("convidado: mapa da sessao repontado %08x -> %08x (lido de volta %08x); volta para %08x intacta\n",
+        Before, NewMap, After, HomeMap));
+    return After == NewMap;
+#else
+    (void)NewMap;
+    (void)Expected;
+    return false;
+#endif
+}
+
 uint32_t DS2_BonfireInSession_SessionMap()
 {
 #if defined(_WIN32) && defined(_M_X64)
@@ -2953,6 +3031,16 @@ void DS2_BonfireInSession_Tick()
                     Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
                         Bonfire, Map, Owner ? "sim" : "nao",
                         Went ? "iniciada" : "a fogueira nao esta na tabela"));
+                }
+                else if (sscanf_s(Line.c_str(), "repontar %x", &Map) == 1)
+                {
+                    // M8 6b step 7, by hand. Nothing calls the repoint yet -
+                    // step 6 is what will - and an operation nobody calls is
+                    // an operation nobody has checked. This is how it gets
+                    // exercised on the bench, on a live session, without
+                    // arming any of the release.
+                    Append(StringFormat("pedido: repontar o mapa da sessao para %08x\n", Map));
+                    DS2_BonfireInSession_RepointSessionMap(Map, 0);
                 }
                 else if (sscanf_s(Line.c_str(), "votar %x %x", &Map, &Bonfire) == 2)
                 {

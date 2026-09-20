@@ -228,12 +228,18 @@ rebind. It rebinds when a session forms, to that session's map. The two legs
 measured earlier did not rebind because no new session formed during them. The
 invariant is **bound map == session map**, not "bound map never changes".
 
-**A second lock, now in.** `IsSessionMap` and `sync+0x18` are two different
-sources for "the map that must not go", and a session ending clears the first
-while the sync stays bound until its own state transition runs. `BeginLetGo`
-now also refuses a map the enemy sync is bound to, asked of the sync itself
-and believed only with its vftable. Today it can only ever agree with the
-refusal above; the day it does not is the day it earns its keep.
+**A second lock, and it is the same lock — corrected 20/09.** `BeginLetGo` now
+also refuses a map the enemy sync is bound to, asked of the sync itself and
+believed only with its vftable. It was added believing that `IsSessionMap` and
+`sync+0x18` were two different sources that could disagree. **They are not.**
+`DS2_BonfireInSession_SessionMap()` reads `*(*(0x141616cf8 + 0x28) + 0x18)` —
+the same object and the same field. So the check can never disagree with the
+one above it, and that is why it has never fired.
+
+It is kept for one reason only: it believes the object through its vftable and
+requires the state to be 1 or 2, which the older path also does, so it costs a
+few reads and documents the rule at the place the rule matters. Nothing more
+should be claimed for it.
 
 ## What to do, in order
 
