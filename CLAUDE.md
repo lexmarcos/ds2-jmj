@@ -568,6 +568,21 @@ nobody is waiting behind it, which reads as a summoning bug and is not one.
 After stopping an instance, wait for the server to say `0 signs cached` before
 believing anything about signs: `ds2os-dev server wait --signs 0`.
 
+**This is what a stale party sign looks like from the outside**, and it cost an
+hour on 19/09. After a `game stop` and a fresh `up`, the party never formed:
+the guest's log said `placa no chao`, the host's said
+`invocando a placa 80000001`, and the host's screen said
+
+> Summoning failed. Player was unable to join multiplayer session.
+
+The server was offering a sign it had cached before the restart — its recorded
+position was where the guest had stood an hour earlier — and the guest's client
+logged nothing at all, because as far as it knew nobody had touched its sign.
+Two crashes earlier in the same session had made this look like the illegal
+disconnect penalty, which it was not. The cure is to restart the server
+(`reload` does it in the right order) and then `server wait --signs 0` before
+believing the next summon.
+
 **Two Steam accounts on one machine cannot make a third player.** Anything
 about three or more players in a session is untestable here, and the honest
 report says so rather than implying it works.

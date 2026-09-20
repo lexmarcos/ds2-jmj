@@ -201,9 +201,31 @@ the save. On 19/09 it found `131000021` set only on the guest, and
 `211000020` (Shrine of Amana), `130000001` and `536000012`/`536000013`
 (Brume Tower) set only on the host.
 
-The fix is the host's three blocks for a map over the co-op channel, applied
-on the guest as the map registers — [what is still
-unknown](#what-is-still-unknown)'s first item and the next piece of M4.
+**Fixed the same day.** The host publishes the three blocks of every map it
+has loaded (`DS2_BackreadHook`'s `CarryMapFlags`, once a second), the poll
+sends the ones that changed on a packet of its own (`kKindMapFlags`, 87 bytes,
+`DS2_CoopChannelHook`), and the guest writes them into the live nodes once per
+registration, while the map is still building. Changes after that already ride
+the game's own `0x20`.
+
+Measured on a leg to Brume Tower, with the arena clean on both sides:
+
+```
+53600   SAME 000c00…   000c00…      536000012, 536000013 - the host's, which
+53602   SAME …14…                   the guest's own save did not have
+10401   SAME …01…20…
+```
+
+and in the logs, the whole chain: `flags do mapa 32240000 recebidos do host`
+on the guest's channel, then `flags: map 32240000 seeded with the host's
+(categories 53600..53602, 1069 ms old)` a second later.
+
+**What it does not cover yet.** The seeding is a byte write, so the flag
+listeners (`FUN_140184ff0`) do not run for it; it works because it lands
+before the map builds its objects. If the host's packet ever arrives after
+that — the host loads the destination first, so it normally does not — the
+map would be built on the old bytes. Nothing has been seen doing that, and
+nothing watches for it either.
 
 ## What was measured
 
@@ -305,9 +327,9 @@ host's doors and levers into his own save, which is what the design asks for.
 ## What is still unknown
 
 - ~~**A map the guest loads after joining reads zeroed flags.**~~ Measured
-  19/09 and true: the guest's Heide read all zero against the host's two bits.
-  The fix — the host's three 25-byte blocks over the co-op channel, applied as
-  the map registers on the guest — is the next piece of M4.
+  19/09 and true (the guest's Heide read all zero against the host's two
+  bits), and fixed the same day by carrying the three blocks over the co-op
+  channel; a leg to Brume Tower then read identical on both sides.
 - **Whether doors, levers, elevators and illusory walls are map flags.**
   `MapObjStateActComponent` (vftable `0x1410c6d78`) may keep per-object state
   outside the `EventFlagManager`. No real mechanism has been triggered yet.

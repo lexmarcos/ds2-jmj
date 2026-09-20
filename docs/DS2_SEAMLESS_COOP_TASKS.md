@@ -582,11 +582,15 @@ unloading gets the release the warp would have given it.
 
 **Missing:**
 
-0. **The guest's flags for a map loaded after joining.** Copy 1 of the arena
-   is filled only by the snapshot at the entry warp and holds three maps, so a
-   map reached by travelling starts at zero instead of at the host's state.
-   Check first, then send the host's three 25-byte blocks over the co-op
-   channel before the guest loads the map.
+0. ~~**The guest's flags for a map loaded after joining.**~~ Measured and
+   fixed 19/09. Copy 1 of the arena is filled only by the snapshot at the
+   entry warp and holds three maps, so a map reached by travelling started at
+   **zero** — at Heide the host had `131000022` and `131000086` and the guest
+   had nothing, not even his own save's bits. The host now publishes each
+   loaded map's three blocks and the guest writes them in as the map
+   registers (`kKindMapFlags` on the co-op channel); a leg to Brume Tower read
+   identical on both sides afterwards, including the two bits only the host
+   had.
 1. **Operate a real mechanism** and see whether its state is a flag: a lever or
    door that one of the two has not opened yet, pulled by the host before and
    during the session, with `25cec0`/`25ce10` in the trace and the
