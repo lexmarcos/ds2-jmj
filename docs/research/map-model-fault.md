@@ -51,6 +51,61 @@ which exactly **one** can see a bad value, and it is the one that crashed
 > `DS2_BackreadHook`'s guard list already wraps `FUN_1403f41d0`. A crash that
 > names `+0xc8` without the vftable is ambiguous.
 
+## The repo had already measured this value, and the two were never crossed
+
+Written 20/09. Everything above reads the binary; this reads the project's own
+measurement history, and it changes the shape of the question.
+
+`0x000b0010` was never a 32-bit field seen on its own. The register at the
+guest's fault held **`000b0010e8364540`**, and
+[DS2_SEAMLESS_COOP_TASKS.md](../DS2_SEAMLESS_COOP_TASKS.md) §17 records a whole
+family of these from 15 and 16/09, always the same shape — **the high half of a
+live 64-bit pointer overwritten, the low half still correct** **[read]**:
+
+```
+00b54001410e86d8   should be 00000001410e86d8   (a vftable)
+00b01001410eb518   should be 00000001410eb518   (a vftable)
+00b010fff06b8588   should be 00007ffff06b8588
+000b0010e81d77b0   should be 00007fffe81d77b0
+000b0010e8364540   should be 00007fffe8364540   <- the +0xc8 fault
+```
+
+So the three "different" values `0x00b010`, `0x00b540` and `0x000b0010` are one
+value family landing in the **upper four bytes of eight-byte-aligned words**,
+across unrelated objects. That is the signature of a **32-bit store to
+`pointer field + 4`** **[inferred]**: a writer treating that memory as a struct
+of 32-bit fields, four bytes out of step with where a pointer actually lives.
+
+Three consequences for the readings above:
+
+- **The object was never wholesale-reused.** `this` being intact and only one
+  word wrong is not a puzzle; it is what a single stray 32-bit store looks
+  like. The refcount-survival mechanism below is still a candidate for *how*
+  a writer gets pointed at a live object, but it is not needed to explain the
+  intactness.
+- **`FUN_140518920` gets much stronger.** It writes a run of `uint32` at
+  `+0x1c`, `+0x20`, `+0x24`, `+0x2c` of an object reached through a raw stored
+  pointer. A pointer at `+0x18` of that object has its high half clobbered by
+  the `+0x1c` store, and one at `+0x28` by the `+0x2c` store — the exact
+  picture, twice over, and 0x10 apart, which is the distance between the
+  guest's field and the host's **[inferred]**.
+- **A packed handle is out.** A `(type << 16) | index` handle would sit in a
+  field of its own, not four bytes into somebody's pointer.
+
+And §17 had already settled the family's *mechanism* on 16/09, for the other
+members of it: the varied values (`a140a140a140a140` floats, `005c0032...`
+UTF-16 from a file path) were **a reused block seen through an old pointer**.
+`00b54001410e86d8` is named there as "a block only partly reused, with the old
+pointer's low half still standing". Nobody carried that back to the
+`MapModelComponent+0xc8` fault, which is the same family.
+
+**What this makes cheap.** The pre-draw's own `test %rcx,%rcx ; je` proves the
+game handles a **null** `+0xc8` **[read]**. A guard that notices a `+0xc8` or
+`+0xd8` whose high four bytes are neither `0x00000000` (a module pointer) nor
+`0x00007fff` (a heap pointer), writes the field to 0 and dumps the object, turns
+this crash into a skipped frame *and* answers the question at the same time —
+without waiting for another fault to post-mortem.
+
 ## What `0x000b0010` is not
 
 - **Not a compile-time constant**: zero occurrences as an immediate in the
