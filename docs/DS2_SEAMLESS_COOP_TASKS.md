@@ -2024,6 +2024,40 @@ or unproven, for whoever picks this up.
    deaths in either `DS2_Death.log`**. The bill is those nineteen seconds; it
    used to be the guest.
 
+6e. **The host's record stopped following the travel, and the guest respawned
+   into a map that was not there.** Measured 20/09, on a live player, and it
+   cost him a death loop before the bench noticed.
+
+   An eight-leg campaign ended in Majula. The host was standing in Majula —
+   the only bonfire of his loaded map was `0a040000/122a` — but his **record**
+   still read `0a100000/411e`, the destination of **leg five**. Legs six,
+   seven and eight never moved it. So the host went on announcing a bonfire
+   three maps behind, over `kKindBonfire`.
+
+   The guest then died in the host's world, and `fogueira_do_host` did what it
+   is for: it respawned him at the announced bonfire. `411e`'s spawn point is
+   `(-86.607, -1.041, 602.290)`; he arrived at `(-86.61, -17.82, 602.29)`,
+   **16.8 m below it**, and fell to his death — because a guest carries only
+   the map parts around the host, and there was no ground under a bonfire of a
+   map nobody was in any more. He respawned there again, and again: 142 deaths
+   became 146 before `death --instance 2 feature fogueira_do_host off` sent
+   him back to his own bonfire, alive, in Majula.
+
+   This is the 15/09 hazard returning by another road — "the guest landed at
+   Heide's bonfire with no ground under it and fell to its death" — and it is
+   two defects, not one:
+
+   - **the cause**: whatever sets the host's record on arrival did not run, or
+     did not stick, after leg five. `SetRecord` is called from the travel's
+     own arrival path, so a leg that arrives without passing there leaves the
+     record where it was;
+   - **the missing net**: `fogueira_do_host` uses the announced bonfire with
+     no check that its map is loaded here, and no check that the spawn point
+     has ground under it. A bonfire in a map this machine does not have is
+     never a safe respawn, and the guest is exactly who cannot tell.
+
+   `fogueira_do_host` is **off on account 2 until the net exists**.
+
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
