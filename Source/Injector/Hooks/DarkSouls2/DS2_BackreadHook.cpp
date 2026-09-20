@@ -10,6 +10,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -748,6 +749,155 @@ namespace
         }
     }
 
+    // The map flags the guest is missing (see DS2_CoopChannelHook.h).
+    //
+    // A map's three categories are `(area * 10 + block) * 100` plus 0, 1 and
+    // 2, and the manager's table hands out their bytes. The host reads them
+    // for every map it has in and publishes them; the guest writes in what the
+    // host published, once per registration, while the map is still building
+    // its objects - after that the game's own `0x20` packet carries changes.
+    constexpr size_t kFlagTable = 0x20;                // EventFlagManager + 0x20, 31 buckets
+    constexpr size_t kFlagBuckets = 31;
+    constexpr size_t kFlagNodeData = 0x00;
+    constexpr size_t kFlagNodeSize = 0x08;
+    constexpr size_t kFlagNodeCategory = 0x0c;
+    constexpr size_t kFlagNodeNext = 0x10;
+    constexpr uint32_t kFlagCategoryBytes = 25;
+    constexpr size_t kEventManagerFlags = 0x20;        // EventManager + 0x20 is the EventFlagManager
+    constexpr ULONGLONG kFlagsEveryMs = 1000;
+    ULONGLONG s_flags_at = 0;
+    bool s_flags_seeded[64] = {};
+
+    uint32_t FlagCategory(uint32_t Map)
+    {
+        return ((Map / 0x0a000000u) * 100 + ((Map >> 16) & 0xff)) * 100;
+    }
+
+    // The bytes of one category, as the manager's table points at them.
+    uintptr_t FlagBytes(uintptr_t Manager, uint32_t Category)
+    {
+        const uint32_t Bucket = (Category * 0x89u) % kFlagBuckets;
+        uintptr_t Node = 0;
+        if (!ReadPointer(Manager + kFlagTable + Bucket * sizeof(uintptr_t), Node))
+        {
+            return 0;
+        }
+        for (int Guard = 0; Node != 0 && Guard < 32; ++Guard)
+        {
+            uint32_t Mine = 0, Size = 0;
+            uintptr_t Data = 0, Next = 0;
+            if (!ReadBytes(Node + kFlagNodeCategory, &Mine, sizeof(Mine)) ||
+                !ReadBytes(Node + kFlagNodeSize, &Size, sizeof(Size)) ||
+                !ReadBytes(Node + kFlagNodeData, &Data, sizeof(Data)))
+            {
+                return 0;
+            }
+            if (Mine == Category)
+            {
+                return Size == kFlagCategoryBytes ? Data : 0;
+            }
+            if (!ReadBytes(Node + kFlagNodeNext, &Next, sizeof(Next)))
+            {
+                return 0;
+            }
+            Node = Next;
+        }
+        return 0;
+    }
+
+    uintptr_t FlagManager()
+    {
+        uintptr_t Context = 0, Events = 0, Manager = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kContextEventManager, Events) ||
+            !ReadPointer(Events + kEventManagerFlags, Manager))
+        {
+            return 0;
+        }
+        return Manager;
+    }
+
+    int ReadOwners(uintptr_t Owners[kMaxOwners]);
+
+    // The host publishes, the guest writes in. Once a second, over the owners.
+    void CarryMapFlags()
+    {
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_flags_at < kFlagsEveryMs)
+        {
+            return;
+        }
+        s_flags_at = Now;
+        DS2_CoopChannel::Bonfire Host = {};
+        const bool AmGuest = DS2_CoopChannel::HostBonfire(Host);
+        const bool AmHost = !AmGuest && DS2_CoopChannel::GuestCount() > 0;
+        if (!AmGuest && !AmHost)
+        {
+            return;
+        }
+        const uintptr_t Manager = FlagManager();
+        if (Manager == 0)
+        {
+            return;
+        }
+        uintptr_t Owners[kMaxOwners] = {};
+        const int Count = ReadOwners(Owners);
+        for (int i = 0; i < Count; ++i)
+        {
+            uint32_t Map = 0;
+            int32_t Index = -1;
+            uint8_t State = 0;
+            if (!ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)) || Map == 0 ||
+                !ReadBytes(Owners[i] + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 63 ||
+                !ReadBytes(Owners[i] + kOwnerState, &State, 1) || State == 0)
+            {
+                continue;
+            }
+            const uint32_t Base = FlagCategory(Map);
+            uintptr_t At[3] = { FlagBytes(Manager, Base), FlagBytes(Manager, Base + 1), FlagBytes(Manager, Base + 2) };
+            if (At[0] == 0 || At[1] == 0 || At[2] == 0)
+            {
+                continue;
+            }
+            uint8_t Live[DS2_CoopChannel::kMapFlagBytes] = {};
+            bool Read = true;
+            for (size_t k = 0; k < 3; ++k)
+            {
+                Read = Read && ReadBytes(At[k], Live + k * kFlagCategoryBytes, kFlagCategoryBytes);
+            }
+            if (!Read)
+            {
+                continue;
+            }
+            if (AmHost)
+            {
+                DS2_CoopChannel::PublishMapFlags(Map, Live);
+                continue;
+            }
+            if (s_flags_seeded[Index])
+            {
+                continue;
+            }
+            uint8_t Theirs[DS2_CoopChannel::kMapFlagBytes] = {};
+            uint64_t AgeMs = 0;
+            if (!DS2_CoopChannel::HostMapFlags(Map, Theirs, AgeMs))
+            {
+                continue;
+            }
+            s_flags_seeded[Index] = true;
+            if (memcmp(Live, Theirs, sizeof(Live)) == 0)
+            {
+                continue;
+            }
+            for (size_t k = 0; k < 3; ++k)
+            {
+                WriteBytes(At[k], Theirs + k * kFlagCategoryBytes, kFlagCategoryBytes);
+            }
+            Append(StringFormat("%s  flags: map %08x seeded with the host's (categories %u..%u, %llu ms old)\n",
+                Clock().c_str(), Map, Base, Base + 2, (unsigned long long)AgeMs));
+        }
+    }
+
     // The map the local player stands in, 0 when the streamer does not say.
     uint32_t PlayerMap()
     {
@@ -877,6 +1027,7 @@ namespace
             // The map is gone; its flag slot goes back (see kMapEventsGoneOffset).
             // Not from here: this runs inside the owner's own update, the one
             // that tore the map down, and the release walks the EventManager.
+            s_flags_seeded[Index] = false;
             if (Before != 0xff && Before != 0 && Map != 0)
             {
                 QueueMapEventRelease(Map);
@@ -1817,6 +1968,7 @@ namespace
     void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
     {
         DrainMapEventReleases();
+        CarryMapFlags();
         uint32_t Map = s_focus_map.load();
         // A focus only means something while its map is loaded. Otherwise
         // the streamer would search from a map that is not there and never

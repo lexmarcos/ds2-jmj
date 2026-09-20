@@ -151,6 +151,26 @@ namespace DS2_CoopChannel
     void PublishLit(uint8_t Count, const uint32_t Bits[3]);
     bool HostLit(uint8_t& Count, uint32_t Bits[3], uint64_t& AgeMs);
 
+    // One map's event flags, as the host has them.
+    //
+    // A map owns three flag categories - `(area * 10 + block) * 100` plus 0, 1
+    // and 2 - of 25 bytes each, and they do not live in the map: they live in
+    // a three-map arena inside the EventFlagBuffer, and a guest's copy of that
+    // arena is filled only by the world snapshot of the entry warp. A map the
+    // group travels to afterwards was not in that snapshot, so the guest reads
+    // it as all zeroes: measured 19/09 at Heide, the host had `131000022` and
+    // `131000086` and the guest had nothing, not even his own save's bits.
+    // Every door, lever, illusory wall and shortcut that is a map flag was
+    // shut for him. See docs/DS2_WORLD_STATE.md.
+    //
+    // So the host publishes the three blocks of each map it has loaded, the
+    // poll sends the ones that changed, and the guest writes them in as the
+    // map registers. Changes after that already travel on the game's own
+    // `0x20` packet.
+    constexpr size_t kMapFlagBytes = 75;
+    void PublishMapFlags(uint32_t Map, const uint8_t Bytes[kMapFlagBytes]);
+    bool HostMapFlags(uint32_t Map, uint8_t Bytes[kMapFlagBytes], uint64_t& AgeMs);
+
     // This machine's SteamID64, 0 until the first poll.
     uint64_t SelfSteamId();
 }

@@ -76,6 +76,10 @@ namespace
     // The host's lit bonfires, a bitmap over the bonfire table's order: the
     // count in Reserved, the bits in Map, Type and Id.
     constexpr uint8_t kKindLit = 0x30;
+    // One map's three flag categories, 75 bytes, in a packet of its own
+    // because they do not fit in an announcement. See PublishMapFlags.
+    constexpr uint8_t kKindMapFlags = 0x40;
+    constexpr size_t kMaxFlagMaps = 8;
     // A guest's event: 0x28 + DS2_CoopChannel::GuestEvent.
     constexpr uint8_t kKindFirstGuestEvent = 0x28;
     constexpr uint8_t kKindLastGuestEvent = 0x28 + DS2_CoopChannel::kGuestEventCount - 1;
@@ -101,6 +105,19 @@ namespace
     };
 #pragma pack(pop)
     static_assert(sizeof(Announcement) == 24, "the announcement is 24 bytes on the wire");
+#pragma pack(push, 1)
+    struct MapFlagsPacket
+    {
+        char Magic[4];
+        uint8_t Version;
+        uint8_t Kind;
+        uint8_t Role;
+        uint8_t Reserved;
+        uint32_t Map;
+        uint8_t Bytes[DS2_CoopChannel::kMapFlagBytes];
+    };
+#pragma pack(pop)
+    static_assert(sizeof(MapFlagsPacket) == 87, "the map flags packet is 87 bytes on the wire");
     constexpr char kMagic[4] = { 'J', 'M', 'J', 'C' };
 
     using Poll_p = void(*)(void* Session);
@@ -155,6 +172,20 @@ namespace
     ULONGLONG s_lit_sent_tick = 0;
     uint8_t s_lit_sent_count = 0;
     uint32_t s_lit_sent_bits[3] = {};
+
+    // One map's three flag categories: what the game's thread published (the
+    // host) and what came in from the host of this session (a guest). Both
+    // under s_flags_mutex, because 75 bytes are not an atomic.
+    struct MapFlags
+    {
+        uint32_t Map = 0;
+        uint8_t Bytes[DS2_CoopChannel::kMapFlagBytes] = {};
+        ULONGLONG Tick = 0;
+    };
+    std::mutex s_flags_mutex;
+    MapFlags s_flags_mine[kMaxFlagMaps];     // the host's, to send
+    MapFlags s_flags_sent[kMaxFlagMaps];     // what the poll last sent
+    MapFlags s_flags_heard[kMaxFlagMaps];    // a guest's, received
     Members s_sessions[kMaxSessions];
     Heard s_heard;
 
@@ -446,8 +477,66 @@ namespace
         }
     }
 
+    // A map's three flag categories from the host of this session.
+    void HandleMapFlags(const uint8_t* Data, uint32_t Size, uint64_t From)
+    {
+        MapFlagsPacket Said;
+        memcpy(&Said, Data, sizeof(Said));
+        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion || Said.Map == 0 ||
+            Said.Role != kWorldOwner)
+        {
+            Refuse("flags de mapa nao sao desta versao", From, Size);
+            return;
+        }
+        const ULONGLONG Now = GetTickCount64();
+        {
+            std::scoped_lock Lock(s_net_mutex);
+            if (!IsHostLocked(From, Now))
+            {
+                Refuse("flags de mapa de quem nao e o host da sessao", From, Size);
+                return;
+            }
+        }
+        bool Changed = false;
+        {
+            std::scoped_lock Lock(s_flags_mutex);
+            MapFlags* Slot = nullptr;
+            MapFlags* Oldest = &s_flags_heard[0];
+            for (MapFlags& Entry : s_flags_heard)
+            {
+                if (Entry.Map == Said.Map)
+                {
+                    Slot = &Entry;
+                    break;
+                }
+                if (Entry.Map == 0 || Entry.Tick < Oldest->Tick)
+                {
+                    Oldest = &Entry;
+                }
+            }
+            if (Slot == nullptr)
+            {
+                Slot = Oldest;
+                Slot->Map = Said.Map;
+                memset(Slot->Bytes, 0, sizeof(Slot->Bytes));
+            }
+            Changed = memcmp(Slot->Bytes, Said.Bytes, sizeof(Slot->Bytes)) != 0;
+            memcpy(Slot->Bytes, Said.Bytes, sizeof(Slot->Bytes));
+            Slot->Tick = Now;
+        }
+        if (Changed)
+        {
+            Append(StringFormat("%s  flags do mapa %08x recebidos do host\n", Clock().c_str(), Said.Map));
+        }
+    }
+
     void Handle(const uint8_t* Data, uint32_t Size, uint64_t From)
     {
+        if (Size == sizeof(MapFlagsPacket) && Data[5] == kKindMapFlags)
+        {
+            HandleMapFlags(Data, Size, From);
+            return;
+        }
         Announcement Said;
         if (Size != sizeof(Said))
         {
@@ -746,6 +835,50 @@ namespace
                 s_lit_sent_count = LitCount;
                 memcpy(s_lit_sent_bits, Bits, sizeof(Bits));
                 s_lit_sent_tick = Tick;
+            }
+        }
+
+        // Each loaded map's three flag categories, when they changed or every
+        // two seconds. Only the owner of the world speaks: a guest's copy of
+        // the arena is the host's, and echoing it back would be noise.
+        if (Mine.Role == kWorldOwner)
+        {
+            MapFlagsPacket Out[kMaxFlagMaps] = {};
+            size_t Ready = 0;
+            {
+                std::scoped_lock Lock(s_flags_mutex);
+                for (size_t i = 0; i < kMaxFlagMaps; ++i)
+                {
+                    const MapFlags& Mineable = s_flags_mine[i];
+                    if (Mineable.Map == 0 || Tick - Mineable.Tick > kLocalStaleMs)
+                    {
+                        continue;
+                    }
+                    MapFlags& Last = s_flags_sent[i];
+                    const bool Changed = Last.Map != Mineable.Map ||
+                        memcmp(Last.Bytes, Mineable.Bytes, sizeof(Last.Bytes)) != 0;
+                    if (!Changed && Tick - Last.Tick < kAnnounceEveryMs)
+                    {
+                        continue;
+                    }
+                    Last.Map = Mineable.Map;
+                    memcpy(Last.Bytes, Mineable.Bytes, sizeof(Last.Bytes));
+                    Last.Tick = Tick;
+                    MapFlagsPacket& Packet = Out[Ready++];
+                    memcpy(Packet.Magic, kMagic, sizeof(kMagic));
+                    Packet.Version = kVersion;
+                    Packet.Kind = kKindMapFlags;
+                    Packet.Role = Mine.Role;
+                    Packet.Map = Mineable.Map;
+                    memcpy(Packet.Bytes, Mineable.Bytes, sizeof(Packet.Bytes));
+                }
+            }
+            for (size_t j = 0; j < Ready; ++j)
+            {
+                for (size_t i = 0; i < Count; ++i)
+                {
+                    SendTo(Net, Others[i], &Out[j], sizeof(Out[j]), kReliable, kChannel) ? ++s_sent : ++s_send_failed;
+                }
             }
         }
 
@@ -1115,6 +1248,70 @@ bool DS2_CoopChannel::TakeGuestEvent(GuestEvent Event, Bonfire& Out)
     Out.AgeMs = Now - Entry.Tick;
     return true;
 #else
+    return false;
+#endif
+}
+
+void DS2_CoopChannel::PublishMapFlags(uint32_t Map, const uint8_t Bytes[DS2_CoopChannel::kMapFlagBytes])
+{
+#ifdef _WIN32
+    if (Map == 0 || Bytes == nullptr)
+    {
+        return;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    std::scoped_lock Lock(s_flags_mutex);
+    MapFlags* Slot = nullptr;
+    MapFlags* Oldest = &s_flags_mine[0];
+    for (MapFlags& Entry : s_flags_mine)
+    {
+        if (Entry.Map == Map)
+        {
+            Slot = &Entry;
+            break;
+        }
+        if (Entry.Map == 0 || Entry.Tick < Oldest->Tick)
+        {
+            Oldest = &Entry;
+        }
+    }
+    if (Slot == nullptr)
+    {
+        Slot = Oldest;
+        Slot->Map = Map;
+    }
+    memcpy(Slot->Bytes, Bytes, DS2_CoopChannel::kMapFlagBytes);
+    Slot->Tick = Now;
+#else
+    (void)Map;
+    (void)Bytes;
+#endif
+}
+
+bool DS2_CoopChannel::HostMapFlags(uint32_t Map, uint8_t Bytes[DS2_CoopChannel::kMapFlagBytes], uint64_t& AgeMs)
+{
+#ifdef _WIN32
+    AgeMs = 0;
+    if (Map == 0 || Bytes == nullptr)
+    {
+        return false;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    std::scoped_lock Lock(s_flags_mutex);
+    for (const MapFlags& Entry : s_flags_heard)
+    {
+        if (Entry.Map == Map && Entry.Tick != 0)
+        {
+            memcpy(Bytes, Entry.Bytes, DS2_CoopChannel::kMapFlagBytes);
+            AgeMs = Now - Entry.Tick;
+            return true;
+        }
+    }
+    return false;
+#else
+    (void)Map;
+    (void)Bytes;
+    AgeMs = 0;
     return false;
 #endif
 }
