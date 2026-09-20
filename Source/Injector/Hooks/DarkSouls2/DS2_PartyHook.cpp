@@ -182,6 +182,30 @@ namespace
     // harmless that time).
     ULONGLONG s_gone_since = 0;
     constexpr ULONGLONG kJoinGraceMs = 30000;
+
+    // The host summons one sign at a time (M8 item 6c).
+    //
+    // The server delivers the guest's sign once - its poll says `sent 1` - but
+    // the game's collection hands it to AddSign twice, with two handles
+    // sixteen milliseconds apart whose generation counter differs by 0x10.
+    // ConsiderSign used to summon both, and the second call killed the first:
+    // on 20/09 that produced "Player was unable to join multiplayer session",
+    // "Someone has already used this summon sign" and "The sign has
+    // disappeared", in turn, and the dialog it left up stopped the hook for
+    // the rest of the boot.
+    //
+    // So a summon claims a window, and nothing else is summoned inside it.
+    constexpr ULONGLONG kSummonQuietMs = 20000;
+    ULONGLONG s_summoned_at = 0;
+    uint64_t s_summoned_owner = 0;
+
+    // ... and because the host side is edge driven - it only ever acted when
+    // the game handed it a sign - a missed edge used to be final. The host now
+    // looks over the collection itself every few seconds. A sign that is still
+    // there is a summon that did not happen; one that was taken is gone from
+    // the collection, so a live session produces no scan and no summon.
+    constexpr ULONGLONG kHostScanMs = 5000;
+    ULONGLONG s_host_next_scan = 0;
     std::string s_last_guest_line;
 
     std::filesystem::path s_log_path;
@@ -357,7 +381,7 @@ namespace
         }
     }
 
-    void RescanSigns();
+    void RescanSigns(bool Loud);
 
     // Runs on the game's thread, every frame.
     void TickHook(void* Self)
@@ -368,7 +392,17 @@ namespace
 
         if (s_rescan.exchange(false) && !s_paused.load())
         {
-            RescanSigns();
+            RescanSigns(true);
+        }
+        // The host's own sweep, so a missed sign is not final.
+        if (!s_guest && !s_paused.load() && (!s_accept.empty() || s_party_code != 0))
+        {
+            const ULONGLONG Now = GetTickCount64();
+            if (Now >= s_host_next_scan)
+            {
+                s_host_next_scan = Now + kHostScanMs;
+                RescanSigns(false);
+            }
         }
         const bool Orders = s_pending_place.load() != kNothing || s_pending_status.load();
         if (!Orders && !s_guest)
@@ -457,8 +491,18 @@ namespace
                 Clock().c_str(), Handle, (unsigned long long)Owner, Role));
             return;
         }
+        const ULONGLONG Now = GetTickCount64();
+        if (s_summoned_at != 0 && Now - s_summoned_at < kSummonQuietMs)
+        {
+            Append(StringFormat("%s  host: placa %08x ignorada; a invocacao de %llu ainda esta em curso ha %llu ms\n",
+                Clock().c_str(), Handle, (unsigned long long)s_summoned_owner,
+                (unsigned long long)(Now - s_summoned_at)));
+            return;
+        }
         Append(StringFormat("%s  host: invocando a placa %08x do parceiro %llu (jogador %u)%s\n",
             Clock().c_str(), Handle, (unsigned long long)Owner, PlayerId, Why));
+        s_summoned_at = Now;
+        s_summoned_owner = Owner;
         uint32_t Copy = Handle;
         s_summon(Manager, &Copy);
     }
@@ -478,14 +522,17 @@ namespace
     // The collection AddSign files into, walked through its own interface:
     // slot 0x18 is the count, slot 0x10 the i-th entry (FUN_14020e6f0 does the
     // same). An entry is live when +0x14 is negative.
-    void RescanSigns()
+    void RescanSigns(bool Loud)
     {
         void* Self = s_sign_set.load();
         uintptr_t Collection = 0, Vftable = 0, CountFn = 0, AtFn = 0;
         if (Self == nullptr || !ReadPointer((uintptr_t)Self - 8, Collection) || Collection == 0 ||
             !ReadPointer(Collection, Vftable) || !ReadPointer(Vftable + 0x18, CountFn) || !ReadPointer(Vftable + 0x10, AtFn))
         {
-            Append(StringFormat("%s  host: nada para revisar (nenhuma placa chegou ainda)\n", Clock().c_str()));
+            if (Loud)
+            {
+                Append(StringFormat("%s  host: nada para revisar (nenhuma placa chegou ainda)\n", Clock().c_str()));
+            }
             return;
         }
         using Count_p = uint32_t(*)(void*);
@@ -508,7 +555,8 @@ namespace
             // holds 0xc0000000 entries that are something else.
             if (Live < 0 && ((uint32_t)Handle & 0xc0000000u) == 0x80000000u)
             {
-                ConsiderSign(Self, (uint32_t)Handle, Bytes[0x28], PlayerId, " (revisao ao retomar)");
+                ConsiderSign(Self, (uint32_t)Handle, Bytes[0x28], PlayerId,
+                    Loud ? " (revisao ao retomar)" : " (revisao do host)");
             }
         }
     }
