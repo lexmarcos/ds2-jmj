@@ -186,11 +186,12 @@ namespace DS2_CoopChannel
     // and the guest applies it with the game's own `FUN_1401f30e0` as the map
     // finishes building - which runs the real `SetState`, so the object moves
     // instead of a byte changing under it. A map holds 120 to 205 of these in
-    // practice, and Shulva more than 256 - measured 20/09, where the first
-    // cap truncated it. kMapObjMax is the cap, and a map over it says so in
-    // DS2_Backread.log and is carried as far as it goes. See
-    // docs/DS2_WORLD_STATE.md.
-    constexpr size_t kMapObjMax = 512;
+    // practice. The entity walk finds far more than that - Shulva passed 256
+    // and Brume Tower passed 512, each cap in turn truncating the list and
+    // leaving the very object this was written for outside it. kMapObjMax is
+    // the cap now, and a map over it says so in DS2_Backread.log rather than
+    // going quiet. See docs/DS2_WORLD_STATE.md.
+    constexpr size_t kMapObjMax = 2048;
     void PublishMapObjects(uint32_t Map, const uint16_t* Index, const uint8_t* State, size_t Count);
     size_t HostMapObjects(uint32_t Map, uint16_t* Index, uint8_t* State, size_t Room, uint64_t& AgeMs);
 
