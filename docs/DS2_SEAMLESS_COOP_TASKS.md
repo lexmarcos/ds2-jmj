@@ -2088,6 +2088,31 @@ or unproven, for whoever picks this up.
    character is standing in, and falls back to the guest's own record, which
    is a worse place to be and a safe one. `fogueira_do_host` is back **on**.
 
+6f. **The first campaign measured with arrival evidence on both machines.**
+   20/09, build `4b19eb3d`, Majula the session map, six legs:
+   `0a170000` → `0a130000` → `14150000` → `0a1f0000` → `0a0a0000` →
+   `0a040000`. Every leg counted only when **both** `DS2_Bonfire.log` gained a
+   `viagem para a fogueira <id> (mapa <map>)` line for the bonfire that was
+   asked for, counted before and after that leg.
+
+   **Six of six arrived on both machines**, the host's record followed every
+   one, both processes stayed up, `p2pSessionVerified: true` at the end, and
+   neither character died during the campaign — the guest's two deaths are the
+   `session end` that followed it. Leg three is the tight one (`14150000`
+   costs 1400), and the spare-the-other-player's-map rule fired there as it
+   did on 20/09's earlier run.
+
+   The lock added the same day — `BeginLetGo` refusing a map the enemy sync is
+   bound to — **never fired, which is the correct outcome**: the bound map was
+   the session's map throughout, so the older refusal caught it first. It is a
+   second lock on the same door, for the day the two sources disagree.
+
+   Two false results were found and fixed in the harness itself on the way
+   here, both of the same kind and both mine: counting a leg done because the
+   processes were alive, and then counting this leg's arrival against the
+   previous leg's *different* bonfire. A campaign number on this page means
+   nothing without the before/after counts beside it.
+
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
