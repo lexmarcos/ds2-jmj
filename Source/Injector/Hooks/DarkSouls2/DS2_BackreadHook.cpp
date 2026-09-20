@@ -156,6 +156,48 @@ namespace
     FxKill_p s_fx_kill_subtree = nullptr;
     FxKill_p s_fx_kill_node = nullptr;
 
+    // The event flags of a map that goes away.
+    //
+    // Every loaded map owns three flag categories - `(area * 10 + block) * 100`
+    // plus 0, 1 and 2, so Heide (0a1f0000) is 13100, 13101 and 13102 - whose
+    // bytes do not belong to the map. They live in a small arena inside the
+    // EventFlagBuffer (`*(EventFlagManager + 0x18)`), which holds one copy for
+    // the player's own world and one for the host's, and each copy has room
+    // for **three** maps. `FUN_1404745c0` claims a slot for a map
+    // (`FUN_140186050`) and hangs three nodes off the manager's hash table
+    // (`FUN_140474db0`) pointing straight into it; it runs from the owner's
+    // build, `FUN_1403ca8d0` case 1, through `FUN_14044fbb0`.
+    //
+    // Nothing gives the slot back. The owner's teardown does notify the
+    // EventManager (`FUN_1403cb1a0` case 1 -> `FUN_14044fb60`), but the flag
+    // half of that call, `FUN_1404746a0`, is a bare `ret`. The only real
+    // release is `FUN_14044f7a0` -> `FUN_1404746b0`, which drops the three
+    // nodes and frees the slot (`FUN_140186480`), and in the unmodded game
+    // only a warp (`FUN_1401c2080`) calls it. That is enough there, because a
+    // warp is the only way the set of loaded maps ever changes.
+    //
+    // Travelling between bonfires changes it without a warp, and a trace on
+    // 19/09 caught exactly that: on a leg to Heide the guest hit `44fbb0`,
+    // `4745c0` and `186050` and never once hit the release. After twelve maps
+    // its table held 36 nodes over three slots, so Majula, Heide and Brume
+    // were reading and writing the same 25 bytes; the host, whose warp
+    // releases only the map it leaves, was standing in a map with no category
+    // at all, where `FUN_1404750b0` drops every flag write on the floor and
+    // never sends the `0x20` packet that tells the other player.
+    //
+    // So a map that finishes unloading gets the release the warp would have
+    // given it. It runs a frame later, from the streamer's update, rather
+    // than inside the owner's own update that just tore it down.
+    constexpr size_t kMapEventsGoneOffset = 0x44f7a0;
+    constexpr uint8_t kMapEventsGoneBytes[] = { 0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kContextEventManager = 0x70;
+    constexpr size_t kMaxPendingEventReleases = 16;
+    using MapEventsGone_p = void(*)(uintptr_t EventManager, uint32_t Map);
+    MapEventsGone_p s_map_events_gone = nullptr;
+    std::mutex s_event_release_mutex;
+    uint32_t s_event_releases[kMaxPendingEventReleases] = {};
+    size_t s_event_release_count = 0;
+
     constexpr size_t kOwnerState = 0x1e8;              // byte, 5 loaded
     constexpr size_t kOwnerForced = 0x1e9;             // byte
 
@@ -652,6 +694,60 @@ namespace
             (unsigned long long)kTargetCapacity, (unsigned long long)Chameleon, (unsigned long long)kChameleonCapacity);
     }
 
+    // A map whose flag slot is owed back, taken at the next streamer update.
+    void QueueMapEventRelease(uint32_t Map)
+    {
+        std::scoped_lock Lock(s_event_release_mutex);
+        for (size_t i = 0; i < s_event_release_count; ++i)
+        {
+            if (s_event_releases[i] == Map)
+            {
+                return;
+            }
+        }
+        if (s_event_release_count < kMaxPendingEventReleases)
+        {
+            s_event_releases[s_event_release_count++] = Map;
+        }
+    }
+
+    // Give back the flag slots of the maps that finished unloading, the way a
+    // warp gives back the one it leaves.
+    void DrainMapEventReleases()
+    {
+        uint32_t Maps[kMaxPendingEventReleases] = {};
+        size_t Count = 0;
+        {
+            std::scoped_lock Lock(s_event_release_mutex);
+            Count = s_event_release_count;
+            memcpy(Maps, s_event_releases, Count * sizeof(uint32_t));
+            s_event_release_count = 0;
+        }
+        if (Count == 0 || s_map_events_gone == nullptr)
+        {
+            return;
+        }
+        uintptr_t Context = 0, Events = 0;
+        if (!ReadPointer(s_base + kContextOffset, Context) ||
+            !ReadPointer(Context + kContextEventManager, Events))
+        {
+            return;
+        }
+        for (size_t i = 0; i < Count; ++i)
+        {
+            // A map that came back in the meantime keeps its flags.
+            uint8_t State = 0;
+            uint32_t Mask[4] = {};
+            if (DS2_Backread::Query(Maps[i], State, Mask) && State != 0)
+            {
+                continue;
+            }
+            s_map_events_gone(Events, Maps[i]);
+            Append(StringFormat("%s  flags: map %08x unloaded, its three categories and its slot given back\n",
+                Clock().c_str(), Maps[i]));
+        }
+    }
+
     // Every owner's state change, with the tables beside it.
     void WatchOwnerState(uintptr_t Owner, uint32_t Map)
     {
@@ -680,6 +776,13 @@ namespace
         else if (State == 0)
         {
             s_cost_pending &= ~(1ull << Index);
+            // The map is gone; its flag slot goes back (see kMapEventsGoneOffset).
+            // Not from here: this runs inside the owner's own update, the one
+            // that tore the map down, and the release walks the EventManager.
+            if (Before != 0xff && Before != 0 && Map != 0)
+            {
+                QueueMapEventRelease(Map);
+            }
         }
         Append(StringFormat("%s  budget: map %08x [%d] state %u -> %u; %s\n", Clock().c_str(), Map, Index,
             (unsigned)Before, (unsigned)State, DescribeBudget().c_str()));
@@ -1612,6 +1715,7 @@ namespace
 
     void StreamerUpdateHook(void* Streamer, float* Position, int32_t Cell, void* Part, uint8_t Flag)
     {
+        DrainMapEventReleases();
         uint32_t Map = s_focus_map.load();
         // A focus only means something while its map is loaded. Otherwise
         // the streamer would search from a map that is not there and never
@@ -2295,6 +2399,14 @@ bool DS2_BackreadHook::Install(Injector& injector)
     else
     {
         Error("[DS2_BackreadHook] the effects kill is not the expected code; a DLC map's orphaned effects are left alone");
+    }
+    if (BytesMatch(s_base + kMapEventsGoneOffset, kMapEventsGoneBytes, sizeof(kMapEventsGoneBytes)))
+    {
+        s_map_events_gone = (MapEventsGone_p)(s_base + kMapEventsGoneOffset);
+    }
+    else
+    {
+        Error("[DS2_BackreadHook] the event manager's map release is not the expected code; travelled maps keep their flag slots");
     }
     s_nav_find_map = (NavFindMap_p)(s_base + kNavFindMapOffset);
     s_nav_find_cell = (NavFindCell_p)(s_base + kNavFindCellOffset);
