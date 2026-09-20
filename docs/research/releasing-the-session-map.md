@@ -75,7 +75,7 @@ On the machine that releases, **with the map still loaded**:
    game thread holds nothing there.
 3. **Purge the sign areas** of that map by hand — the game's own purge is a
    bare `ret`. Already done.
-4. **Clear the lighting cache of every character** whose entry belongs to
+4. — **already built, and its trigger fixed 20/09.** See below. Clear the lighting cache of every character whose entry belongs to
    that map's bank: `chr+0x460`, `+0x468`, `+0x470`, `*(chr+0xb8)+0x250`, and
    on the **model** `*(chr+0xf0)`. **No native call does this**, and it is
    what the remote copy would otherwise die of.
@@ -293,3 +293,41 @@ which is exactly what it is for.
 The same run showed why 6b is worth the work, without being asked to: the
 session had formed in the DLC ice map, so the session map cost **1400** of an
 1898 budget and every heavy destination was refused at the vote.
+
+## Step 4 was already written, and was watching the wrong thing
+
+`SweepLighting` in `DS2_DeathInterceptHook` already does more than step 4 asks
+for. It compares **five** cached-entry fields — `chr+0x460`, and the model's
+`+0x2a0`, `+0x2a8`, `+0x228`, `+0x230` — against the bank of the map that is
+going, and `ResetLighting` clears the character's three fields, the physics
+region byte and six fields on the model. It already runs from `UpdateHook`,
+which is **every player character, local or another player's copy**. So the
+remote copy was covered.
+
+What it was watching was `DS2_Backread::Unloading()`, and that names **only
+the budget's chosen victim**. Every other release — a keep expiring, an
+explicit request, the session ending, and in time the session's own map — goes
+through `BeginLetGo`, and got **no sweep at all**. 6b would have walked
+straight into that, because releasing the session's map is exactly a
+`BeginLetGo` release, and the stale entry is what the other player's copy dies
+of.
+
+The sweep now takes `DS2_Backread::Releasing()` as a second source and names
+in its line which of the two found the map. Measured on a five-leg campaign
+with a verified session, all five arriving on both machines **[read]**:
+
+```
+19:13:35.624  lighting: character 00007FFFE8829180 still held map [9]'s lighting (soltura); cleared
+19:13:35.624  lighting: character 00007FFFE883E430 still held map [9]'s lighting (soltura); cleared
+...
+   orcamento=0  soltura=40
+```
+
+**Forty clears, every one from the new source and none from the old** — 40 is
+the log's own cap, so there were at least that many. Before this change not
+one of them happened: those characters kept a released map's lighting entry
+and nothing ever took it away. This is a bug fixed today, not only a
+precondition.
+
+The guest logged none this run, which is the honest limit of the measurement:
+the fix is proven on the host, and the guest did not exercise it.
