@@ -86,7 +86,8 @@ On the machine that releases, **with the map still loaded**:
    `FUN_140416ac0`, reached only from the teardown's case `0x0d`.
 7. **Repoint `joinCtrl+0x19c`** on the guest — **four bytes**, never eight;
    `+0x1a0` next door is the way home.
-8. **Wait for the destination's table**, `table != 0 && *(int*)(table+0x24)
+8. — **written and verified 20/09**, `DS2_EnemySync::TableReady`. See below.
+   Wait for the destination's table, `table != 0 && *(int*)(table+0x24)
    == mapId`. Not `blocks != 0`: a map with no generators has a valid table
    with none. Poll with a hard timeout and treat the timeout as failure —
    there is no retry anywhere in that path.
@@ -331,3 +332,44 @@ precondition.
 
 The guest logged none this run, which is the honest limit of the measurement:
 the fix is proven on the host, and the guest did not exercise it.
+
+## Step 8, and the index that could not be read
+
+The predicate is `table != 0 && *(int32_t*)(table + 0x24) == mapId`, with
+`table = *(mgr + 0x20 + index*8)` and `mgr = *(*0x1416148f0 + 0x40)`.
+
+**The index was the obstacle.** The game's own lookup, `FUN_140419a70`, gets
+it from `FUN_1403bcec0(world, mapId)` — and that is an Arxan trampoline
+(`jmp 0x141b39d4f`) which cannot be read statically. Rather than chase it, the
+claim that the **backread owner's own `+0x0c`** is the same index space was
+measured. On 20/09, every loaded map on both instances **[read]**:
+
+```
+inst 1: mgr 7ffff06ab420  lista7=0  fila=[255,255,255,255]
+   [ 1] 0a040000 estado 5 -> tabela 7fffe8a3cba0  +0x24=0a040000  PRONTA
+   [ 7] 0a130000 estado 5 -> tabela 7fffe827e420  +0x24=0a130000  PRONTA
+inst 2: mgr 7ffff03a5b80  lista7=0  fila=[255,255,255,255]
+   [ 1] 0a040000 estado 5 -> tabela 7fffe8a31c00  +0x24=0a040000  PRONTA
+   [ 7] 0a130000 estado 5 -> tabela 7fffe819fe10  +0x24=0a130000  PRONTA
+```
+
+Four for four, both roles. The same run gives two facts worth keeping: the
+create queue's empty slot is **`0xff`**, not 0, and the gate at `mgr+0x3c6`
+was 0 throughout.
+
+**The table is built before state 5.** Watching a destination across a leg,
+the first sample after the vote already had `idx=12`, owner **state 4**, and
+`+0x24` equal to the destination. The research warned off keying on state 5
+because the enqueue happens earlier; the measurement says state 5 is *late*,
+not early, which is the same warning from the other side.
+
+The C++ then verified itself against live maps rather than against its author.
+`TableReady` is reported from the release hook, where the map certainly had a
+built table a moment before, with the gate and the queue beside it — four legs
+with a verified session, both machines **[read]**:
+
+```
+19:40:43  soltando personagens do mapa 0a040000 (slot 1) ... tabela pronta, lista7 0, fila 255/255/255/255
+19:41:14  soltando personagens do mapa 0a170000 (slot 9) ... tabela pronta, lista7 0, fila 255/255/255/255
+19:42:54  soltando personagens do mapa 0a1f0000 (slot 12) ... tabela pronta, lista7 0, fila 255/255/255/255
+```
