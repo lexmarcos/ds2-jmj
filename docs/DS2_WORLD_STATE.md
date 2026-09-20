@@ -220,6 +220,26 @@ and in the logs, the whole chain: `flags do mapa 32240000 recebidos do host`
 on the guest's channel, then `flags: map 32240000 seeded with the host's
 (categories 53600..53602, 1069 ms old)` a second later.
 
+**And with the flags equal, one object was not.** A census of every
+`MapObjStateActComponent` on both machines right after that leg — 399 on each,
+compared only where `+0x1f` is 0, as [the misreading
+above](#map-object-state-from-memory) demands — found **exactly one**
+disagreement:
+
+```
+map 32240000 idx 20 state 20 at (-167.7, -5.2, 436.3)   host
+map 32240000 idx 10 state 10 at (-167.7, -5.2, 436.3)   guest
+```
+
+Brume Tower, 14 m from the bonfire `0x8f39`, so not a bonfire. Its state is
+therefore **not** a map flag: the three categories of `53600` are byte for
+byte identical on both and this object still reads 10 against 20. That is
+M4's second missing piece with a name and a position — per-object state that
+the snapshot carries at the entry warp and nothing carries afterwards. The
+game's own way to apply it is `FUN_1401f30e0`, `(index, state)` pairs through
+slot `+0x50` of the `StateActCtrl`, on the `MapStateActManager` at
+`*(ctx+0x38)+0x1f8`.
+
 **What it does not cover yet.** The seeding is a byte write, so the flag
 listeners (`FUN_140184ff0`) do not run for it; it works because it lands
 before the map builds its objects. If the host's packet ever arrives after

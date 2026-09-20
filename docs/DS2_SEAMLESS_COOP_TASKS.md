@@ -597,6 +597,14 @@ unloading gets the release the warp would have given it.
    `EventFlagManager` read on both. If it is, M4 is a test and not code.
 2. **Whatever is not a flag** (`MapObjStateActComponent` keeps per-object
    state): find where the guest receives it, or does not receive it.
+   **Narrowed 19/09 to one object with a position.** With the map flags now
+   carried and byte-identical, a census of all 399 state-act components on
+   both machines after a leg to Brume Tower disagreed on exactly one, at
+   `(-167.7, -5.2, 436.3)`: state 20 on the host, 10 on the guest. So its
+   state is not a flag, and nothing carries it after the entry warp. The game
+   applies such state with `FUN_1401f30e0` on the `MapStateActManager`
+   (`*(ctx+0x38)+0x1f8`), which is the shape the fix should take — the same
+   publish-and-seed the flags now use.
 3. **A mechanism operated by the guest** in the host's world: the map flag goes
    through the filter; the object still has to be checked.
 
