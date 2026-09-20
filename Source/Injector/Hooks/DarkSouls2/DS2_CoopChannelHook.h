@@ -171,6 +171,27 @@ namespace DS2_CoopChannel
     void PublishMapFlags(uint32_t Map, const uint8_t Bytes[kMapFlagBytes]);
     bool HostMapFlags(uint32_t Map, uint8_t Bytes[kMapFlagBytes], uint64_t& AgeMs);
 
+    // One map's object state, as the host has it.
+    //
+    // The objects with a state machine - doors, levers, elevators, the ones
+    // `MapObjStateActComponent` drives - keep their state outside the event
+    // flags, and the only thing that ever hands it to a guest is the world
+    // snapshot of the entry warp. A map the group travels to afterwards was
+    // not in that snapshot. Measured 19/09 after a leg to Brume Tower, with
+    // the map flags already carried and byte for byte equal: of all 399
+    // state-act objects on the two machines exactly one disagreed, at
+    // (-167.7, -5.2, 436.3), state 20 on the host and 10 on the guest.
+    //
+    // So the host publishes, per map, the state of every entity that has one,
+    // and the guest applies it with the game's own `FUN_1401f30e0` as the map
+    // finishes building - which runs the real `SetState`, so the object moves
+    // instead of a byte changing under it. A map holds 120 to 205 of these in
+    // practice; kMapObjMax is the cap, and a map over it is logged and
+    // carried as far as it goes. See docs/DS2_WORLD_STATE.md.
+    constexpr size_t kMapObjMax = 256;
+    void PublishMapObjects(uint32_t Map, const uint16_t* Index, const uint8_t* State, size_t Count);
+    size_t HostMapObjects(uint32_t Map, uint16_t* Index, uint8_t* State, size_t Room, uint64_t& AgeMs);
+
     // This machine's SteamID64, 0 until the first poll.
     uint64_t SelfSteamId();
 }

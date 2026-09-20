@@ -819,6 +819,192 @@ namespace
 
     int ReadOwners(uintptr_t Owners[kMaxOwners]);
 
+    // The object state the guest is missing (see DS2_CoopChannelHook.h).
+    //
+    // A map's entity container is `*(owner+0x160)`: the vector at `+0x10`,
+    // its length at `+0x18`. The game's own import walks it by index, and
+    // this walk is the same one, read instead of written:
+    //
+    //   entry  = vector[index]
+    //   entity = FUN_1403c1600(entry)                 // follows a kind-4 proxy
+    //   comp   = FUN_1401ca790(entity+0xb8, entity)   // the component
+    //   ctrl   = *(comp+0x48)                         // StateActCtrl
+    //   state  = *(uint8*)(ctrl+0x1c)
+    //
+    // Not every entity has one, so the vftable of `ctrl` is checked before
+    // the state is believed, and only the indices that have one are carried.
+    //
+    // Applying is the game's own `FUN_1401f30e0(_, map, pairs, count)`, whose
+    // real signature the decompiler hides: `rcx` is dead, `rdx` is the map id,
+    // and each pair is `{uint32 index; float state}` - the `SetState` slot
+    // takes the state in `xmm1` as a **float**. It refuses a map whose owner
+    // has not built past `+0x1e0 >= 0xc`, so that is the trigger.
+    constexpr size_t kOwnerBuildState = 0x1e0;
+    constexpr uint8_t kOwnerBuilt = 0x0c;
+    constexpr size_t kOwnerEntities = 0x160;
+    constexpr size_t kContainerVector = 0x10;
+    constexpr size_t kContainerCount = 0x18;
+    constexpr size_t kEntityComponents = 0xb8;
+    constexpr size_t kComponentCtrl = 0x48;
+    constexpr size_t kCtrlState = 0x1c;
+    constexpr size_t kStateActVftable = 0x10cf668;
+    constexpr size_t kEntityOfOffset = 0x3c1600;
+    constexpr uint8_t kEntityOfBytes[] = { 0x48, 0x83, 0xec, 0x28, 0x48, 0x85, 0xc9, 0x74, 0x1c };
+    constexpr size_t kComponentOfOffset = 0x1ca790;
+    constexpr uint8_t kComponentOfBytes[] = { 0x0f, 0xb6, 0x82, 0xa2, 0x00, 0x00, 0x00, 0x3c, 0x01 };
+    constexpr size_t kApplyStatesOffset = 0x1f30e0;
+    constexpr uint8_t kApplyStatesBytes[] = { 0x48, 0x89, 0x5c, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x30 };
+    using EntityOf_p = uintptr_t(*)(uintptr_t Entry);
+    using ComponentOf_p = uintptr_t(*)(uintptr_t Components, uintptr_t Entity);
+    using ApplyStates_p = void(*)(uintptr_t Unused, uint32_t Map, const void* Pairs, uint32_t Count);
+    EntityOf_p s_entity_of = nullptr;
+    ComponentOf_p s_component_of = nullptr;
+    ApplyStates_p s_apply_states = nullptr;
+    constexpr ULONGLONG kObjectsEveryMs = 1000;
+    ULONGLONG s_objects_at = 0;
+    bool s_objects_seeded[64] = {};
+
+    struct StatePair
+    {
+        uint32_t Index;
+        float State;
+    };
+
+    // Every entity of this map that has a state machine, and its state.
+    size_t ReadMapStates(uintptr_t Owner, uint16_t* Index, uint8_t* State, size_t Room)
+    {
+        uint8_t Built = 0;
+        uintptr_t Container = 0, Vector = 0;
+        uint32_t Count = 0;
+        if (s_entity_of == nullptr || s_component_of == nullptr ||
+            !ReadBytes(Owner + kOwnerBuildState, &Built, 1) || Built < kOwnerBuilt ||
+            !ReadPointer(Owner + kOwnerEntities, Container) ||
+            !ReadPointer(Container + kContainerVector, Vector) ||
+            !ReadBytes(Container + kContainerCount, &Count, sizeof(Count)) || Count == 0 || Count > 0xffff)
+        {
+            return 0;
+        }
+        size_t Found = 0;
+        for (uint32_t i = 0; i < Count && Found < Room; ++i)
+        {
+            uintptr_t Entry = 0;
+            if (!ReadPointer(Vector + (size_t)i * sizeof(uintptr_t), Entry))
+            {
+                continue;
+            }
+            const uintptr_t Entity = s_entity_of(Entry);
+            if (Entity == 0)
+            {
+                continue;
+            }
+            const uintptr_t Component = s_component_of(Entity + kEntityComponents, Entity);
+            uintptr_t Ctrl = 0, Vftable = 0;
+            if (Component == 0 || !ReadPointer(Component + kComponentCtrl, Ctrl) ||
+                !ReadPointer(Ctrl, Vftable) || Vftable != s_base + kStateActVftable)
+            {
+                continue;
+            }
+            uint8_t Now = 0;
+            if (!ReadBytes(Ctrl + kCtrlState, &Now, 1))
+            {
+                continue;
+            }
+            Index[Found] = (uint16_t)i;
+            State[Found] = Now;
+            ++Found;
+        }
+        return Found;
+    }
+
+    // The host publishes each loaded map's object state; the guest applies
+    // what the host sent, once per registration, as the map finishes building.
+    void CarryMapObjects()
+    {
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_objects_at < kObjectsEveryMs)
+        {
+            return;
+        }
+        s_objects_at = Now;
+        DS2_CoopChannel::Bonfire Host = {};
+        const bool AmGuest = DS2_CoopChannel::HostBonfire(Host);
+        const bool AmHost = !AmGuest && DS2_CoopChannel::GuestCount() > 0;
+        if (!AmGuest && !AmHost)
+        {
+            return;
+        }
+        uintptr_t Owners[kMaxOwners] = {};
+        const int Count = ReadOwners(Owners);
+        for (int i = 0; i < Count; ++i)
+        {
+            uint32_t Map = 0;
+            int32_t At = -1;
+            uint8_t Built = 0;
+            if (!ReadBytes(Owners[i] + kOwnerMap, &Map, sizeof(Map)) || Map == 0 ||
+                !ReadBytes(Owners[i] + kOwnerIndexField, &At, sizeof(At)) || At < 0 || At > 63 ||
+                !ReadBytes(Owners[i] + kOwnerBuildState, &Built, 1) || Built < kOwnerBuilt)
+            {
+                continue;
+            }
+            if (AmHost)
+            {
+                uint16_t Index[DS2_CoopChannel::kMapObjMax] = {};
+                uint8_t State[DS2_CoopChannel::kMapObjMax] = {};
+                const size_t Have = ReadMapStates(Owners[i], Index, State, DS2_CoopChannel::kMapObjMax);
+                if (Have > 0)
+                {
+                    DS2_CoopChannel::PublishMapObjects(Map, Index, State, Have);
+                }
+                continue;
+            }
+            if (s_objects_seeded[At] || s_apply_states == nullptr)
+            {
+                continue;
+            }
+            uint16_t Index[DS2_CoopChannel::kMapObjMax] = {};
+            uint8_t State[DS2_CoopChannel::kMapObjMax] = {};
+            uint64_t AgeMs = 0;
+            const size_t Have = DS2_CoopChannel::HostMapObjects(Map, Index, State, DS2_CoopChannel::kMapObjMax, AgeMs);
+            if (Have == 0)
+            {
+                continue;
+            }
+            // Only what this machine does not already agree with, so the
+            // game's SetState is not run over a hundred settled objects.
+            uint16_t Mine[DS2_CoopChannel::kMapObjMax] = {};
+            uint8_t MineState[DS2_CoopChannel::kMapObjMax] = {};
+            const size_t Local = ReadMapStates(Owners[i], Mine, MineState, DS2_CoopChannel::kMapObjMax);
+            StatePair Pairs[DS2_CoopChannel::kMapObjMax] = {};
+            size_t Differ = 0;
+            for (size_t k = 0; k < Have; ++k)
+            {
+                uint8_t Here = 0xff;
+                for (size_t m = 0; m < Local; ++m)
+                {
+                    if (Mine[m] == Index[k])
+                    {
+                        Here = MineState[m];
+                        break;
+                    }
+                }
+                if (Here != State[k])
+                {
+                    Pairs[Differ].Index = Index[k];
+                    Pairs[Differ].State = (float)State[k];
+                    ++Differ;
+                }
+            }
+            s_objects_seeded[At] = true;
+            if (Differ == 0)
+            {
+                continue;
+            }
+            s_apply_states(0, Map, Pairs, (uint32_t)Differ);
+            Append(StringFormat("%s  objects: map %08x took %zu of the host's %zu states (%llu ms old)\n",
+                Clock().c_str(), Map, Differ, Have, (unsigned long long)AgeMs));
+        }
+    }
+
     // The host publishes, the guest writes in. Once a second, over the owners.
     void CarryMapFlags()
     {
@@ -1028,6 +1214,7 @@ namespace
             // Not from here: this runs inside the owner's own update, the one
             // that tore the map down, and the release walks the EventManager.
             s_flags_seeded[Index] = false;
+            s_objects_seeded[Index] = false;
             if (Before != 0xff && Before != 0 && Map != 0)
             {
                 QueueMapEventRelease(Map);
@@ -1969,6 +2156,7 @@ namespace
     {
         DrainMapEventReleases();
         CarryMapFlags();
+        CarryMapObjects();
         uint32_t Map = s_focus_map.load();
         // A focus only means something while its map is loaded. Otherwise
         // the streamer would search from a map that is not there and never
@@ -2652,6 +2840,18 @@ bool DS2_BackreadHook::Install(Injector& injector)
     else
     {
         Error("[DS2_BackreadHook] the effects kill is not the expected code; a DLC map's orphaned effects are left alone");
+    }
+    if (BytesMatch(s_base + kEntityOfOffset, kEntityOfBytes, sizeof(kEntityOfBytes)) &&
+        BytesMatch(s_base + kComponentOfOffset, kComponentOfBytes, sizeof(kComponentOfBytes)) &&
+        BytesMatch(s_base + kApplyStatesOffset, kApplyStatesBytes, sizeof(kApplyStatesBytes)))
+    {
+        s_entity_of = (EntityOf_p)(s_base + kEntityOfOffset);
+        s_component_of = (ComponentOf_p)(s_base + kComponentOfOffset);
+        s_apply_states = (ApplyStates_p)(s_base + kApplyStatesOffset);
+    }
+    else
+    {
+        Error("[DS2_BackreadHook] the map object state walk is not the expected code; a guest keeps its own object state");
     }
     if (BytesMatch(s_base + kMapEventsGoneOffset, kMapEventsGoneBytes, sizeof(kMapEventsGoneBytes)))
     {

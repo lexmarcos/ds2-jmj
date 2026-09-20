@@ -80,6 +80,10 @@ namespace
     // because they do not fit in an announcement. See PublishMapFlags.
     constexpr uint8_t kKindMapFlags = 0x40;
     constexpr size_t kMaxFlagMaps = 8;
+    // One chunk of a map's object state; see PublishMapObjects.
+    constexpr uint8_t kKindMapObjState = 0x50;
+    constexpr size_t kMapObjPerPacket = 128;
+    constexpr size_t kMapObjChunks = (DS2_CoopChannel::kMapObjMax + kMapObjPerPacket - 1) / kMapObjPerPacket;
     // A guest's event: 0x28 + DS2_CoopChannel::GuestEvent.
     constexpr uint8_t kKindFirstGuestEvent = 0x28;
     constexpr uint8_t kKindLastGuestEvent = 0x28 + DS2_CoopChannel::kGuestEventCount - 1;
@@ -118,6 +122,23 @@ namespace
     };
 #pragma pack(pop)
     static_assert(sizeof(MapFlagsPacket) == 87, "the map flags packet is 87 bytes on the wire");
+#pragma pack(push, 1)
+    struct MapObjPacket
+    {
+        char Magic[4];
+        uint8_t Version;
+        uint8_t Kind;
+        uint8_t Role;
+        uint8_t Reserved;
+        uint32_t Map;
+        uint16_t Total;                          // entries the host has for this map
+        uint16_t First;                          // where this chunk starts
+        uint16_t Count;                          // entries in this chunk
+        uint16_t Index[kMapObjPerPacket];
+        uint8_t State[kMapObjPerPacket];
+    };
+#pragma pack(pop)
+    static_assert(sizeof(MapObjPacket) == 402, "the map object packet is 402 bytes on the wire");
     constexpr char kMagic[4] = { 'J', 'M', 'J', 'C' };
 
     using Poll_p = void(*)(void* Session);
@@ -186,6 +207,22 @@ namespace
     MapFlags s_flags_mine[kMaxFlagMaps];     // the host's, to send
     MapFlags s_flags_sent[kMaxFlagMaps];     // what the poll last sent
     MapFlags s_flags_heard[kMaxFlagMaps];    // a guest's, received
+
+    // One map's object state: what the game's thread published (the host) and
+    // what the host of this session sent (a guest). Under s_obj_mutex.
+    struct MapObjects
+    {
+        uint32_t Map = 0;
+        uint16_t Count = 0;
+        uint16_t Index[DS2_CoopChannel::kMapObjMax] = {};
+        uint8_t State[DS2_CoopChannel::kMapObjMax] = {};
+        uint32_t Chunks = 0;                     // bit per chunk, for the guest
+        ULONGLONG Tick = 0;
+    };
+    std::mutex s_obj_mutex;
+    MapObjects s_obj_mine[kMaxFlagMaps];
+    MapObjects s_obj_sent[kMaxFlagMaps];
+    MapObjects s_obj_heard[kMaxFlagMaps];
     Members s_sessions[kMaxSessions];
     Heard s_heard;
 
@@ -530,8 +567,80 @@ namespace
         }
     }
 
+    // One chunk of a map's object state from the host of this session.
+    void HandleMapObjects(const uint8_t* Data, uint32_t Size, uint64_t From)
+    {
+        MapObjPacket Said;
+        memcpy(&Said, Data, sizeof(Said));
+        if (memcmp(Said.Magic, kMagic, sizeof(kMagic)) != 0 || Said.Version != kVersion || Said.Map == 0 ||
+            Said.Role != kWorldOwner || Said.Count > kMapObjPerPacket ||
+            Said.Total > DS2_CoopChannel::kMapObjMax ||
+            (size_t)Said.First + Said.Count > DS2_CoopChannel::kMapObjMax)
+        {
+            Refuse("estado de objetos nao e desta versao", From, Size);
+            return;
+        }
+        const ULONGLONG Now = GetTickCount64();
+        {
+            std::scoped_lock Lock(s_net_mutex);
+            if (!IsHostLocked(From, Now))
+            {
+                Refuse("estado de objetos de quem nao e o host da sessao", From, Size);
+                return;
+            }
+        }
+        const uint32_t Chunk = 1u << (Said.First / kMapObjPerPacket);
+        bool Complete = false;
+        {
+            std::scoped_lock Lock(s_obj_mutex);
+            MapObjects* Slot = nullptr;
+            MapObjects* Oldest = &s_obj_heard[0];
+            for (MapObjects& Entry : s_obj_heard)
+            {
+                if (Entry.Map == Said.Map)
+                {
+                    Slot = &Entry;
+                    break;
+                }
+                if (Entry.Map == 0 || Entry.Tick < Oldest->Tick)
+                {
+                    Oldest = &Entry;
+                }
+            }
+            if (Slot == nullptr)
+            {
+                Slot = Oldest;
+                Slot->Map = Said.Map;
+                Slot->Chunks = 0;
+            }
+            // A new total means the host rebuilt the list; start again.
+            if (Slot->Count != Said.Total)
+            {
+                Slot->Count = Said.Total;
+                Slot->Chunks = 0;
+            }
+            memcpy(Slot->Index + Said.First, Said.Index, Said.Count * sizeof(uint16_t));
+            memcpy(Slot->State + Said.First, Said.State, Said.Count);
+            Slot->Chunks |= Chunk;
+            Slot->Tick = Now;
+            const uint32_t Wanted = Said.Total == 0 ? 0u
+                : (1u << ((Said.Total + kMapObjPerPacket - 1) / kMapObjPerPacket)) - 1u;
+            Complete = (Slot->Chunks & Wanted) == Wanted;
+        }
+        if (Complete)
+        {
+            Append(StringFormat("%s  estado de %u objetos do mapa %08x recebido do host\n",
+                Clock().c_str(), (unsigned)Said.Total, Said.Map));
+        }
+    }
+
     void Handle(const uint8_t* Data, uint32_t Size, uint64_t From)
     {
+        if (Size == sizeof(MapObjPacket) && Data[5] == kKindMapObjState)
+        {
+            HandleMapObjects(Data, Size, From);
+            return;
+        }
         if (Size == sizeof(MapFlagsPacket) && Data[5] == kKindMapFlags)
         {
             HandleMapFlags(Data, Size, From);
@@ -713,7 +822,7 @@ namespace
 
             // A packet too big for the buffer is still taken off the queue
             // (truncated) and refused by its size.
-            uint8_t Buffer[256];
+            uint8_t Buffer[1024];
             uint32_t Got = 0;
             uint64_t From = 0;
             if (!Read(Net, Buffer, sizeof(Buffer), &Got, &From, kChannel))
@@ -878,6 +987,65 @@ namespace
                 for (size_t i = 0; i < Count; ++i)
                 {
                     SendTo(Net, Others[i], &Out[j], sizeof(Out[j]), kReliable, kChannel) ? ++s_sent : ++s_send_failed;
+                }
+            }
+        }
+
+        // Each loaded map's object state, in chunks, when it changed or every
+        // two seconds. The owner of the world alone speaks, as with the flags.
+        if (Mine.Role == kWorldOwner)
+        {
+            MapObjects Send[kMaxFlagMaps];
+            size_t Ready = 0;
+            {
+                std::scoped_lock Lock(s_obj_mutex);
+                for (size_t i = 0; i < kMaxFlagMaps; ++i)
+                {
+                    const MapObjects& Have = s_obj_mine[i];
+                    if (Have.Map == 0 || Tick - Have.Tick > kLocalStaleMs)
+                    {
+                        continue;
+                    }
+                    MapObjects& Last = s_obj_sent[i];
+                    const bool Changed = Last.Map != Have.Map || Last.Count != Have.Count ||
+                        memcmp(Last.Index, Have.Index, Have.Count * sizeof(uint16_t)) != 0 ||
+                        memcmp(Last.State, Have.State, Have.Count) != 0;
+                    if (!Changed && Tick - Last.Tick < kAnnounceEveryMs)
+                    {
+                        continue;
+                    }
+                    Last.Map = Have.Map;
+                    Last.Count = Have.Count;
+                    memcpy(Last.Index, Have.Index, sizeof(Last.Index));
+                    memcpy(Last.State, Have.State, sizeof(Last.State));
+                    Last.Tick = Tick;
+                    Send[Ready++] = Have;
+                }
+            }
+            for (size_t j = 0; j < Ready; ++j)
+            {
+                for (size_t At = 0; At < Send[j].Count || At == 0; At += kMapObjPerPacket)
+                {
+                    MapObjPacket Packet = {};
+                    memcpy(Packet.Magic, kMagic, sizeof(kMagic));
+                    Packet.Version = kVersion;
+                    Packet.Kind = kKindMapObjState;
+                    Packet.Role = Mine.Role;
+                    Packet.Map = Send[j].Map;
+                    Packet.Total = Send[j].Count;
+                    Packet.First = (uint16_t)At;
+                    const size_t Left = Send[j].Count > At ? Send[j].Count - At : 0;
+                    Packet.Count = (uint16_t)(Left < kMapObjPerPacket ? Left : kMapObjPerPacket);
+                    memcpy(Packet.Index, Send[j].Index + At, Packet.Count * sizeof(uint16_t));
+                    memcpy(Packet.State, Send[j].State + At, Packet.Count);
+                    for (size_t i = 0; i < Count; ++i)
+                    {
+                        SendTo(Net, Others[i], &Packet, sizeof(Packet), kReliable, kChannel) ? ++s_sent : ++s_send_failed;
+                    }
+                    if (Left <= kMapObjPerPacket)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -1313,6 +1481,79 @@ bool DS2_CoopChannel::HostMapFlags(uint32_t Map, uint8_t Bytes[DS2_CoopChannel::
     (void)Bytes;
     AgeMs = 0;
     return false;
+#endif
+}
+
+void DS2_CoopChannel::PublishMapObjects(uint32_t Map, const uint16_t* Index, const uint8_t* State, size_t Count)
+{
+#ifdef _WIN32
+    if (Map == 0 || Index == nullptr || State == nullptr || Count > DS2_CoopChannel::kMapObjMax)
+    {
+        return;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    std::scoped_lock Lock(s_obj_mutex);
+    MapObjects* Slot = nullptr;
+    MapObjects* Oldest = &s_obj_mine[0];
+    for (MapObjects& Entry : s_obj_mine)
+    {
+        if (Entry.Map == Map)
+        {
+            Slot = &Entry;
+            break;
+        }
+        if (Entry.Map == 0 || Entry.Tick < Oldest->Tick)
+        {
+            Oldest = &Entry;
+        }
+    }
+    if (Slot == nullptr)
+    {
+        Slot = Oldest;
+        Slot->Map = Map;
+    }
+    Slot->Count = (uint16_t)Count;
+    memcpy(Slot->Index, Index, Count * sizeof(uint16_t));
+    memcpy(Slot->State, State, Count);
+    Slot->Tick = Now;
+#else
+    (void)Map; (void)Index; (void)State; (void)Count;
+#endif
+}
+
+size_t DS2_CoopChannel::HostMapObjects(uint32_t Map, uint16_t* Index, uint8_t* State, size_t Room, uint64_t& AgeMs)
+{
+#ifdef _WIN32
+    AgeMs = 0;
+    if (Map == 0 || Index == nullptr || State == nullptr)
+    {
+        return 0;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    std::scoped_lock Lock(s_obj_mutex);
+    for (const MapObjects& Entry : s_obj_heard)
+    {
+        if (Entry.Map != Map || Entry.Tick == 0 || Entry.Count == 0)
+        {
+            continue;
+        }
+        // Only a list every chunk of which arrived.
+        const uint32_t Wanted = (1u << ((Entry.Count + kMapObjPerPacket - 1) / kMapObjPerPacket)) - 1u;
+        if ((Entry.Chunks & Wanted) != Wanted)
+        {
+            return 0;
+        }
+        const size_t Give = Entry.Count < Room ? Entry.Count : Room;
+        memcpy(Index, Entry.Index, Give * sizeof(uint16_t));
+        memcpy(State, Entry.State, Give);
+        AgeMs = Now - Entry.Tick;
+        return Give;
+    }
+    return 0;
+#else
+    (void)Map; (void)Index; (void)State; (void)Room;
+    AgeMs = 0;
+    return 0;
 #endif
 }
 
