@@ -1916,7 +1916,7 @@ or unproven, for whoever picks this up.
    - the `MapModelComponent` fault's `+0xd0` / `+0xd4` — **cannot be
      scheduled**; it needs the fault to happen again.
 
-   **Started 20/09.** Of the nine steps in the plan's order, **2, 3, 4, 5 and
+   **Started 20/09.** Of the nine steps in the plan's order, **2, 3, 4, 5, 7 and
    8 are in**: the enemy sync is unbound before its own map is torn down
    (`DS2_EnemySyncHook`), the sign areas were already purged, the lighting
    sweep now sees releases and not only budget unloads, the parking already
@@ -1925,8 +1925,8 @@ or unproven, for whoever picks this up.
    deliberately **inert** until step 6 lifts the refusals, which is the whole
    point of doing them first: each was built and measured while it could not
    break anything. What remains is **1** (the message and its ordering
-   contract), **7** (four bytes on the guest's join controller), **9**
-   (re-arm) and **6** last, because 6 is the one that arms everything else.
+   contract), **9** (re-arm) and **6** last, because 6 is the one that arms
+   everything else.
 
    That last one is why this was not started sooner. Risk 4 is an unexplained
    crash in exactly the subsystem 6b rewrites, and it hit both machines 17 ms

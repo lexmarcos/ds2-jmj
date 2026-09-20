@@ -84,7 +84,8 @@ On the machine that releases, **with the map still loaded**:
 6. **Let the owner go through the stock step machine.** Never by hand: the
    only thing that cancels a queued enemy-table create is
    `FUN_140416ac0`, reached only from the teardown's case `0x0d`.
-7. **Repoint `joinCtrl+0x19c`** on the guest — **four bytes**, never eight;
+7. — **written and verified 20/09**, `DS2_BonfireInSession_RepointSessionMap`.
+   See below. Repoint `joinCtrl+0x19c` on the guest — **four bytes**, never eight;
    `+0x1a0` next door is the way home.
 8. — **written and verified 20/09**, `DS2_EnemySync::TableReady`. See below.
    Wait for the destination's table, `table != 0 && *(int*)(table+0x24)
@@ -373,3 +374,46 @@ with a verified session, both machines **[read]**:
 19:41:14  soltando personagens do mapa 0a170000 (slot 9) ... tabela pronta, lista7 0, fila 255/255/255/255
 19:42:54  soltando personagens do mapa 0a1f0000 (slot 12) ... tabela pronta, lista7 0, fila 255/255/255/255
 ```
+
+## Step 7, and what "never eight bytes" is protecting
+
+Reading the guest's controller live gave the reason the rule exists. On a
+guest in state 7, summoned into `0a130000` from Majula **[read]**:
+
+```
+vftable 0x1410d7bd8   estado(+0xf8) 7
+  +0x194 = 00000000        the duel field, unused in co-op
+  +0x198 = 00000001
+  +0x19c = 0a130000        the session's map
+  +0x1a0 = 0a040000        the map to return to
+  +0x1a4 = 41286bac   10.526
+  +0x1a8 = 40bd8f2b    5.924
+  +0x1ac = c1820962  -16.255
+```
+
+Those three floats are Majula's bonfire spawn to three decimals — where the
+guest was standing when he was summoned. **The way home is a sixteen-byte
+block, not one field.** Eight bytes at `+0x19c` would send him home to the map
+being freed; sixteen would drop him at the session map's coordinates in
+whatever map he lands in.
+
+So the repoint writes four, refuses on a `+0x19c` that is not the value it was
+told to expect — the rule a `.text` patch follows — and reads the sixteen
+bytes before and after, putting them back and undoing the repoint if they
+moved.
+
+Driven by hand on a live session with `repontar <map>` in `DS2_Bonfire.req`,
+and read back independently by the harness rather than by the hook that wrote
+it **[read]**:
+
+```
+antes   +19c=0a130000  +1a0=0a040000  volta=(10.526, 5.924, -16.255)
+depois  +19c=0a1f0000  +1a0=0a040000  volta=(10.526, 5.924, -16.255)
+        convidado: mapa da sessao repontado 0a130000 -> 0a1f0000 (lido de
+        volta 0a1f0000); volta para 0a040000 intacta
+```
+
+The field moved, the block did not, and `p2pSessionVerified` stayed true
+through both the repoint and the restore. The request exists because step 6 is
+what will call this, and an operation nobody calls is an operation nobody has
+checked.
