@@ -92,7 +92,8 @@ On the machine that releases, **with the map still loaded**:
    == mapId`. Not `blocks != 0`: a map with no generators has a valid table
    with none. Poll with a hard timeout and treat the timeout as failure —
    there is no retry anywhere in that path.
-9. **Re-arm**: `FUN_140517040`, then on the guest `FUN_140516370`, in that
+9. — **written and verified 20/09**, `DS2_EnemySync::Rearm`. See below.
+   Re-arm: `FUN_140517040`, then on the guest `FUN_140516370`, in that
    order, because the arm clears the gate. Then verify state, map and the
    per-record generator ids on both machines before going on.
 
@@ -417,3 +418,41 @@ The field moved, the block did not, and `p2pSessionVerified` stayed true
 through both the repoint and the restore. The request exists because step 6 is
 what will call this, and an operation nobody calls is an operation nobody has
 checked.
+
+## Steps 2 and 9, driven by hand on a live session
+
+`sincronia desligar` / `sincronia armar` in `DS2_Bonfire.req` run the pair
+while a session is up, and print the sync before and after. The guest, bound
+to `0a130000` with 76 records **[read]**:
+
+```
+antes   estado 2, mapa 0a130000, 76 registros, armado 1, portao 1;
+        [0]=00007fffe839c500  [1]=00007fffe839c5a0  [2]=00007fffe839c640
+depois  estado 0, mapa 0a130000,  0 registros, armado 0, portao 0;
+        [0]=0  [1]=0  [2]=0
+```
+
+The pointers are 0xa0 apart, as the record array says they should be, and
+**the unbind nulls them**. That is step 2's entire premise, and it is now read
+rather than inferred: after `FUN_140517080` there is nothing left pointing
+into the map's array, so the array can be freed. The bound map at `+0x18` is
+**not** cleared, which is why `BoundMap()` gates on the state instead.
+
+Then the re-arm, and the question it actually had to answer:
+
+```
+20:20:30  sync rearmado (papel convidado): estado 0, mapa 0a130000,
+          0 registros, armado 1, portao 1; [0]=0 [1]=0 [2]=0
+  +5 s    estado 2, conta 76, mapa 0a130000, ponteiros de volta
+```
+
+**Arming does not bind.** `FUN_140517040` writes the armed byte and clears the
+gate, and that is all — the state is still 0 and the records still null when
+it returns. The game's own per-frame update does the binding, within a second
+or two, once it finds the sync armed. So `Arm` then `OpenGuestGate` is the
+whole of step 9 and nothing has to be told which map: the count came back at
+76, the map at `0a130000`, and `p2pSessionVerified` stayed true throughout.
+
+That also settles something for step 2: **unbinding mid-session is
+reversible.** The release path can unbind without having to prove in advance
+that it can put the session back together.
