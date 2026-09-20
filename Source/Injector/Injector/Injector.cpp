@@ -31,6 +31,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomActionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_EnemySyncHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_GhostNpcHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_NetSyncGuardHook.h"
@@ -226,6 +227,10 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_HollowSummonHook>());
                 // ... nor keep a phantom away from levers and doors (M4).
                 Hooks.push_back(std::make_unique<DS2_PhantomActionHook>());
+                // The enemy table is unbound before its own map is torn
+                // down; without it, releasing that map leaves every record
+                // writing into freed memory (M8 6b, step 2).
+                Hooks.push_back(std::make_unique<DS2_EnemySyncHook>());
                 // ... nor show the world's NPCs to a guest as white ghosts.
                 Hooks.push_back(std::make_unique<DS2_GhostNpcHook>());
                 // Entering without a soapstone (M3).

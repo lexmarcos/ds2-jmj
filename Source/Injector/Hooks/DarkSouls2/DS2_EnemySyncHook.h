@@ -1,0 +1,79 @@
+/*
+ * Dark Souls 3 - Open Server
+ *
+ * This program is free software; licensed under the MIT license.
+ * You should have received a copy of the license along with this program.
+ * If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+#pragma once
+
+#include "Injector/Hooks/Hook.h"
+
+#include <cstdint>
+
+/// The enemy replication table, and the one thing that must happen before its
+/// map goes away.
+///
+/// `NetEnemyManager` is `*(0x141616cf8 + 0x28)`, vftable `0x1410fb580`. Its
+/// `+0x08` is the state (0 unbound, 1 host, 2 guest), `+0x0c` the record
+/// count, `+0x10` the fixed 255-slot table, `+0x18` the map the records belong
+/// to, `+0x74` the armed byte and `+0x198` the guest's gate.
+///
+/// Each in-use slot holds a **raw pointer** into a per-map array of 0xa0-byte
+/// records. Measured 20/09 with a live session: 149 records, 0xa0 apart, host
+/// in state 1 and guest in state 2 on the same bound map. That array is freed
+/// by the map path; the pointers are nulled only by a session-state
+/// transition, and there is no call from one to the other. So releasing the
+/// bound map with the sync still bound leaves up to 255 records writing into
+/// freed memory, every tick, on both roles.
+///
+/// That is the mechanism `docs/research/risk-4-six-readings.md` ends on, and
+/// it is dormant today only because the bound map **is** the session's map,
+/// which `DS2_BackreadHook` refuses to release. M8 item 6b is the act of
+/// lifting that refusal, so this is the piece that has to exist first.
+///
+/// The hook sits at the entry of `FUN_140416ac0(chrMgr, map)`, the per-map
+/// character release the teardown reaches at its case `0x0d` — the last place
+/// the table is still whole. If the map being torn down is the one the sync is
+/// bound to, the sync is unbound there, before anything of that map is freed.
+///
+/// The three primitives, read from the binary on 20/09:
+///
+///   * `FUN_140517080(mgr)` unbinds: it takes the object at `+0x78` (the
+///     shared lock), clears through it, and branches on the state at `+0x08`;
+///   * `FUN_140517040(mgr)` arms: the same opening, then `+0x74 = 1` and
+///     `+0x198 = 0`;
+///   * `FUN_140516370(mgr)` is two instructions, `+0x198 = 1` and `ret` — the
+///     guest's gate, and nothing else.
+class DS2_EnemySyncHook : public Hook
+{
+public:
+    virtual bool Install(Injector& injector) override;
+    virtual void Uninstall() override;
+    virtual const char* GetName() override;
+};
+
+namespace DS2_EnemySync
+{
+    /// The map the records belong to, or 0 when nothing is bound. Believed
+    /// only with the manager's vftable.
+    uint32_t BoundMap();
+
+    /// 0 unbound, 1 host, 2 guest.
+    uint32_t State();
+
+    /// How many records are bound.
+    uint32_t Count();
+
+    /// Unbind now, on the game's thread. False when there was nothing bound.
+    /// `Why` goes in the log beside it.
+    bool Unbind(const char* Why);
+
+    /// Arm the sync again. The guest also needs `OpenGuestGate()` **after**
+    /// this, because arming clears the gate.
+    bool Arm(const char* Why);
+
+    /// The guest's gate byte at `+0x198`.
+    bool OpenGuestGate();
+}
