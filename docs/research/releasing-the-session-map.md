@@ -66,7 +66,8 @@ On the machine that releases, **with the map still loaded**:
    no vanilla message for "I am moving but staying" — it has to go over the
    mod's own co-op channel — and the other machine must have acted on it
    before anything local is freed.
-2. **Unbind the enemy sync**, `FUN_140517080(sync)`, on **both** machines.
+2. **Unbind the enemy sync**, `FUN_140517080(sync)`, on **both** machines. —
+   **written and verified 20/09**, `DS2_EnemySyncHook`. See below.
    On the host it must run while the table is still allocated, because its
    clear writes into the blocks. The verified hook point is the entry of
    `FUN_140416ac0`, mirroring its `slot > 0x29` early-out and guarding on
@@ -250,3 +251,45 @@ as by id.** The same session, begun in Shulva instead of Majula, reads
 `+0x0c = 207` and `+0x18 = 32240000` on both machines, where the Majula
 session read `56` and `0a040000`. The count tracks the map, which settles the
 `[inferred]` above: the records really are that map's enemies **[read]**.
+
+## Step 2, in place
+
+`DS2_EnemySyncHook` sits at the entry of `FUN_140416ac0`, the per-map
+character release the teardown reaches at its case `0x0d`, and unbinds the
+enemy sync when the map coming down is the one the records belong to. All four
+prologues are verified before anything is hooked, and the guest's gate turned
+out to be two instructions, `+0x198 = 1; ret`.
+
+**The second argument is not a map id.** The first build wrote down whatever
+it saw rather than assuming, and it saw `00007fffe8400310` — a pointer. So
+nothing was unbound on a guess. `FUN_1403bb3d0`, the slot lookup the release
+opens with, is three instructions:
+
+```
+mov 0x8(%rcx),%rax    ; -> the backread owner
+mov 0xc(%rax),%eax    ; -> its area slot
+ret
+```
+
+and `+0x08` / `+0x0c` of that owner are exactly `DS2_BackreadHook`'s own
+`kOwnerMap` and `kOwnerIndexField`. The map id is `*(owner + 0x08)`, and the
+release's `cmp $0x29; ja` is mirrored on the same index.
+
+Measured across four legs with a verified session, both machines **[read]**:
+
+```
+19:01:20  soltando personagens do mapa 0a040000 (slot  1), ligado 0a130000, estado 1, 76 registros
+19:01:51  soltando personagens do mapa 0a170000 (slot  9), ligado 0a130000, estado 1, 76 registros
+19:02:59  soltando personagens do mapa 0a1e0000 (slot 32), ligado 0a130000, estado 1, 76 registros
+19:03:31  soltando personagens do mapa 0a1f0000 (slot 12), ligado 0a130000, estado 1, 76 registros
+```
+
+Real map ids, sane slots, the bound map named correctly on both roles (state 1
+host, 2 guest). **The unbind never fired, and that is the point**: every map
+released was some other map, because the bound map is the session's map and
+two separate refusals keep it. Step 2 is a no-op until step 6 lifts them —
+which is exactly what it is for.
+
+The same run showed why 6b is worth the work, without being asked to: the
+session had formed in the DLC ice map, so the session map cost **1400** of an
+1898 budget and every heavy destination was refused at the vote.
