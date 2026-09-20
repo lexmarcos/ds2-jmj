@@ -521,6 +521,7 @@ namespace
         int32_t RoomSource = -1;
         bool SourceAsked = false;
         ULONGLONG RoomAt = 0;
+        ULONGLONG RoomTold = 0;
     };
     Recovery s_recovery;
 
@@ -2090,6 +2091,23 @@ namespace
             s_recovery.RoomAt = Now;
         }
         const bool Settled = s_recovery.RoomAt != 0 && Now - s_recovery.RoomAt >= kRoomSettleMs;
+        // Giving up used to mean loading anyway, and on 19/09 that loaded
+        // Brume Tower (1126) into 941 entries already in use and killed the
+        // host in the game's own `out of memory` trap. A destination that
+        // still does not fit is never asked for: the leg is refused at the
+        // vote now (DestinationCanFit), and if one gets this far it waits
+        // rather than loads, with the curtain's own give-up ending the wait.
+        if (Waited > kRoomGiveUpMs && !Fits)
+        {
+            if (Now - s_recovery.RoomTold >= 5000)
+            {
+                s_recovery.RoomTold = Now;
+                Append(StringFormat("%s  budget: NO ROOM after %llu ms (%llu in use, %u for %08x); NOT loading, the leg cannot be done\n",
+                    Clock().c_str(), (unsigned long long)Waited, (unsigned long long)InUse, s_recovery.RoomCost,
+                    s_recovery.LoadMap));
+            }
+            return true;
+        }
         if (Settled || Waited > kRoomGiveUpMs)
         {
             const uint32_t Every[4] = { 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff };

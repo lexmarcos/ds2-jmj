@@ -103,3 +103,8 @@ void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map);
 /// bindings assume it never unloads while the session lives.
 bool DS2_BonfireInSession_IsSessionMap(uint32_t Map);
 
+/// The map the session began in, 0 when there is no session. It is the one map
+/// that is never released, so its target cost is spent for as long as the
+/// session lives, and a destination has to fit beside it.
+uint32_t DS2_BonfireInSession_SessionMap();
+

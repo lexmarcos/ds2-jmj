@@ -540,6 +540,7 @@ namespace
         NotLit = 3,
         Busy = 4,
         Stuck = 5,
+        NoRoom = 6,
     };
 
     using SessionUp_p = uint64_t(*)(void* Session);
@@ -2056,6 +2057,41 @@ namespace
             Narrow(Place).c_str(), s_open_vote.Number));
     }
 
+    void TellCanceled(Cancel Why, const wchar_t* Text);
+
+    // Whether a destination can ever fit, before anybody is asked.
+    //
+    // The session's map is the one map that is never released - the game's own
+    // join bindings assume it stays - so its target cost is spent for as long
+    // as the session lives, and at the tightest moment of a travel the only
+    // two maps in are that one and the destination. If those two alone do not
+    // fit, no amount of making room will help.
+    //
+    // This is what killed the host on 19/09. Over Majula (312 targets) every
+    // leg of the route passed for days; the same route with Forest of Fallen
+    // Giants as the session's map (940) has 1898 - 940 = 958 left, and Brume
+    // Tower costs 1126. The travel waited its 25 s, made no room, and loaded
+    // anyway into the game's own `out of memory` trap. A leg that cannot work
+    // is now refused before the vote instead.
+    bool DestinationCanFit(uint32_t Map, uint32_t& Need, uint64_t& Room)
+    {
+        const uint32_t Session = DS2_BonfireInSession_SessionMap();
+        const uint32_t Cost = DS2_Backread::TargetCost(Map);
+        Need = Cost;
+        Room = DS2_Backread::TargetLimit();
+        if (Session == 0 || Session == Map || Cost == 0)
+        {
+            return true;
+        }
+        const uint32_t Held = DS2_Backread::TargetCost(Session);
+        if (Held == 0 || Held >= Room)
+        {
+            return true;
+        }
+        Room -= Held;
+        return Cost <= Room;
+    }
+
     void BeginVote(void* List, uint64_t Proposer, uint16_t Bonfire, uint32_t Map)
     {
         const size_t Guests = DS2_CoopChannel::GuestCount();
@@ -2070,6 +2106,16 @@ namespace
         s_travel.Vote = ++s_vote_counter;
         s_travel.Guests = Guests;
         s_travel.Since = GetTickCount64();
+        uint32_t Need = 0;
+        uint64_t Room = 0;
+        if (!DestinationCanFit(Map, Need, Room))
+        {
+            Append(StringFormat("host: votacao %u para o mapa %08x recusada: %u alvos e so cabem %llu ao lado do mapa da sessao %08x\n",
+                s_travel.Vote, Map, Need, (unsigned long long)Room, DS2_BonfireInSession_SessionMap()));
+            TellCanceled(Cancel::NoRoom, L"That place does not fit beside the world this session began in.");
+            s_travel = HeldTravel();
+            return;
+        }
         const uint32_t Carried = s_travel.Vote | (Proposer != 0 ? 0x80000000u : 0u);
         DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Map, Carried, (int32_t)Bonfire);
         const std::wstring Place = PlaceName(Bonfire, Map);
@@ -2454,6 +2500,22 @@ bool DS2_BonfireInSession_IsSessionMap(uint32_t Map)
     return (State == 1 || State == 2) && Bound == Map;
 #else
     return false;
+#endif
+}
+
+uint32_t DS2_BonfireInSession_SessionMap()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    const uintptr_t Sync = NetSync();
+    uint32_t State = 0, Bound = 0;
+    if (Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+        !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)) || (State != 1 && State != 2))
+    {
+        return 0;
+    }
+    return Bound;
+#else
+    return 0;
 #endif
 }
 
