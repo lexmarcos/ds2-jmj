@@ -1912,13 +1912,27 @@ or unproven, for whoever picks this up.
    window is longer than the join grace, so a slow join is not re-summoned
    mid-join.
 
-   Confirmed on the first boot with the fix: one `invocando a placa
-   80000001`, and `p2pSessionVerified: true` with no intervention, followed by
-   two clean travel legs. **The duplicate guard itself was not exercised** —
-   no `ignorada; a invocacao ... ainda esta em curso` line appeared, which
-   means the second `AddSign` never came on that boot, not that it was
-   dropped. The positive signal here is the session forming, not the duplicate
-   being refused. What follows is the measurement that found the defect. Measured repeatedly on 20/09: the server's poll says
+   The backoff is put back to its first minute as soon as the sweep sees that
+   the handle it last summoned has left the collection, which is what a summon
+   that worked looks like. Without that, a host that reloads twice would
+   charge the next guest four minutes for two successes — the handles restart
+   at `80000001` every time the collection is rebuilt, so the same number
+   comes back meaning a different sign.
+
+   Confirmed on 20/09: one `invocando a placa 80000001`, and
+   `p2pSessionVerified: true` with no intervention, followed by two clean
+   travel legs. Then the regression that the new sweep needed, on the
+   hardened build: `session end`, the host quit to the title and re-entered,
+   `retoma`. The sweep ran off the live controller through the reload, said
+   `nada para revisar` — the right answer for a collection that had just been
+   rebuilt empty, and the exact case that would have dereferenced the old
+   cached pointer — and fifty seconds later found the guest's new sign and
+   summoned it. A second session formed, verified. **The duplicate guard
+   itself was not exercised**: no `ignorada; a invocacao ... ainda esta em
+   curso` line appeared on either boot, which means the second `AddSign` never
+   came, not that it was dropped. The positive signals here are the sessions
+   forming and the sweep surviving a world reload. What follows is the
+   measurement that found the defect. Measured repeatedly on 20/09: the server's poll says
    `1 signs cached, sent 1`, and the host's log shows
 
    ```

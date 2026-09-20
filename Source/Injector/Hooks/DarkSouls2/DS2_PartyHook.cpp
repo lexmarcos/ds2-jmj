@@ -584,6 +584,34 @@ namespace
         using Count_p = uint32_t(*)(void*);
         using At_p = int32_t*(*)(void*, uint32_t);
         const uint32_t Count = ((Count_p)CountFn)((void*)Collection);
+        // A sign that was taken is gone from the collection, so the sweep can
+        // tell a summon that worked from one that did not: if the handle we
+        // last summoned is no longer here, forget it and put the backoff back
+        // to its first minute. Otherwise a host that reloads twice - and the
+        // handles restart at 80000001 each time the collection is rebuilt -
+        // would charge the next guest four minutes for two successes.
+        // Two passes, because summoning inside the first would move
+        // s_last_handle out from under it.
+        bool LastStillHere = false;
+        for (uint32_t i = 0; s_last_handle != 0 && i < Count && i < 64; i++)
+        {
+            int32_t* Entry = ((At_p)AtFn)((void*)Collection, i);
+            uint8_t Bytes[0x18] = {};
+            if (Entry == nullptr || !ReadBytes((uintptr_t)Entry, Bytes, sizeof(Bytes)))
+            {
+                continue;
+            }
+            int32_t Live = 0, Handle = 0;
+            memcpy(&Handle, Bytes, 4);
+            memcpy(&Live, Bytes + 0x14, 4);
+            LastStillHere = LastStillHere || (Live < 0 && (uint32_t)Handle == s_last_handle);
+        }
+        if (s_last_handle != 0 && !LastStillHere)
+        {
+            s_last_handle = 0;
+            s_last_backoff = kBackoffFirstMs;
+        }
+
         for (uint32_t i = 0; i < Count && i < 64; i++)
         {
             int32_t* Entry = ((At_p)AtFn)((void*)Collection, i);
