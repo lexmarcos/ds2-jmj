@@ -1897,6 +1897,32 @@ or unproven, for whoever picks this up.
    piece that would give those legs back is releasing the session's map while
    everybody is travelling — the game's join bindings assume it never
    unloads, so it needs the same care the rest of §17 took.
+6c. **The party hook fires two summons 16 ms apart, and the second poisons
+   the first.** Measured repeatedly on 20/09: the server's poll says
+   `1 signs cached, sent 1`, and the host's log shows
+
+   ```
+   14:36:39.910  host: invocando a placa 80000001 do parceiro ...
+   14:36:39.926  host: invocando a placa 80000011 do parceiro ...
+   ```
+
+   two handles for the same guest, 16 ms apart, neither carrying the
+   `(revisao ao retomar)` suffix — so both come from `AddSignHook`, not from
+   `RescanSigns`. The handles differ by `0x10`, the collection's generation
+   counter, so the same sign is being added twice. `ConsiderSign` summons
+   **every** white sign it is handed, with no "one at a time" and no "a
+   summon is already in flight".
+
+   The three failures that follow are all the same cause, and all three were
+   seen on 20/09: *"Player was unable to join multiplayer session"*,
+   *"Someone has already used this summon sign"* and *"The sign has
+   disappeared"*. Worse, the dialog that results **stops the hook for good**:
+   it never summons again, and neither `retoma` nor `reload` restarts it —
+   only a full `down` plus `up`, which then often fails the same way on its
+   first attempt.
+
+   This made the bench unusable for most of 20/09 and blocked the M8 6b
+   measurements. It is the first thing to fix before any of that work.
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
