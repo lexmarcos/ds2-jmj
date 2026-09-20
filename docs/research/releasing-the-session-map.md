@@ -134,10 +134,21 @@ All of the above is static. These are cheap and turn reading into evidence:
   `*(this+0xd4)` too. If only one word is ever wrong, the network-record
   writer is out.
 
+Six more readings on 20/09 answered most of what follows, and risk 4 with
+them: [risk-4-six-readings](risk-4-six-readings.md). In short — the arena
+mechanism is dead, the value is two different mechanisms of which only one is
+ours, and the strongest surviving candidate is a lifetime gap that step 2 of
+the order above already half closes: the enemy records are nulled only by a
+session-state transition, never by the map path, so a map torn down with the
+session up leaves up to 255 records pointing into a freed array.
+
 ## What none of the ten could establish
 
-- What `0x000b0010` is.
-- Whether a map's arena is reclaimed while a refcounted entity survives.
+- What `0x000b0010` is. — **answered 20/09**: a 21-bit HP field from the enemy
+  sync's packet store, landing on the high half of a pointer through a stale
+  record. See [risk-4-six-readings](risk-4-six-readings.md).
+- Whether a map's arena is reclaimed while a refcounted entity survives. —
+  **answered 20/09: it is not, because there is no per-map arena.**
 - Whether a character's Havok body references the map's collision world.
 - What resets `sync+0x08`, i.e. when the record array is rebuilt.
 - Whether the enemy-table sweep runs during a loading screen — which decides

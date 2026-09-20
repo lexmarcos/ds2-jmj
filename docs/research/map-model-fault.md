@@ -167,6 +167,9 @@ That is the only mechanism found that fits every observed fact at once: a
 live-looking object, one word wrong, only with a session up, and all 32
 buckets holding live owners.
 
+**Superseded on 20/09**: there is no per-map arena to reclaim, so this
+mechanism is dead. See [risk-4-six-readings](risk-4-six-readings.md).
+
 **It is not closed.** `FUN_1403cc450` does not touch `owner+0x88`, the map's
 allocator, so whether the arena is returned while a refcounted entity can
 still live in it was **not established**.
