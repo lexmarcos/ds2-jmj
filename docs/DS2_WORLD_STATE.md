@@ -177,11 +177,32 @@ Fixed on 19/09 in `DS2_BackreadHook`: an owner that reaches state 0 queues its
 map, and the next streamer update calls `FUN_14044f7a0` for it — the release
 the warp would have given it.
 
-**What that leaves open.** The slot `FUN_140186480` frees is also zeroed, and
-a guest's copy 1 is only ever filled by the snapshot at the entry warp. So a
-map the guest loads **after** joining has no host bytes to read: it starts at
-zero, not at whatever the host has. Sending the host's three blocks for a map
-over the co-op channel before the guest loads it is [what is still
+**And then the real gap showed.** The slot `FUN_140186480` frees is also
+zeroed, and a guest's copy 1 is only ever filled by the snapshot at the entry
+warp. So a map the guest loads **after** joining has no host bytes to read.
+
+Measured 19/09, after the release above was in and the arena was clean, by
+travelling the pair to Heide and reading `13100` on both:
+
+| | bytes | bits |
+| --- | --- | --- |
+| host, Heide | `000002…000002…` | `131000022`, `131000086` |
+| guest, Heide, in the session | all zero | none |
+| guest's own save (copy 0, slot 12) | | `131000021`, `131000022`, `131000086` |
+
+The guest gets **neither** the host's flags nor his own: the slot was handed
+out empty. Every door, lever, illusory wall, shortcut and Pharros that is a
+map flag reads closed for the guest in any map the group travelled to.
+
+The per-map arena of copy 0 is also where to look for a mechanism one
+character has and the other has not, without playing: `buf + 0x9cc + index *
+25`, 42 slots by map owner index, is the `X00` category of **every** map in
+the save. On 19/09 it found `131000021` set only on the guest, and
+`211000020` (Shrine of Amana), `130000001` and `536000012`/`536000013`
+(Brume Tower) set only on the host.
+
+The fix is the host's three blocks for a map over the co-op channel, applied
+on the guest as the map registers — [what is still
 unknown](#what-is-still-unknown)'s first item and the next piece of M4.
 
 ## What was measured
@@ -283,13 +304,10 @@ host's doors and levers into his own save, which is what the design asks for.
 
 ## What is still unknown
 
-- **A map the guest loads after joining reads zeroed flags.** Copy 1 of the
-  arena is filled only by the snapshot at the entry warp, and holds three
-  maps; travelling brings in maps that were not in it. Measured on the bench
-  of 19/09 only as far as the aliasing above — the check that settles it is to
-  travel to a map with flags set on the host and compare the two categories
-  byte for byte. The fix, if it reads zero, is the host's three 25-byte blocks
-  over the co-op channel before the guest loads the map.
+- ~~**A map the guest loads after joining reads zeroed flags.**~~ Measured
+  19/09 and true: the guest's Heide read all zero against the host's two bits.
+  The fix — the host's three 25-byte blocks over the co-op channel, applied as
+  the map registers on the guest — is the next piece of M4.
 - **Whether doors, levers, elevators and illusory walls are map flags.**
   `MapObjStateActComponent` (vftable `0x1410c6d78`) may keep per-object state
   outside the `EventFlagManager`. No real mechanism has been triggered yet.
