@@ -204,3 +204,149 @@ What is dangerous is the other shape:
    comparison is what settles it at run time.
 5. How many frames the table lags in practice.
 6. All of it is static. Nothing was run in either game.
+
+---
+
+# The unbind at the map free — verified 20/09
+
+A second reading, of the proposal in
+[object-table-lifecycle.md](object-table-lifecycle.md) §5: hook
+`FUN_140416ac0` and call `FUN_140517080` there. **The proposal is essentially
+correct**, with four corrections and two consequences it did not state — and
+**the lock-inversion risk it left open is settled: no inversion is possible.**
+
+## Names, at last
+
+- The sync is a **`NetEnemyManager`** — ctor `FUN_140515860`, vftable
+  `0x1410fb580`, RTTI locator `0x1412e2ce8` **[read]**.
+- `sync+0x78` is the **same object** as `root+8`: both are written from the
+  same constructor argument (`FUN_140515860` and `FUN_14051efc0`) **[read]**.
+  It is created by `FUN_140512f30` and its first line writes
+  `DLUT::DLLifecycleAdapter<DLKR::DLPlainLightMutex>::vftable` **[read]**.
+- So the whole net subsystem shares **one** light mutex, used through vtable
+  slot `+0x10` (lock, `0xffffffff` = INFINITE) and `+0x20` (unlock), and it is
+  **re-entrant** — proven by the game itself: `FUN_14051f5a0` takes it and
+  then calls `FUN_140517040`, which takes it again **[read]**.
+
+## The four corrections
+
+1. **`holder` is `*(void**)(owner+0x148)`**, the pointer stored there, not the
+   address. `owner` is a `MapAreaCtrlOwner` **[read]**.
+2. **`FUN_140416ac0`'s own first act is a different getter.** It calls
+   `FUN_1403bb3d0(holder)` = `*(u32*)(*(holder+8)+0xc)`, a **slot index**, and
+   returns early when it is `> 0x29` **[read]**. A hook must mirror that
+   early-out or it will unbind on a call the original discards.
+   `FUN_1403bb3c0` = `*(u32*)(*(holder+8)+8)` is the map id, used later. The
+   function compares both forms against `FUN_1403ba320`, so they are the same
+   id space — which is what makes the `sync+0x18 == mapId` test meaningful.
+3. **The guard must test the state, not the count.** `FUN_140517080` clears
+   records only when `*(u32*)(sync+8)` is 1 or 2; with state 0 it clears
+   nothing **[read]**. Use `*(u32*)(sync+8) != 0`.
+4. **`FUN_14041a900` is a callee at the tail of `FUN_140416ac0`**, not a
+   later sibling step **[read]**. An entry detour does run before it, but for
+   that reason.
+
+And one thing the timing note got right for the wrong reason: the teardown is
+**not one step per frame**. `FUN_1403cc3a0` and `FUN_1403cbb50` both spin
+`do { c = FUN_1403cb1a0(owner); } while (c == 0)` **[read]**, so steps
+`0x0e → 0x01` all run inside one call stack, in one frame.
+
+## Host-only, not both
+
+`FUN_140517e70` (host clear) dereferences `*(record+0x10)` as a raw block
+pointer — `block+0x3c |= 1<<48`, then resolves the character and hands the
+enemy back to local AI **[read]**. `FUN_140517a80` (guest clear) has **no raw
+dereference**; it only clears **[read]**. So "it must run while the table is
+alive" is a **host-only** constraint.
+
+## The lock question, settled
+
+The game thread holds **zero** locks when it reaches step `0x0d`. Every
+ancestor frame was scanned — `FUN_1401bf200`, `FUN_1403bdf30`,
+`FUN_1403dc3e0`, `FUN_1403cc3f0`, `FUN_1403cc450`, `FUN_1403cc3a0`,
+`FUN_1403cb1a0`, and the map-change path — and none acquires one **[read]**.
+
+Three independent reasons there is no inversion:
+
+1. A thread that acquires one lock while holding none cannot be a node in a
+   wait cycle.
+2. The net subsystem has **one** mutex for this data, and it is re-entrant.
+3. The hook creates no new order. The only order `FUN_140517080` introduces
+   is *net mutex → heap*, which `FUN_1402c9540 → FUN_140517080` already does
+   every frame in vanilla **[read]**.
+
+Everything that takes the mutex **[read]**: `FUN_140516380` (the packet
+dispatch, `NetEnemyManager` vftable slot `+0x08`), `FUN_1405170e0`,
+`FUN_140517080`, `FUN_140517040`, `FUN_14051f5a0`, `FUN_140520ed0`, and
+`FUN_1402c9540` (which holds `obj3+0xc8` first). None of the packet handlers
+or their callees takes a second lock.
+
+## The consequence the proposal did not state
+
+**`FUN_140517080` zeroes `sync+0x74`, and that permanently disarms the sync.**
+The only writer of `+0x74 = 1` is `FUN_140517040`, whose only caller is a
+session event **[read]**. So **step 1 alone leaves the enemy sync dead for the
+rest of the session, on both machines**. The re-arm is not an optional
+follow-up; it is part of the same change.
+
+Also: all four vanilla callers of `FUN_140517080` are session-**end** paths,
+each paired with `FUN_1405205d0(root)` — which takes the same mutex and resets
+a session queue. Vanilla never runs the unbind mid-session. Whether to call
+the pair is a decision to take deliberately, not by omission.
+
+## Offsets and expected bytes
+
+| function | offset | first bytes |
+| --- | --- | --- |
+| `FUN_140416ac0` (detour target) | `+0x416ac0` | `48 89 54 24 10 57 41 55 48 83 ec 48` |
+| `FUN_140517080` (unbind) | `+0x517080` | `48 89 5c 24 08 57 48 83 ec 20 48 8b 79 78` |
+| `FUN_1403bb3c0` (map id) | `+0x3bb3c0` | `48 8b 41 08 8b 48 08 48 8b c2 89 0a c3` |
+| `FUN_1403bb3d0` (slot index) | `+0x3bb3d0` | `48 8b 41 08 8b 40 0c c3` |
+| `FUN_140517040` (re-arm) | `+0x517040` | `48 89 5c 24 08 57 48 83 ec 20 48 8b 79 78` |
+| `FUN_1403ba320` (map id, other form) | `+0x3ba320` | `48 8b 41 28 8b 48 08 48 8b c2 89 0a c3` |
+| `FUN_1403cb1a0` (the caller) | `+0x3cb1a0` | `40 56 48 83 ec 50 48 8b 05 a3 6a 21 01` |
+| `FUN_140517bf0` (host bind) | `+0x517bf0` | `48 89 4c 24 08 53 41 54 41 56 48 81 ec 80 00 00 00` |
+
+`FUN_140416ac0`'s first instruction is exactly five bytes, so a rel32 jump is
+instruction-aligned; the instruction at `+0x12` is a rel32 call that a
+trampoline must relocate (Detours does).
+
+The corrected hook body:
+
+```c
+void hook(void* mgr, void* holder)
+{
+    void* root = *(void**)(s_base + 0x1616cf8);
+    if (root != nullptr && holder != nullptr)
+    {
+        char* sync = *(char**)((char*)root + 0x28);
+        if (sync != nullptr && FUN_1403bb3d0(holder) <= 0x29)
+        {
+            uint32_t Map = 0;
+            FUN_1403bb3c0(holder, &Map);
+            if (*(uint32_t*)(sync + 0x18) == Map && *(uint32_t*)(sync + 8) != 0)
+            {
+                FUN_140517080(sync);
+            }
+        }
+    }
+    original(mgr, holder);
+}
+```
+
+## What this reading could not establish
+
+- Which thread runs `FUN_140516380`. It is a vftable slot with no direct
+  callers; "the packet is applied on the net thread" stays **[inferred]**. It
+  does not change the verdict.
+- That the teardown runs on "the game thread" is **[inferred]**:
+  `FUN_1401bf200` has no code callers, only a stage vtable slot, and the other
+  entry is inside the Arxan-protected region. What is **[read]** is that
+  `FUN_1401bf200`'s own body calls the map-manager update *and*
+  `FUN_140514020` — which takes the net mutex — in the same body.
+- Whether the three case-`0x0d` calls before `FUN_140416ac0` can free a
+  sync-referenced block. Each frees one object of its own sub-manager; that
+  those are never the blocks is **[inferred]**.
+- `FUN_1405205d0`'s semantics beyond "takes the same mutex".
+- The scan matches the C idiom for a lock plus the names `Mutex`/`Critical`/
+  `Lock`; an inlined spin-lock or one behind an Arxan thunk would not show.
