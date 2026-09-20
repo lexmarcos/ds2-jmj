@@ -43,6 +43,15 @@
 /// (`FUN_1404562a0`) never reads the role, so the action runs once the prompt
 /// is offered.
 ///
+/// **Talking to an NPC is the same bit, from the other builder.** The guides
+/// the event scripts create have no object row; `FUN_140453b80` gives them a
+/// fixed `01 fc 0f`, whose `mask[0] = 0x01` refuses every phantom role.
+/// Measured 20/09 with both players in Majula: the four guides of action kind
+/// 9 carry exactly that mask on both machines, and the one the guest stood in
+/// had his own player slot set in the exclusion mask while the host's copy had
+/// the phantom's slot set instead. So the same immediate is widened there, at
+/// `+0x453b87`.
+///
 /// **What it does not do.** Whatever the phantom then changes still has to
 /// reach the host. A mechanism whose result is a map flag does travel — a
 /// guest may write map flags (`FUN_14025cdb0`) and the change goes out on the
