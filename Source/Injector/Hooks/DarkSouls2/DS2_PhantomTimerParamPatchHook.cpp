@@ -38,6 +38,11 @@ namespace
     constexpr size_t kActiveTimerProbeOffset = 0x2c9844;
     constexpr size_t kActiveTimerDirectOffset = 0x0cfc;
     constexpr double kConsolePatchLogIntervalSeconds = 60.0;
+    // The breakpoint fires every frame a phantom timer runs, and one file line
+    // per hit filled 412 MB in a day. The first hits are written in full, then
+    // one line a minute carrying how many were left out.
+    constexpr size_t kFilePatchLogFirstHits = 100;
+    constexpr double kFilePatchLogIntervalSeconds = 60.0;
 
     constexpr uint8_t kActiveTimerProbeExpectedBytes[] = {
         0x49, 0x8b, 0x4e, 0x40, 0x48, 0x8b, 0x01, 0xff,
@@ -390,9 +395,25 @@ namespace
             float NewSeconds)
         {
             bool ShouldLogConsole = false;
+            bool ShouldLogFile = false;
+            size_t Suppressed = 0;
             {
                 std::scoped_lock lock(m_event_mutex);
                 const bool IsImportant = std::strcmp(Result, "write_failed") == 0;
+                ShouldLogFile = IsImportant ||
+                                m_hit_count.load() <= kFilePatchLogFirstHits ||
+                                m_last_file_log_at < 0.0 ||
+                                Now - m_last_file_log_at >= kFilePatchLogIntervalSeconds;
+                if (ShouldLogFile)
+                {
+                    m_last_file_log_at = Now;
+                    Suppressed = m_file_log_suppressed;
+                    m_file_log_suppressed = 0;
+                }
+                else
+                {
+                    m_file_log_suppressed++;
+                }
                 ShouldLogConsole = !m_logged_first_event ||
                                    IsImportant ||
                                    m_last_console_log_at < 0.0 ||
@@ -404,20 +425,24 @@ namespace
                 }
             }
 
-            AppendPatchLog(StringFormat(
-                "============================================================\n"
-                "time=%.3f event=DS2ActiveTimerPatch result=%s source=r14_plus_0xcfc probe_offset=0x%zx thread_id=%u hit_count=%zu patch_count=%zu r14=0x%016llx timer_address=0x%016llx old_seconds=%.3f new_seconds=%.3f target_seconds=%.3f\n\n",
-                Now,
-                Result,
-                kActiveTimerProbeOffset,
-                ThreadId,
-                m_hit_count.load(),
-                m_patch_count.load(),
-                (unsigned long long)R14,
-                (unsigned long long)TimerAddress,
-                OldSeconds,
-                NewSeconds,
-                (double)m_target_seconds));
+            if (ShouldLogFile)
+            {
+                AppendPatchLog(StringFormat(
+                    "============================================================\n"
+                    "time=%.3f event=DS2ActiveTimerPatch result=%s source=r14_plus_0xcfc probe_offset=0x%zx thread_id=%u hit_count=%zu patch_count=%zu r14=0x%016llx timer_address=0x%016llx old_seconds=%.3f new_seconds=%.3f target_seconds=%.3f suppressed_since_last=%zu\n\n",
+                    Now,
+                    Result,
+                    kActiveTimerProbeOffset,
+                    ThreadId,
+                    m_hit_count.load(),
+                    m_patch_count.load(),
+                    (unsigned long long)R14,
+                    (unsigned long long)TimerAddress,
+                    OldSeconds,
+                    NewSeconds,
+                    (double)m_target_seconds,
+                    Suppressed));
+            }
 
             if (!ShouldLogConsole)
             {
@@ -453,6 +478,8 @@ namespace
         size_t m_breakpoint_address = 0;
         float m_target_seconds = 0.0f;
         double m_last_console_log_at = -1.0;
+        double m_last_file_log_at = -1.0;
+        size_t m_file_log_suppressed = 0;
         std::atomic_size_t m_hit_count{0};
         std::atomic_size_t m_patch_count{0};
         std::unordered_map<DWORD, bool> m_pending_single_steps;

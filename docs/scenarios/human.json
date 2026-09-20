@@ -1,0 +1,204 @@
+{
+  "schemaVersion": 1,
+  "name": "human-samuel-chico",
+  "instances": [
+    1,
+    2
+  ],
+  "timeoutSeconds": 600,
+  "baseline": "pre-passo6",
+  "steps": [
+    {
+      "action": "launch",
+      "instance": 1
+    },
+    {
+      "action": "launch",
+      "instance": 2
+    },
+    {
+      "action": "enter",
+      "instance": 1
+    },
+    {
+      "action": "enter",
+      "instance": 2
+    },
+    {
+      "action": "assert",
+      "instance": 1,
+      "pointer": "/character/hollowState",
+      "equals": 1
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press start",
+      "afterMs": 1200
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "dpad right",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press a",
+      "afterMs": 900
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press a",
+      "afterMs": 500
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "dpad right",
+      "afterMs": 500
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press a",
+      "afterMs": 500
+    },
+    {
+      "action": "screenshot"
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press a",
+      "afterMs": 0
+    },
+    {
+      "action": "wait",
+      "instance": 1,
+      "pointer": "/character/hollowState",
+      "equals": 0,
+      "seconds": 10
+    },
+    {
+      "action": "assert",
+      "instance": 1,
+      "pointer": "/character/hollow",
+      "equals": 0
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press b",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press b",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "dpad left",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 1,
+      "command": "press b",
+      "afterMs": 900
+    },
+    {
+      "action": "assert",
+      "instance": 2,
+      "pointer": "/character/hollowState",
+      "equals": 1
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press start",
+      "afterMs": 1200
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "dpad right",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press a",
+      "afterMs": 900
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press a",
+      "afterMs": 500
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "dpad right",
+      "afterMs": 500
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press a",
+      "afterMs": 500
+    },
+    {
+      "action": "screenshot"
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press a",
+      "afterMs": 0
+    },
+    {
+      "action": "wait",
+      "instance": 2,
+      "pointer": "/character/hollowState",
+      "equals": 0,
+      "seconds": 10
+    },
+    {
+      "action": "assert",
+      "instance": 2,
+      "pointer": "/character/hollow",
+      "equals": 0
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press b",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press b",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "dpad left",
+      "afterMs": 400
+    },
+    {
+      "action": "input",
+      "instance": 2,
+      "command": "press b",
+      "afterMs": 900
+    }
+  ]
+}

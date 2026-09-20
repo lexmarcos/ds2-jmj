@@ -65,13 +65,33 @@ pub fn spawn(
     Ok(Managed { pid: child.id() })
 }
 
+/// Whether a process is still running. A zombie is not: it has exited and only
+/// waits for its parent to collect it. When the harness launched the game
+/// itself (a scenario's `launch` step), the parent is this process, which never
+/// waits on the child — so `/proc/<pid>` outlived the kill until the harness
+/// exited, and the scenario's cleanup reported an instance that "did not die".
+pub fn gone(pid: u32) -> bool {
+    // Collect it if it is ours; for anyone else's pid this is a harmless ECHILD.
+    unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), libc::WNOHANG); }
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => matches!(stat_state(&stat), Some('Z' | 'X')),
+    }
+}
+
+/// The state letter of `/proc/<pid>/stat`, after the parenthesised command
+/// name (which may itself contain spaces and parentheses).
+fn stat_state(stat: &str) -> Option<char> {
+    stat.rfind(')').and_then(|at| stat[at + 1..].trim_start().chars().next())
+}
+
 /// Asks a process to stop, then waits briefly for it to actually go.
 pub fn stop(pid: u32) -> bool {
     unsafe {
         libc_kill(pid as i32, 15);
     }
     for _ in 0..50 {
-        if std::fs::metadata(format!("/proc/{pid}")).is_err() {
+        if gone(pid) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -80,7 +100,7 @@ pub fn stop(pid: u32) -> bool {
         libc_kill(pid as i32, 9);
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
-    std::fs::metadata(format!("/proc/{pid}")).is_err()
+    gone(pid)
 }
 
 // Signalling is the one thing here that needs libc, and pulling in the crate
@@ -167,7 +187,7 @@ pub fn wait_gone(pids: &[u32], timeout: std::time::Duration) -> bool {
         let alive: Vec<u32> = pids
             .iter()
             .copied()
-            .filter(|pid| std::fs::metadata(format!("/proc/{pid}")).is_ok())
+            .filter(|pid| !gone(*pid))
             .collect();
         if alive.is_empty() {
             return true;
@@ -186,4 +206,21 @@ pub fn tcp_port_busy(port: u16) -> bool {
         std::time::Duration::from_millis(300),
     )
     .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zombie_child_counts_as_gone() {
+        assert_eq!(stat_state("4242 (proton run (x)) Z 1 4242"), Some('Z'));
+        assert_eq!(stat_state("7 (DarkSoulsII.exe) S 1 7"), Some('S'));
+        // An exited child the harness never waited on.
+        let child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(gone(pid));
+        assert!(!gone(std::process::id()));
+    }
 }

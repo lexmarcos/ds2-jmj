@@ -1,18 +1,18 @@
-# Como o cliente encerra uma sessão
+# How the client ends a session
 
-O caminho, dentro de `DarkSoulsII.exe`, entre "o fantasma morreu" e
-`RequestNotifyLeaveSession` chegando ao servidor. Levantado em 12/09 com
-breakpoints em execução, porque o grafo estático de chamadas não leva a lugar
-nenhum aqui: todas essas funções são chamadas por tabela ou virtualmente, e
-`getCallingFunctions` volta vazio para todas elas.
+The path, inside `DarkSoulsII.exe`, between "the phantom died" and
+`RequestNotifyLeaveSession` reaching the server. Mapped on 12/09 with
+breakpoints at runtime, because the static call graph leads nowhere here: all
+of these functions are called through a table or virtually, and
+`getCallingFunctions` comes back empty for every one of them.
 
-Versão 1.03 Calibrations 2.02, base `0x140000000`.
+Version 1.03 Calibrations 2.02, base `0x140000000`.
 
-## Os envios, achados pelos ids do protocolo
+## The sends, found by the protocol ids
 
-Procurando o id de cada mensagem como imediato (`FindImmediate.java`):
+Searching for each message's id as an immediate (`FindImmediate.java`):
 
-| função | imediato | mensagem |
+| function | immediate | message |
 | --- | --- | --- |
 | `FUN_1406aad80` | `MOV EDX,0x3f1` | `RequestNotifyDeath` |
 | `FUN_1406ab230` | `MOV EDX,0x3ea` | `RequestNotifyJoinSession` |
@@ -24,17 +24,18 @@ Procurando o id de cada mensagem como imediato (`FindImmediate.java`):
 | `FUN_1406a6300` | `MOV EDX,0x3d2` | `RequestGetBreakInTargetList` |
 | `FUN_1406a6fb0` | `MOV EDX,0x3d3` | `RequestBreakInTarget` |
 
-Todos vizinhos, em `0x1406a....`: é a camada de rede, não a jogabilidade.
+All neighbours, at `0x1406a....`: this is the network layer, not the
+gameplay.
 
-## A morte, e depois a saída
+## The death, and then the leave
 
-Um fantasma morrendo no mundo do host, com os dois breakpoints armados no
-cliente **do fantasma** (`DS2_Trace.req`):
+A phantom dying in the host's world, with both breakpoints armed on the
+**phantom's** client (`DS2_Trace.req`):
 
     bp 6aad80     RequestNotifyDeath
     bp 6ab650     RequestNotifyLeaveSession
 
-O que saiu:
+What came out:
 
     alcancado +0x6aad80 de=+0x2ab3de  rdx=0x009d5170 r8=0x00ffffff
       pilha: +0x2ab3de +0x203bb4 +0x26b047 +0x18fc2d +0x18f690 +0x470b9 +0x46e44
@@ -42,20 +43,20 @@ O que saiu:
     alcancado +0x6ab650 de=+0x293153  rdx=1 r8=5
       pilha: +0x293153 +0x2900f8 +0x25c400 +0x2bbd33 +0x2c3c19 +0x2581ff
 
-Os doze segundos entre as duas já estavam medidos em
-[DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md); aqui eles
-aparecem como dois pontos distintos do código, não como um atraso de rede.
+The twelve seconds between the two were already measured in
+[DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md); here they show
+up as two distinct points in the code, not as a network delay.
 
-## A cadeia da saída, de baixo para cima
+## The leave chain, bottom up
 
-    FUN_1406ab650                    envia RequestNotifyLeaveSession
-      ^ FUN_140293110  (+0x43)       chama slot virtual +0x30 do serviço de rede
-      ^ FUN_1402900b0  (+0x48)       despachante de eventos de sessão
+    FUN_1406ab650                    sends RequestNotifyLeaveSession
+      ^ FUN_140293110  (+0x43)       calls virtual slot +0x30 of the net service
+      ^ FUN_1402900b0  (+0x48)       session event dispatcher
       ^ FUN_14025c3d0  (+0x30)
-      ^ FUN_1402bbcf0  (+0x43)       embrulha o código do evento e despacha
-      ^ FUN_1402c3900  (+0x319)      a rotina que encerra a sessão
+      ^ FUN_1402bbcf0  (+0x43)       wraps the event code and dispatches
+      ^ FUN_1402c3900  (+0x319)      the routine that ends the session
 
-### O despachante decide pelo código do evento
+### The dispatcher decides by the event code
 
 ```c
 void FUN_1402900b0(longlong param_1, undefined1 *param_2, int *param_3)
@@ -65,45 +66,45 @@ void FUN_1402900b0(longlong param_1, undefined1 *param_2, int *param_3)
         FUN_140292fa0(..., param_3[1], uVar1, param_2[0x18] == 2, param_3[2]);
     }
     else if (*param_3 == 6) {
-        FUN_140293110(..., param_3[1]);      // ← a saída
+        FUN_140293110(..., param_3[1]);      // ← the leave
     }
     ...
 }
 ```
 
-`*param_3` é o código do evento. **6 é sair da sessão**; 5 é o outro lado do
-par. O resto da função repassa o mesmo evento para quatro assinantes
-opcionais, guardados em `param_1 + 0x78`, `+0xa0`, `+0xa8` e `+0xb0`, cada um
-atrás de um bit da máscara em `param_2[0x18]`.
+`*param_3` is the event code. **6 is leaving the session**; 5 is the other
+side of the pair. The rest of the function passes the same event on to four
+optional subscribers, kept at `param_1 + 0x78`, `+0xa0`, `+0xa8` and `+0xb0`,
+each behind a bit of the mask at `param_2[0x18]`.
 
-### Quem levanta o evento
+### Who raises the event
 
 ```c
-LAB_1402c3bb7:                                    // dentro de FUN_1402c3900
+LAB_1402c3bb7:                                    // inside FUN_1402c3900
     uVar7 = FUN_14028f270(local_58, *(undefined4 *)(param_1 + 0x198));
     FUN_1402900b0(*(undefined8 *)(param_1 + 0x110), param_1 + 0xd8, uVar7);
     FUN_1402bbcf0(param_1, param_1 + 0xd8, *(undefined4 *)(param_1 + 0x198));
     *(undefined4 *)(param_1 + 0xf8) = 9;
 ```
 
-Campos do objeto de sessão que aparecem aqui:
+Fields of the session object that show up here:
 
-| campo | o que é |
+| field | what it is |
 | --- | --- |
-| `+0x198` | o código do evento, 6 no caso da morte |
-| `+0xf8` | o estado, escrito com 9 ao encerrar |
-| `+0xd8` | o registro da sessão passado adiante |
-| `+0x110` | o despachante |
+| `+0x198` | the event code, 6 in the case of death |
+| `+0xf8` | the state, written 9 when ending |
+| `+0xd8` | the session record passed on |
+| `+0x110` | the dispatcher |
 
-Quem escreve `+0x198` decide **por que** a sessão termina, e é aí que mora a
-diferença entre morrer, o temporizador estourar e usar um item de saída. Esse
-ponto ainda não foi localizado.
+Whoever writes `+0x198` decides **why** the session ends, and that is where
+the difference lives between dying, the timer running out and using a leave
+item. That point has not been located yet.
 
-## O campo da razão, e seu vocabulário
+## The reason field, and its vocabulary
 
-`+0x198` não é um booleano de "saiu": é o **motivo**, e o jogo tem um
-vocabulário para ele. Procurando as escritas imediatas nesse deslocamento
-(sintaxe AT&T, `movl $0x?,0x198(%reg)`, faixa 0x140200000–0x140400000):
+`+0x198` is not a "left" boolean: it is the **reason**, and the game has a
+vocabulary for it. Searching for the immediate writes at that displacement
+(AT&T syntax, `movl $0x?,0x198(%reg)`, range 0x140200000–0x140400000):
 
     1402bd018   movl $0xd,0x198(%rdi)
     1402bd622   movl $0x2,0x198(%rdi)
@@ -112,70 +113,70 @@ vocabulário para ele. Procurando as escritas imediatas nesse deslocamento
     1402be5a2   movl $0x4,0x198(%rsi)
     1402be7a9   movl $0x4,0x198(%rsi)
     1402beeb2   movl $0x7,0x198(%rdi)
-    1402bf4f7   movl $0x6,0x198(%r14)      <-- o único que escreve 6
+    1402bf4f7   movl $0x6,0x198(%r14)      <-- the only one that writes 6
     1402bf63a   movl $0x1,0x198(%r14)
     1402c04bb   movl $0x1,0x198(%rdi)
     1403f3914   movl $0x1,0x198(%rbx)
 
-Um único sítio escreve 6, dentro de `FUN_1402bf440`, e ele tem a forma de um
-**padrão**, não de uma decisão:
+A single site writes 6, inside `FUN_1402bf440`, and it has the shape of a
+**default**, not of a decision:
 
 ```c
 if (*(int *)(param_1 + 0x198) == 0) {
-    *(undefined4 *)(param_1 + 0x198) = 6;     // o outro ramo põe 1
+    *(undefined4 *)(param_1 + 0x198) = 6;     // the other branch puts 1
 }
 if (*(int *)(param_1 + 0x150) != 0) {
     FUN_1402ce5f0(*(undefined4 *)(param_1 + 0x198), param_1 + 0xb0);
 }
 ```
 
-Quem escreveu primeiro ganha: a razão só é preenchida se ainda estiver zerada.
-Então quem sabe *por que* a sessão acabou escreve antes, e `FUN_1402bf440` só
-completa o que ficou em branco. Trocar o 6 por outro valor aqui muda o rótulo,
-não o comportamento.
+Whoever wrote first wins: the reason is only filled in if it is still zero.
+So whoever knows *why* the session ended writes earlier, and `FUN_1402bf440`
+only fills in what was left blank. Changing the 6 to another value here
+changes the label, not the behaviour.
 
-Estes dois têm chamador estático, ao contrário do resto do caminho:
+These two have a static caller, unlike the rest of the path:
 
-    FUN_1402bddb0  ->  FUN_1402bf440     (a rotina que põe a razão)
-    FUN_1402c3630  ->  FUN_1402c3900     (a rotina que encerra)
+    FUN_1402bddb0  ->  FUN_1402bf440     (the routine that sets the reason)
+    FUN_1402c3630  ->  FUN_1402c3900     (the routine that ends it)
 
-## A máquina de estados da sessão
+## The session state machine
 
-`FUN_1402c3630` é o passo por quadro do objeto de sessão. Ele despacha pelo
-estado guardado em `+0xf8`:
+`FUN_1402c3630` is the session object's per-frame step. It dispatches on the
+state kept at `+0xf8`:
 
-| estado | handler | o que é |
+| state | handler | what it is |
 | --- | --- | --- |
 | 0 | `FUN_1402c37a0` | |
 | 1 | `FUN_1402c4450` | |
-| 4 | inline | conta tempo e, ao estourar, chama o slot virtual `+0x30` com motivo `0xf` |
+| 4 | inline | counts time and, when it runs out, calls virtual slot `+0x30` with reason `0xf` |
 | 5 | `FUN_1402c3c80` | |
 | 6 | `FUN_1402c45b0` | |
-| 7 | `FUN_1402c3830` | **em sessão** — é aqui que a saída é decidida |
-| 8 | `FUN_1402c3900` | demole: despacha o evento, manda o `LeaveSession`, põe o estado em 9 |
+| 7 | `FUN_1402c3830` | **in session** — this is where the leave is decided |
+| 8 | `FUN_1402c3900` | tears down: dispatches the event, sends the `LeaveSession`, puts the state at 9 |
 | 10 | `FUN_1402c4240` | |
-| 0xb | inline | estado := 0xc |
+| 0xb | inline | state := 0xc |
 
-Uma única instrução no binário inteiro escreve 8 nesse campo —
-`1402c386a`, dentro do handler do estado 7 — e a condição dela é de uma
-simplicidade que surpreende:
+A single instruction in the whole binary writes 8 to that field —
+`1402c386a`, inside state 7's handler — and its condition is surprisingly
+simple:
 
 ```c
 void FUN_1402c3830(longlong *param_1, float param_2)
 {
     ...
     if (*(int *)((longlong)param_1 + 0x1cc) != 0) {
-        *(undefined4 *)(param_1 + 0x1f) = 8;      // +0xf8 := 8, encerrar
+        *(undefined4 *)(param_1 + 0x1f) = 8;      // +0xf8 := 8, end it
     }
     ...
 }
 ```
 
-`+0x1cc` não é um booleano: é **o motivo pelo qual alguém pediu o fim**, e
-`FUN_1402c2f20` é a porta por onde o pedido entra:
+`+0x1cc` is not a boolean: it is **the reason somebody asked for the end**,
+and `FUN_1402c2f20` is the door the request comes in through:
 
 ```c
-void FUN_1402c2f20(longlong *param_1, undefined4 param_2)   // slot virtual +0x30
+void FUN_1402c2f20(longlong *param_1, undefined4 param_2)   // virtual slot +0x30
 {
     if ((**(code **)(*param_1 + 0xa8))() != '\0') {
         *(undefined4 *)((longlong)param_1 + 0x1cc) = param_2;
@@ -184,132 +185,135 @@ void FUN_1402c2f20(longlong *param_1, undefined4 param_2)   // slot virtual +0x3
 }
 ```
 
-Os motivos que o binário passa para esse slot, achados por padrão de chamada:
-`0xe`, `0xf`, `0x10`, `0x12`, `0x13`, `0x18`. São de uma escala diferente da
-do `+0x198`, então em algum ponto um é traduzido no outro.
+The reasons the binary passes to that slot, found by call pattern: `0xe`,
+`0xf`, `0x10`, `0x12`, `0x13`, `0x18`. They are on a different scale from
+`+0x198`'s, so at some point one is translated into the other.
 
-## O que a morte faz, medido
+## What death does, measured
 
-Breakpoint em `FUN_1402c2f20` no cliente do fantasma, invasão por orbe montada,
-fantasma morto por queda:
+Breakpoint on `FUN_1402c2f20` on the phantom's client, an orb invasion
+staged, the phantom killed by a fall:
 
     alcancado +0x2c2f20 de=+0x2c9246 rdx=2 r8=0x1410c0050
       pilha: +0x2c9246 +0x190989 +0x18f773 +0x470b9 ...
 
-**O motivo da morte é 2.** Subindo a pilha:
+**Death's reason is 2.** Walking up the stack:
 
-    FUN_1402c9220(manager, motivo)     percorre a lista de sessões (+0x48..+0x50)
-                                       e chama o slot +0xe8 de cada uma
-    FUN_140190950(obj, motivo)         "manda todas as sessões terminarem"
-    FUN_14018f760(tarefa)              invocador de tarefa: +0x18 é o ponteiro de
-                                       função, +0x20 e +0x28 os argumentos capturados
+    FUN_1402c9220(manager, motivo)     walks the session list (+0x48..+0x50)
+                                       and calls slot +0xe8 of each one
+    FUN_140190950(obj, motivo)         "tell every session to end"
+    FUN_14018f760(tarefa)              task invoker: +0x18 is the function
+                                       pointer, +0x20 and +0x28 are the
+                                       captured arguments
 
-Ou seja, a morte **enfileira** a saída como tarefa; quando ela roda, a decisão
-já foi tomada e não está mais na pilha.
+In other words, death **queues** the leave as a task; by the time it runs,
+the decision has already been taken and is no longer on the stack.
 
-## A tabela que decide se um tipo de morte desfaz a sessão
+## The table that decides whether a kind of death undoes the session
 
-O chamador direto de `FUN_140190950` é um salto guardado por uma consulta a
-uma tabela:
+The direct caller of `FUN_140190950` is a jump guarded by a table lookup:
 
 ```asm
-14018ffcf:  test   %rdx,%rdx              ; sem motivo, volta
+14018ffcf:  test   %rdx,%rdx              ; no reason, returns
 14018ffd2:  je     0x140190006
-14018ffd4:  movzbl 0xe0(%rcx),%r8d        ; o "tipo", byte do objeto
-14018ffdf:  cmp    $0x14,%r8b             ; 20 tipos
+14018ffd4:  movzbl 0xe0(%rcx),%r8d        ; the "type", a byte of the object
+14018ffdf:  cmp    $0x14,%r8b             ; 20 types
 14018ffe3:  cmovb  %r8d,%r9d
-14018ffe7:  lea    0xf30062(%rip),%r8     ; a tabela: 0x1410c0050
+14018ffe7:  lea    0xf30062(%rip),%r8     ; the table: 0x1410c0050
 14018fff2:  add    %rax,%rax
-14018fff5:  cmpb   $0x0,0x1(%r8,%rax,8)   ; entrada[tipo].byte1
-14018fffb:  je     0x140190920            ; zero: NÃO encerra as sessões
-140190001:  jmp    0x140190950            ; diferente de zero: encerra todas
+14018fff5:  cmpb   $0x0,0x1(%r8,%rax,8)   ; entry[type].byte1
+14018fffb:  je     0x140190920            ; zero: does NOT end the sessions
+140190001:  jmp    0x140190950            ; non-zero: ends them all
 ```
 
-Entradas de 16 bytes, lidas da memória viva em `mod 10c0050 140`:
+16-byte entries, read from live memory with `mod 10c0050 140`:
 
-    +0x000  00 00 00 00  07 17 00 00     tipo 0  -> byte1 = 0, não encerra
-    +0x010  02 01 01 02  03 02 01 02     tipo 1  -> byte1 = 1, encerra
-    +0x020  02 01 02 02  03 02 00 02     tipo 2  -> encerra
-    +0x030  02 01 01 03  03 02 01 02     tipo 3  -> encerra
-    +0x040  02 01 02 03  03 02 00 02     tipo 4  -> encerra
-    +0x050  02 02 01 07  01 03 00 06     tipo 5  -> encerra
-    +0x060  01 02 01 08  01 05 00 07     tipo 6  -> encerra
-    +0x070  01 01 01 04  01 07 00 03     tipo 7  -> encerra
-    +0x080  01 02 01 04  01 07 00 04     tipo 8  -> encerra
+    +0x000  00 00 00 00  07 17 00 00     type 0  -> byte1 = 0, does not end
+    +0x010  02 01 01 02  03 02 01 02     type 1  -> byte1 = 1, ends
+    +0x020  02 01 02 02  03 02 00 02     type 2  -> ends
+    +0x030  02 01 01 03  03 02 01 02     type 3  -> ends
+    +0x040  02 01 02 03  03 02 00 02     type 4  -> ends
+    +0x050  02 02 01 07  01 03 00 06     type 5  -> ends
+    +0x060  01 02 01 08  01 05 00 07     type 6  -> ends
+    +0x070  01 01 01 04  01 07 00 03     type 7  -> ends
+    +0x080  01 02 01 04  01 07 00 04     type 8  -> ends
 
-**É aqui que o co-op seamless pode nascer.** Zerar o byte `+1` da entrada certa
-faz a morte daquele tipo deixar de desmanchar as sessões — e é um patch de
-*dado*, não de `.text`, da mesma família do `DS2_TimerParamPatch`.
+**This is where seamless co-op can be born.** Zeroing the `+1` byte of the
+right entry makes a death of that type stop tearing the sessions down — and
+it is a *data* patch, not a `.text` one, of the same family as
+`DS2_TimerParamPatch`.
 
-### Tentar zerar a tabela inteira não entrega o co-op, e ensina por quê
+### Zeroing the whole table does not deliver co-op, and teaches why
 
-Primeira tentativa, em 12/09: zerar o byte `+1` das dezessete entradas que o
-tinham diferente de zero, **só no cliente do fantasma**, com
-`pokemod 10c00?1 00`. Todas aceitaram (`antes=01`/`03`, `ok`).
+First attempt, on 12/09: zeroing the `+1` byte of the seventeen entries that
+had it non-zero, **on the phantom's client only**, with `pokemod 10c00?1 00`.
+All of them were accepted (`antes=01`/`03`, `ok`).
 
-Depois disso, uma invasão montada e o fantasma jogado do penhasco:
+After that, an invasion staged and the phantom thrown off the cliff:
 
-- a sessão **continuou de pé** — a barra de vida do host seguiu na tela do
-  fantasma, e o servidor continuou recebendo posição dele;
-- mas o fantasma **não morreu**. Ficou caindo no vazio por mais de dois
-  minutos, sem tela de morte, sem renascer, sem voltar para o próprio mundo. O
-  processo seguia rodando a 80% de CPU e a imagem seguia mudando, então não era
-  travamento: era um fluxo de morte que nunca completa;
-- **restaurar os bytes destravou**: segundos depois o fantasma morreu de
-  verdade, voltou ao próprio mundo e reapareceu na fogueira, normal. Isso
-  fecha o argumento: o byte estava segurando o fluxo da morte, não só a
-  sessão.
+- the session **stayed up** — the host's health bar stayed on the phantom's
+  screen, and the server kept receiving its position;
+- but the phantom **did not die**. It kept falling through the void for over
+  two minutes, with no death screen, no respawn, no return to its own world.
+  The process was still running at 80% CPU and the image kept changing, so it
+  was not a freeze: it was a death flow that never completes;
+- **restoring the bytes unblocked it**: seconds later the phantom really
+  died, went back to its own world and reappeared at the bonfire, normal.
+  That closes the argument: the byte was holding the death flow, not just the
+  session.
 
-A leitura: esse byte não é "mantenha a sessão". Ele faz parte do caminho da
-**morte**, e tirá-lo deixa o jogador num limbo. O co-op seamless precisa de
-mais do que suprimir o fim da sessão — precisa redirecionar o renascimento
-para a fogueira dentro do mundo do host. Suprimir sem redirecionar é
-exatamente o erro que o CLAUDE.md descreve como "patch no valor em vez de na
-origem".
+The reading: that byte is not "keep the session". It is part of the **death**
+path, and taking it out leaves the player in limbo. Seamless co-op needs more
+than suppressing the end of the session — it needs to redirect the respawn to
+the bonfire inside the host's world. Suppressing without redirecting is
+exactly the mistake CLAUDE.md describes as "patching the value instead of the
+source".
 
-### O índice do fantasma é 7
+### The phantom's index is 7
 
-Medido em 12/09, depois que o tracer ganhou o `deref` (o objeto é transitório
-e uma sonda tardia lê memória já reciclada — foi o que aconteceu na primeira
-tentativa):
+Measured on 12/09, after the tracer got its `deref` (the object is transient
+and a late probe reads memory that has already been recycled — which is what
+happened on the first attempt):
 
     bp 190950 deref rcx+e0 1
 
-Com uma invasão montada e o fantasma morto por queda:
+With an invasion staged and the phantom killed by a fall:
 
     alcancado +0x190950 de=+0x18f773 rdx=2 r8=0x1410c0050 [rcx+e0]=07
 
-Ou seja: **o papel vale 7** e o motivo vale 2. A entrada 7 da tabela é
+In other words: **the role is 7** and the reason is 2. The table's entry 7 is
 
-    +0x070  04 01 01 01  03 00 07 01      byte1 = 1, encerra
+    +0x070  04 01 01 01  03 00 07 01      byte1 = 1, ends
 
-Então o alvo do co-op seamless é um byte só: `0x1410c00c1`. Zerar a tabela
-inteira travou a morte; zerar só essa entrada é o teste que ainda falta, e é
-a diferença entre desligar um comportamento e desligá-lo para o papel certo.
+So seamless co-op's target is a single byte: `0x1410c00c1`. Zeroing the whole
+table jammed the death; zeroing only that entry is the test still missing,
+and it is the difference between switching a behaviour off and switching it
+off for the right role.
 
-## O byte não manda o jogador para casa — só desfaz a sessão
+## The byte does not send the player home — it only undoes the session
 
-Testado em 12/09, depois de saber o índice: zerar **só** o byte da entrada 7
-(`0x1410c00c1`, `antes=01`), no cliente do fantasma, e então invadir e morrer.
+Tested on 12/09, once the index was known: zeroing **only** entry 7's byte
+(`0x1410c00c1`, `antes=01`), on the phantom's client, then invading and
+dying.
 
-O que aconteceu:
+What happened:
 
-- o `FUN_140190950` **não foi chamado** — o breakpoint armado nele não
-  disparou, o que é a prova de que o ramo mudou: com o byte zerado o código
-  toma o `je 0x140190920`;
-- e mesmo assim o fantasma viu **"You have been vanquished. Returning to your
-  world…"** e voltou.
+- `FUN_140190950` **was not called** — the breakpoint armed on it did not
+  fire, which is the proof that the branch changed: with the byte zeroed the
+  code takes the `je 0x140190920`;
+- and even so the phantom saw **"You have been vanquished. Returning to your
+  world…"** and went back.
 
-Os dois ramos terminam no mesmo lugar:
+Both branches end in the same place:
 
 ```c
-void FUN_140190920(longlong param_1)          // o ramo "não encerre sessões"
+void FUN_140190920(longlong param_1)          // the "do not end sessions" branch
 {
     FUN_14044fde0(*(undefined8 *)(DAT_1416148f0 + 0x70));
     *(undefined1 *)(param_1 + 0xce) = 1;
 }
 
-void FUN_14044fde0(undefined8 param_1)        // e este é o "volte para o seu mundo"
+void FUN_14044fde0(undefined8 param_1)        // and this one is the "go back to your world"
 {
     undefined8 pedido[4] = { -1, -1, 0, 0 };
     FUN_14044ed40(param_1, pedido);
@@ -317,37 +321,39 @@ void FUN_14044fde0(undefined8 param_1)        // e este é o "volte para o seu m
 }
 ```
 
-`FUN_14044fde0` monta um pedido com destino **vazio** (dois `-1`) e o entrega
-ao slot virtual `+0x40` do contexto global do jogo. É a mesma chamada que
-aparece dentro de `FUN_1402c3900`, a rotina que demole a sessão.
+`FUN_14044fde0` builds a request with an **empty** destination (two `-1`s)
+and hands it to virtual slot `+0x40` of the game's global context. It is the
+same call that shows up inside `FUN_1402c3900`, the routine that tears the
+session down.
 
-**Então a divisão é esta:** o byte da tabela decide se as *sessões* são
-desfeitas; o retorno ao próprio mundo é um **warp**, pedido separadamente. Um
-co-op seamless precisa mexer no warp — suprimi-lo, ou trocar o destino vazio
-pela fogueira do mundo onde o jogador já está. Mexer só na tabela deixa o
-jogador voltando para casa com a sessão pendurada, que é pior que o
-comportamento original.
+**So the split is this:** the table byte decides whether the *sessions* are
+undone; the return to one's own world is a **warp**, asked for separately. A
+seamless co-op has to touch the warp — suppress it, or swap the empty
+destination for the bonfire of the world the player is already in. Touching
+only the table leaves the player going home with the session left hanging,
+which is worse than the original behaviour.
 
-## Por que isso importa
+## Why this matters
 
-Duas funcionalidades pedidas dependem deste caminho:
+Two requested features depend on this path:
 
-- **Revanche por red sign.** Se a sessão não terminasse na morte, não haveria o
-  que reconectar. Ver [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md)
-  para a conclusão de que o servidor sozinho não consegue refazer a sessão.
-- **Co-op seamless.** O objetivo é que a morte devolva o jogador à última
-  fogueira **dentro da mesma sessão**, em vez de mandá-lo para o próprio
-  mundo.
+- **Rematch by red sign.** If the session did not end on death, there would
+  be nothing to reconnect. See
+  [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md) for the conclusion
+  that the server on its own cannot rebuild the session.
+- **Seamless co-op.** The goal is for death to return the player to the last
+  bonfire **inside the same session**, instead of sending them to their own
+  world.
 
-Um aviso que já estava registrado e continua valendo: o
-`RequestNotifyLeaveSession` **não** pode ser bloqueado às cegas, porque ele
-também faz a limpeza legítima de uma morte. Não mandar a mensagem não impede o
-cliente de ejetar o jogador — quem faz isso é o mesmo evento, localmente. O
-alvo certo é o código do evento, não o envio.
+A warning that was already recorded and still holds:
+`RequestNotifyLeaveSession` **cannot** be blocked blindly, because it also
+does the legitimate cleanup of a death. Not sending the message does not stop
+the client from ejecting the player — the same event does that, locally. The
+right target is the event code, not the send.
 
-## O que ainda falta
+## What is still missing
 
-- Quem escreve `+0x198` **antes** de `FUN_1402bf440`, que é quem realmente
-  decide o motivo. O sítio do 6 é só o padrão.
-- O que são os códigos 5 e 6 exatamente (5 aparece no par da saída).
-- Se `FUN_1402c3900` é chamada uma vez por sessão ou por quadro.
+- Who writes `+0x198` **before** `FUN_1402bf440`, which is what really
+  decides the reason. The site with the 6 is only the default.
+- What codes 5 and 6 are exactly (5 shows up in the leave's pair).
+- Whether `FUN_1402c3900` is called once per session or per frame.

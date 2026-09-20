@@ -15,6 +15,21 @@ pub fn read_text(path: &Path) -> std::io::Result<String> {
     Ok(sanitize(&String::from_utf8_lossy(&bytes)))
 }
 
+/// The whole lines a log gained past byte `from`, as text, and the byte to read
+/// from next time. A line still being written is left for the next read. A log
+/// shorter than `from` was recreated (the server does on every start) and is
+/// read from the top.
+pub fn read_lines_from(path: &Path, from: u64) -> std::io::Result<(String, u64)> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let start = if file.metadata()?.len() < from { 0 } else { from };
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    let complete = bytes.iter().rposition(|b| *b == b'\n').map(|k| k + 1).unwrap_or(0);
+    Ok((sanitize(&String::from_utf8_lossy(&bytes[..complete])), start + complete as u64))
+}
+
 /// Turns the server's column separators into pipes and squeezes the padding,
 /// which makes lines short enough to read and stable enough to match on.
 fn sanitize(text: &str) -> String {
@@ -68,7 +83,7 @@ pub fn show(path: &Path, options: &Options<'_>) -> std::io::Result<()> {
 
     let mut seen = text.len();
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        crate::control::sleep(std::time::Duration::from_millis(500)).map_err(std::io::Error::other)?;
         let text = read_text(path)?;
         if text.len() <= seen {
             // The file was rotated or truncated; start over from the top.

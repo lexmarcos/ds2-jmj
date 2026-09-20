@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -162,6 +163,14 @@ namespace
     {
         uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
 
+        // Every sign that reaches the cache, whether or not a rematch is
+        // armed. This hook was written for red signs and never fired for a
+        // white one, and a hook that only speaks when it acts cannot say
+        // whether it was never called or called and declined.
+        Append(StringFormat("  placa recebida: tipo=%u jogador=%u alca=%08x armado=%u\n",
+            (unsigned)Type, P6, OutHandle == nullptr ? 0u : *OutHandle,
+            (unsigned)s_pending.load()));
+
         if (OutHandle == nullptr || *OutHandle == 0)
         {
             return Result;
@@ -188,6 +197,12 @@ namespace
         }
 
         void* Manager = s_manager.load();
+        if (Manager == nullptr)
+        {
+            // Armed by hand, before anyone summoned: the party hook has the
+            // same manager from the game's own per-frame call.
+            Manager = DS2_PartyHook_SignManager();
+        }
         if (Manager == nullptr)
         {
             Append("  revanche pedida, mas ninguem invocou ainda: sem o manager nao da\n");

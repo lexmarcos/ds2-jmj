@@ -15,6 +15,7 @@
 #include "Server/GameService/Utils/DS2_GameIds.h"
 
 #include "Server/GameService/PlayerState.h"
+#include "Shared/Core/Utils/Strings.h"
 
 #define DEFINE_FIELD(type, name, default_value)                             \
     private: type name = default_value;                                     \
@@ -88,9 +89,25 @@ public:
         return "";
     }
 
+    // What the client tells us about itself that has no field of its own.
+    // Written out rather than left blank because the harness reads it.
+    //
+    // Do not read `human_effigy_burnt` as "is human": it stayed at zero
+    // through a Human Effigy being used and the character visibly returning to
+    // human form, so whatever it counts, it is not current humanity. Left in
+    // because it is what the client sends and someone should work out what it
+    // means; the honest test for hollow is still whether the summon prompt
+    // appears.
     virtual std::string GetStatusDescription() override
     {
-        return "";
+        if (!GetPlayerStatus().has_player_status())
+        {
+            return "";
+        }
+
+        auto Status = GetPlayerStatus().player_status();
+        return StringFormat("efigies %u, arquetipo %u, fogueira %u",
+            Status.human_effigy_burnt(), Status.archetype(), Status.sitting_at_bonfire());
     }
 
 };

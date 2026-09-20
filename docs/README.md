@@ -5,12 +5,20 @@ server.
 
 | Document | What it covers |
 | --- | --- |
+| [DS2_HARNESS.md](DS2_HARNESS.md) | Harness for LLM-driven tests: JSON results, instance identity, observations, scenarios, save fixtures and evidence |
 | [DS2_PHANTOM_TIMER_PATCH.md](DS2_PHANTOM_TIMER_PATCH.md) | The patch that removes the ~12 minute PvP session limit, and how to turn it on |
 | [DS2_PVP_LEAVE_SESSIONS.md](DS2_PVP_LEAVE_SESSIONS.md) | How PvP sessions end, and how the timer leave differs from a normal one |
 | [DS2_LEAVE_SESSION_BY_KILL.md](DS2_LEAVE_SESSION_BY_KILL.md) | The kill-based leave sequence, and why the leave message cannot simply be blocked |
 | [DS2_REMATCH_AFTER_DEATH.md](DS2_REMATCH_AFTER_DEATH.md) | What stands between a death and the next invasion of the same pair, measured |
 | [DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md) | The client's path from a death to `RequestNotifyLeaveSession`, traced at runtime |
 | [DS2_CLIENT_NETSVR_API.md](DS2_CLIENT_NETSVR_API.md) | **The client's multiplayer classes carry RTTI names and full method signatures** |
+| [DS2_SEAMLESS_COOP_DESIGN.md](DS2_SEAMLESS_COOP_DESIGN.md) | **What seamless co-op is meant to be: the host owns the world, each player keeps their own save, and every rule that follows from that** |
+| [DS2_SEAMLESS_COOP_TASKS.md](DS2_SEAMLESS_COOP_TASKS.md) | **The work left, in dependency order, with what is already known about each piece** |
+| [DS2_SEAMLESS_COOP.md](DS2_SEAMLESS_COOP.md) | **Every warp in the game goes through one call: the request it carries, who reads which field, and why a co-op death and an invader death end up in different places** |
+| [DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md](DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md) | An outside opinion on rebuilding group travel; **its central premise was refuted — read the two below with it** |
+| [DS2_PRESENCE_REBUILD_PLAN.md](DS2_PRESENCE_REBUILD_PLAN.md) | The refutation: removing a player's presence is native and per-player, rebuilding it natively is not; the hybrid and its phases |
+| [DS2_PRESENCE_ASTRA_REVIEW.md](DS2_PRESENCE_ASTRA_REVIEW.md) | A third pass over both: the offsets all check out, and the crash we blamed on one function belongs to another |
+| [DS2_NATIVE_TRAVEL_PLAN.md](DS2_NATIVE_TRAVEL_PLAN.md) | **Rebuilding group travel on the game's own loading**: the warp chain, the four parts of a borrowed world, two watchdogs, and the one free measurement that can kill the whole idea |
 | [DS2_AREA_RESTRICTION.md](DS2_AREA_RESTRICTION.md) | Why multiplayer items are refused in some areas; carries corrections where it was wrong |
 | [DS2_MAJULA_MULTIPLAYER.md](DS2_MAJULA_MULTIPLAYER.md) | **Multiplayer in Majula and the other closed areas: the three things required, how to apply and verify them** |
 | [DS2_SERVER_DEPLOY.md](DS2_SERVER_DEPLOY.md) | **Running the server on a small shared host: build here, seed the config, the service, the firewall, the key** |
@@ -20,6 +28,7 @@ server.
 | [DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md) | The probe, the tracer and the oracle, and what they cost to learn |
 | [DS2_SOUL_MEMORY_MATCHMAKING.md](DS2_SOUL_MEMORY_MATCHMAKING.md) | Soul Memory matchmaking tiers and how to open them up |
 | [DS2_PVP_CODEMAP.md](DS2_PVP_CODEMAP.md) | Where the DS2 PvP flows live in the source tree |
+| [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md) | M4: the host's event flags reach the guest at join and over P2P packet `0x20`, and stay out of the guest's own world |
 | [DS2_FOG_GATES.md](DS2_FOG_GATES.md) | The area-transition fog walls: the class, the per-frame test, and what is still unknown |
 
 The two leave-session documents are historical records: the tracing they

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "name": "menu-roundtrip",
+  "instances": [1, 2],
+  "timeoutSeconds": 600,
+  "steps": [
+    { "action": "assert", "instance": 1, "pointer": "/state", "equals": "world" },
+    { "action": "assert", "instance": 2, "pointer": "/state", "equals": "world" },
+    { "action": "leave", "instance": 1 },
+    { "action": "assert", "instance": 1, "pointer": "/state", "equals": "title" },
+    { "action": "leave", "instance": 2 },
+    { "action": "assert", "instance": 2, "pointer": "/state", "equals": "title" },
+    { "action": "enter", "instance": 1 },
+    { "action": "enter", "instance": 2 },
+    { "action": "assert", "instance": 1, "pointer": "/state", "equals": "world" },
+    { "action": "assert", "instance": 2, "pointer": "/state", "equals": "world" },
+    { "action": "assert", "instance": 1, "pointer": "/serverConnected", "equals": true },
+    { "action": "assert", "instance": 2, "pointer": "/serverConnected", "equals": true }
+  ]
+}

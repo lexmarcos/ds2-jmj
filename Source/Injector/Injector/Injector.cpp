@@ -29,9 +29,27 @@
 #include "Injector/Hooks/DarkSouls2/DS2_MemProbeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PhantomActionHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_PhantomFogHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_EnemySyncHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_GhostNpcHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_HollowSummonHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_NetSyncGuardHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PartNotifyGuardHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PartyHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_ProgressCarryHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_TraceHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RematchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SeamlessCoopHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SeamlessSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_NavHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CrashHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -70,6 +88,8 @@ Injector::~Injector()
 
 bool Injector::Init()
 {
+    BootId = std::to_string(GetCurrentProcessId()) + "-" +
+        std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
     Log("Initializing injector ...");
 
     // Grab the dll path based on the location of static function.
@@ -196,11 +216,48 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_RematchHook>());
             }
 
+            if (Config.DS2SeamlessCoop)
+            {
+                Hooks.push_back(std::make_unique<DS2_SeamlessCoopHook>());
+                Hooks.push_back(std::make_unique<DS2_SeamlessSessionHook>());
+                Hooks.push_back(std::make_unique<DS2_RespawnInSessionHook>());
+                Hooks.push_back(std::make_unique<DS2_DeathInterceptHook>());
+                Hooks.push_back(std::make_unique<DS2_CoopChannelHook>());
+                // Seamless co-op does not gate multiplayer on the effigy.
+                Hooks.push_back(std::make_unique<DS2_HollowSummonHook>());
+                // ... nor keep a phantom away from levers and doors (M4).
+                Hooks.push_back(std::make_unique<DS2_PhantomActionHook>());
+                // The enemy table is unbound before its own map is torn
+                // down; without it, releasing that map leaves every record
+                // writing into freed memory (M8 6b, step 2).
+                Hooks.push_back(std::make_unique<DS2_EnemySyncHook>());
+                // ... nor show the world's NPCs to a guest as white ghosts.
+                Hooks.push_back(std::make_unique<DS2_GhostNpcHook>());
+                // Entering without a soapstone (M3).
+                Hooks.push_back(std::make_unique<DS2_PartyHook>());
+                // What was done together goes into the guest's save (M7);
+                // its per-frame work rides on DS2_PartyHook's tick.
+                Hooks.push_back(std::make_unique<DS2_ProgressCarryHook>());
+                // The owner of the world rests with phantoms in it (M8).
+                Hooks.push_back(std::make_unique<DS2_BonfireInSessionHook>());
+                Hooks.push_back(std::make_unique<DS2_BackreadHook>());
+                // The net thread reads a released map's character table (M8).
+                Hooks.push_back(std::make_unique<DS2_NetSyncGuardHook>());
+                // ... and walks the part list of one that went (M8).
+                Hooks.push_back(std::make_unique<DS2_PartNotifyGuardHook>());
+                // Who destroys what in the seconds after a travel (M8).
+                Hooks.push_back(std::make_unique<DS2_TravelWatchHook>());
+            }
+
             // Always on for Dark Souls II: it only polls, and it is the only
             // way to read the game's memory now that Steam reparents the
             // process out of reach of /proc/<pid>/mem.
+            Hooks.push_back(std::make_unique<DS2_NavHook>());
             Hooks.push_back(std::make_unique<DS2_MemProbeHook>());
             Hooks.push_back(std::make_unique<DS2_TraceHook>());
+            // Only writes down where the game faults, and only faults whose
+            // instruction is in the game's image.
+            Hooks.push_back(std::make_unique<DS2_CrashHook>());
             break;
         }
     }
@@ -220,9 +277,12 @@ bool Injector::Init()
 
     Log("Installing hooks ...");
     bool AllInstalled = true;
+    nlohmann::json HookStates = nlohmann::json::object();
     for (auto& hook : Hooks)
     {
-        if (hook->Install(*this))
+        bool Installed = hook->Install(*this);
+        HookStates[hook->GetName()] = Installed;
+        if (Installed)
         {
             Success("\t%s: Success", hook->GetName());
             InstalledHooks.push_back(hook.get());
@@ -232,6 +292,31 @@ bool Injector::Init()
             Error("\t%s: Failed", hook->GetName());
             AllInstalled = false;
         }
+    }
+
+    // Current-boot installation receipts, not old log lines or configuration intent.
+    // `build` is the commit CI built this DLL from ("unknown" for a local build),
+    // so the harness can tell which code the running game has.
+    nlohmann::json Receipt = {
+        {"schemaVersion", 1}, {"bootId", BootId}, {"build", DS2OS_BUILD_SHA}, {"hooks", HookStates},
+        {"configured", {{"seamless", Config.DS2SeamlessCoop},
+                        {"autoRematch", Config.DS2AutoRematch},
+                        {"forceZone", Config.DS2ForceMultiPlayZone},
+                        {"removeFog", Config.DS2RemovePhantomFog},
+                        {"timer", Config.DS2PatchPhantomTimers},
+                        {"partyGuest", Config.DS2PartyGuest},
+                        {"partyAccept", Config.DS2PartyAccept},
+                        {"partyPassword", !Config.DS2PartyPassword.empty()}}}
+    };
+    {
+        std::ofstream Stream(DllPath / "DS2_Harness.json.tmp", std::ios::trunc);
+        Stream << Receipt.dump(2);
+    }
+    std::error_code ReceiptError;
+    std::filesystem::rename(DllPath / "DS2_Harness.json.tmp", DllPath / "DS2_Harness.json", ReceiptError);
+    if (ReceiptError) {
+        std::ofstream Stream(DllPath / "DS2_Harness.json", std::ios::trunc);
+        Stream << Receipt.dump(2);
     }
 
     if (!AllInstalled)

@@ -205,9 +205,11 @@ dependencies = [
  "clap",
  "ds2os-core",
  "evdev",
+ "libc",
  "png",
  "serde",
  "serde_json",
+ "sha2",
  "x11rb",
 ]
 

@@ -28,6 +28,10 @@ DS2_LoggingManager::DS2_LoggingManager(Server* InServerInstance)
 {
 }
 
+// Every RequestNotify* is logged as "Notify <type>: ...", not just counted.
+// Session tests read these as their signal (a summon is JoinGuestPlayer then
+// JoinSession, its end LeaveSession and LeaveGuestPlayer), and the census of
+// LogFirstMessageOfEachType only shows the first of each per connection.
 MessageHandleResult DS2_LoggingManager::OnMessageReceived(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     if (Message.Header.IsType(DS2_Frpg2ReliableUdpMessageType::RequestNotifyBuyItem))
@@ -110,6 +114,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyDeath(GameClient* Cl
 
     DS2_Frpg2RequestMessage::RequestNotifyDeath* Request = (DS2_Frpg2RequestMessage::RequestNotifyDeath*)Message.Protobuf.get();
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyDeath: area 0x%08x, cell 0x%08x, fields %lld %lld %lld %lld %lld.", Request->online_area_id(), Request->cell_id(), (long long)Request->field_3(), (long long)Request->field_4(), (long long)Request->field_5(), (long long)Request->field_6(), (long long)Request->field_7());
+
     std::string TotalStatisticKey = StringFormat("Player/TotalDeaths");
     Database.AddGlobalStatistic(TotalStatisticKey, 1);
     Database.AddPlayerStatistic(TotalStatisticKey, Player.GetPlayerId(), 1);
@@ -130,6 +136,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyDisconnectSession(Ga
 {
     DS2_Frpg2RequestMessage::RequestNotifyDisconnectSession* Request = (DS2_Frpg2RequestMessage::RequestNotifyDisconnectSession*)Message.Protobuf.get();
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyDisconnectSession: field_1 %lld.", (long long)Request->field_1());
+
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
     DS2_Frpg2RequestMessage::EmptyResponse Response;
@@ -146,6 +154,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyJoinGuestPlayer(Game
 {
     DS2_Frpg2RequestMessage::RequestNotifyJoinGuestPlayer* Request = (DS2_Frpg2RequestMessage::RequestNotifyJoinGuestPlayer*)Message.Protobuf.get();
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyJoinGuestPlayer: fields %lld %lld %lld %lld %lld %lld %lld %lld.", (long long)Request->field_1(), (long long)Request->field_2(), (long long)Request->field_3(), (long long)Request->field_4(), (long long)Request->field_5(), (long long)Request->field_6(), (long long)Request->field_7(), (long long)Request->field_8());
+
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
     DS2_Frpg2RequestMessage::EmptyResponse Response;
@@ -161,6 +171,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyJoinGuestPlayer(Game
 MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyJoinSession(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     DS2_Frpg2RequestMessage::RequestNotifyJoinSession* Request = (DS2_Frpg2RequestMessage::RequestNotifyJoinSession*)Message.Protobuf.get();
+
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyJoinSession: fields %lld %lld %lld %lld.", (long long)Request->field_1(), (long long)Request->field_2(), (long long)Request->field_3(), (long long)Request->field_4());
 
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
@@ -193,6 +205,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyKillEnemy(GameClient
         EnemyCount += EnemyInfo.enemy_count();
     }
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyKillEnemy: %d kind(s), %d enem%s.", Request->enemy_count_size(), EnemyCount, EnemyCount == 1 ? "y" : "ies");
+
     std::string TotalStatisticKey = StringFormat("Enemies/TotalKilled");
     Database.AddGlobalStatistic(TotalStatisticKey, EnemyCount);
     Database.AddPlayerStatistic(TotalStatisticKey, Player.GetPlayerId(), EnemyCount);
@@ -211,6 +225,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyKillPlayer(GameClien
 {
     DS2_Frpg2RequestMessage::RequestNotifyKillPlayer* Request = (DS2_Frpg2RequestMessage::RequestNotifyKillPlayer*)Message.Protobuf.get();
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyKillPlayer: fields %lld %lld %lld %lld %lld.", (long long)Request->field_1(), (long long)Request->field_2(), (long long)Request->field_3(), (long long)Request->field_4(), (long long)Request->field_5());
+
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
     DS2_Frpg2RequestMessage::EmptyResponse Response;
@@ -226,6 +242,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyKillPlayer(GameClien
 MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyLeaveGuestPlayer(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     DS2_Frpg2RequestMessage::RequestNotifyLeaveGuestPlayer* Request = (DS2_Frpg2RequestMessage::RequestNotifyLeaveGuestPlayer*)Message.Protobuf.get();
+
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyLeaveGuestPlayer: fields %lld %lld %lld %lld.", (long long)Request->field_1(), (long long)Request->field_2(), (long long)Request->field_3(), (long long)Request->field_4());
 
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
@@ -246,6 +264,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyLeaveSession(GameCli
 
     DS2_Frpg2RequestMessage::RequestNotifyLeaveSession* Request = (DS2_Frpg2RequestMessage::RequestNotifyLeaveSession*)Message.Protobuf.get();
 
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyLeaveSession: fields %lld %lld %lld %lld.", (long long)Request->field_1(), (long long)Request->field_2(), (long long)Request->field_3(), (long long)Request->field_4());
+
     std::string TypeStatisticKey = StringFormat("Player/TotalMultiplaySessions");
     Database.AddGlobalStatistic(TypeStatisticKey, 1);
     Database.AddPlayerStatistic(TypeStatisticKey, Player.GetPlayerId(), 1);
@@ -263,6 +283,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyLeaveSession(GameCli
 MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyMirrorKnight(GameClient* Client, const Frpg2ReliableUdpMessage& Message)
 {
     DS2_Frpg2RequestMessage::RequestNotifyMirrorKnight* Request = (DS2_Frpg2RequestMessage::RequestNotifyMirrorKnight*)Message.Protobuf.get();
+
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyMirrorKnight: field_1 %lld.", (long long)Request->field_1());
 
     // Note: I don't think we really care about this log. We get most of this during the summon flow.
 
@@ -282,6 +304,8 @@ MessageHandleResult DS2_LoggingManager::Handle_RequestNotifyOfflineDeathCount(Ga
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestNotifyOfflineDeathCount* Request = (DS2_Frpg2RequestMessage::RequestNotifyOfflineDeathCount*)Message.Protobuf.get();
+
+    LogS(Client->GetName().c_str(), "Notify RequestNotifyOfflineDeathCount: count %lld.", (long long)Request->count());
 
     std::string TotalStatisticKey = StringFormat("Player/TotalDeaths");
     Database.AddGlobalStatistic(TotalStatisticKey, Request->count());

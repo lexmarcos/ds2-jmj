@@ -44,6 +44,21 @@ pub struct InjectorConfig {
     /// is what a phantom's area barrier appears to hang on.
     pub DS2RemovePhantomFog: bool,
     pub DS2AutoRematch: bool,
+    /// Death in another world goes to the last bonfire, and every warp is
+    /// written to DS2_Seamless.log.
+    pub DS2SeamlessCoop: bool,
+    /// With seamless on: keep this player's white sign on the ground while
+    /// it stands in its own world (M3, entering without a soapstone).
+    #[serde(default)]
+    pub DS2PartyGuest: bool,
+    /// With seamless on: Steam IDs, decimal and comma separated, whose white
+    /// signs this player summons by itself.
+    #[serde(default)]
+    pub DS2PartyAccept: String,
+    /// The party's password: only players with the same one see each other's
+    /// signs, and a password on a non-guest accepts the signs that arrive.
+    #[serde(default)]
+    pub DS2PartyPassword: String,
     /// Zone substituted when the game reports none.
     #[serde(default)]
     pub DS2ForcedZoneId: i32,

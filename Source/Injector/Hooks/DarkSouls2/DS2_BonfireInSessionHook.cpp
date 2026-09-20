@@ -1,0 +1,3669 @@
+/*
+ * Dark Souls 3 - Open Server
+ *
+ * This program is free software; licensed under the MIT license.
+ * You should have received a copy of the license along with this program.
+ * If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+#include "Injector/Hooks/DarkSouls2/DS2_BonfireInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_EnemySyncHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_TravelWatchHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_CoopChannelHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_DeathInterceptHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RespawnInSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_SeamlessSessionHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
+#include "Injector/Injector/Injector.h"
+#include "Shared/Core/Utils/Logging.h"
+
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <string>
+
+#include "Shared/Core/Utils/Strings.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <intrin.h>
+#include "ThirdParty/detours/src/detours.h"
+#endif
+
+namespace
+{
+#if defined(_WIN32) && defined(_M_X64)
+
+    // Version 1.03 Calibrations 2.02 (docs/DS2_SEAMLESS_COOP_TASKS.md, M8).
+    //
+    //   +0x25f690  FUN_14025f690(session): FUN_14025ed80 - 1 < 2
+    //   +0x1cb9d9  the return address of its call in FUN_1401cb950 (the rest),
+    //              followed by `test al,al ; jne` to message 0x453
+    //   +0x199c2e  the return address of its call in FUN_140199a70 (the menu
+    //              queue, state 10), followed by `test al,al ; je` past the
+    //              cancel
+    //   +0x17ee9d  FUN_14017ed90, rest job state 2: `je +0x17eeb8` after
+    //              FUN_14025ea40; taken always, the menu is not cancelled
+    constexpr size_t kSessionUpOffset = 0x25f690;
+    constexpr uint8_t kSessionUpPrologue[] = { 0x48, 0x83, 0xec, 0x28, 0xe8, 0xe7, 0xf6, 0xff, 0xff, 0xff, 0xc8, 0x83, 0xf8, 0x01 };
+    constexpr size_t kRestReturn = 0x1cb9d9;
+    constexpr uint8_t kRestAfter[] = { 0x84, 0xc0, 0x75, 0x28 };
+    constexpr size_t kQueueReturn = 0x199c2e;
+    constexpr uint8_t kQueueAfter[] = { 0x84, 0xc0, 0x74, 0x08 };
+    constexpr size_t kJobBranch = 0x17ee9d;
+    constexpr uint8_t kJobExpected[] = { 0x74, 0x19 };
+    constexpr uint8_t kJobPatch[] = { 0xeb, 0x19 };
+
+    // The rest, host side (measured 15/09, docs/DS2_SEAMLESS_COOP_TASKS.md M8):
+    //
+    //   +0x17dc40  FUN_14017dc40(EventBonfireManager, bonfire id): starts the
+    //              rest, returns 1 when it did (state 0 -> 1)
+    //   +0x17fd70  FUN_14017fd70(): the world reset of a rest, run on state
+    //              1 -> 2; enemy generators (FUN_140417210), map objects
+    //              (FUN_1403c27f0) and the event manager (FUN_14044f880). Takes
+    //              nothing, reads the globals.
+    //
+    // Measured without this: an enemy killed in the host's world came back on
+    // the host when it rested and stayed dead on the guest.
+    constexpr size_t kRestStartOffset = 0x17dc40;
+    constexpr uint8_t kRestStartPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x83, 0x79, 0x38, 0x00, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kWorldResetOffset = 0x17fd70;
+    constexpr uint8_t kWorldResetPrologue[] = { 0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x05, 0x75, 0x4b, 0x49, 0x01, 0x48, 0x8b, 0x48, 0x40 };
+
+    // A message box with text of our own, the way FUN_1402d6540 shows the
+    // network errors: FUN_1404fe2a0(*(ctx+0x22e0), text, title, 1, 1), the
+    // title from FUN_140503620(0, 0xcc).
+    constexpr size_t kDialogOffset = 0x4fe2a0;
+    constexpr uint8_t kDialogPrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0xb0, 0x00, 0x00, 0x00, 0x0f, 0xb6, 0x84, 0x24, 0xe0 };
+    constexpr size_t kTextOffset = 0x503620;
+    constexpr uint8_t kTextPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x56 };
+    constexpr size_t kFrontEnd = 0x22e0;
+    constexpr int kTitleCategory = 0;
+    constexpr int kTitleId = 0xcc;
+    constexpr const wchar_t* kTravelDeclined = L"Travel canceled: a player declined.";
+    constexpr const wchar_t* kTravelNoAnswer = L"Travel canceled: not every player answered.";
+    constexpr const wchar_t* kTravelBusy = L"Travel canceled: another travel vote is running.";
+
+    // Names for the travel question, from the game's own text: bonfires in
+    // category 0x12 by bonfire id (FUN_1400d5800, the travel list), areas in
+    // category 5 by area id (FUN_14002f630), the area id being the map's
+    // first two numbers: 0x0a1f0000 (m10_31) is 10310000, read from the travel
+    // list's own entries on 15/09.
+    constexpr int kBonfireNames = 0x12;
+    constexpr int kAreaNames = 5;
+
+    // The bonfire table, EventBonfireManager = *(*(ctx+0x70)+0x58):
+    //   FUN_14017c110(&index, id) + FUN_14017c230(&index, &map): a bonfire's map
+    //   FUN_14017e6f0(manager, id): lit in the world the player stands in
+    //   *(manager+8) the loaded MapObjBonfireComponents, next at +0x60, entity at +0x08
+    constexpr size_t kBonfireIndexOffset = 0x17c110;
+    constexpr uint8_t kBonfireIndexPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x8b, 0x05, 0xd4, 0x87, 0x49, 0x01, 0x48, 0x8b, 0xd9 };
+    constexpr size_t kBonfireMapOffset = 0x17c230;
+    constexpr uint8_t kBonfireMapPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x05, 0xb3, 0x86, 0x49, 0x01, 0x48, 0x8b, 0xda };
+    constexpr size_t kBonfireLitOffset = 0x17e6f0;
+    constexpr uint8_t kBonfireLitPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0xc2, 0x0a, 0x00, 0x00 };
+    // The bonfire table itself: a pointer at +0x20, the count at +0x28, one
+    // entry every 0x18 bytes with the id first (ushort) and one lit byte per
+    // world after it; the world to read is the manager's own +0x44 (0 at
+    // home, 1 in someone else's world). Measured 15/09 with the two games
+    // side by side: the guest's column had only the bonfires of the map it
+    // had loaded in the host's world, which is why its travel list was short.
+    constexpr size_t kBonfireTable = 0x20;
+    constexpr size_t kBonfireCount = 0x28;
+    constexpr size_t kBonfireColumn = 0x44;
+    constexpr size_t kBonfireEntry = 0x18;
+    constexpr size_t kBonfireLitByte = 0x02;
+    constexpr ULONGLONG kLitEveryMs = 1000;
+
+    // The bonfire menu's own cancel, the one the game uses to close it when a
+    // session comes up mid-rest: FUN_1401994e0(*(*(ctx+0x70)+0x50)), which
+    // needs the menu queue in state 10 and leaves the job to stand the
+    // character up. Measured 15/09 live: the travel list closed in under a
+    // second and the session stayed verified.
+    constexpr size_t kMenuCancelOffset = 0x1994e0;
+    constexpr uint8_t kMenuCancelPrologue[] = { 0x48, 0x8b, 0x05, 0x09, 0xb4, 0x47, 0x01, 0x48, 0x83, 0xb8, 0xe0, 0x22, 0x00, 0x00, 0x00 };
+    // Time for the character to stand up before it is taken anywhere.
+    constexpr ULONGLONG kStandUpMs = 2000;
+
+    // The curtain the game's own travel puts up while it loads, FUN_140483250:
+    // `ctx+0x1178` (which stops the action prompts and the death timer),
+    // FUN_140b06270(*(0x1416751f8)+0x80, 1) (the world's drawing off), the
+    // HUD hidden (FUN_1404ffef0(frontend, 0xffdffbff), slot +0x40 of every
+    // HUD group) and the loading screen itself opened (FUN_1405014b0: event
+    // 0x67 to the front-end object 0x4c5c574, the black screen with the area's
+    // name). FUN_140482d50 takes it down in the reverse order: FUN_1404ffde0
+    // (frontend, mask) shows the HUD, FUN_1404ff310 sends the loading screen
+    // 0x65, FUN_1404fe920 drops the count. With only the first two (15/09)
+    // the guest saw the sky's clear colour, the map's pieces coming in and
+    // the whole HUD (screenshots of 16/09); the loading screen is what makes
+    // it black.
+    constexpr size_t kCurtainOffset = 0xb06270;
+    constexpr uint8_t kCurtainPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x08, 0x00 };
+    constexpr size_t kRenderGlobal = 0x16751f8;
+    constexpr size_t kRenderSwitch = 0x80;
+    constexpr size_t kLoadingFlag = 0x1178;
+    constexpr size_t kLoadingOpenOffset = 0x5014b0;
+    constexpr uint8_t kLoadingOpenPrologue[] = { 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x0f, 0x85, 0x10, 0x13, 0xb5, 0xff };
+    constexpr size_t kLoadingCloseOffset = 0x4ff310;
+    constexpr uint8_t kLoadingClosePrologue[] = { 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x0f, 0x85, 0xf0, 0x2d, 0xb5, 0xff };
+    constexpr size_t kHudHideOffset = 0x4ffef0;
+    constexpr uint8_t kHudHidePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20 };
+    constexpr size_t kHudShowOffset = 0x4ffde0;
+    constexpr uint8_t kHudShowPrologue[] = { 0x48, 0x89, 0x6c, 0x24, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x20, 0x80, 0xb9, 0x0f, 0x03, 0x00, 0x00, 0x00 };
+    constexpr size_t kHudDropOffset = 0x4fe920;
+    constexpr uint8_t kHudDropPrologue[] = { 0x80, 0xb9, 0x0f, 0x03, 0x00, 0x00, 0x00, 0x75, 0x12, 0x8b, 0x81, 0x1c, 0x03, 0x00, 0x00 };
+    constexpr uint32_t kHudMask = 0xffdffbff;
+    // The fade to black the game's own warp starts before anything else
+    // (FUN_1401c2a80 -> FUN_14039a510(ctx, seconds, 1), FUN_140b24000 on the
+    // fade object at ctx+0x1160: {alpha +0, target +4, remaining +8}). Its
+    // loader waits for the fade to finish, and four frames more, before it
+    // raises the curtain above (FUN_140481900 state 2). Without it, measured
+    // 19/09 on both players, the curtain was only letterbox bars: the world
+    // kept drawing and the camera flew across the map to the bonfire. With
+    // flag 1 the black quad is drawn over the front end, so the loading
+    // screen's own art stays under it; black is what matters here.
+    constexpr size_t kFadeOutOffset = 0x39a510;
+    constexpr size_t kFadeInOffset = 0x39a4d0;
+    constexpr uint8_t kFadePrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x89, 0x60, 0x11, 0x00, 0x00 };
+    constexpr size_t kFadeObject = 0x1160;
+    constexpr float kFadeSeconds = 0.3f;
+    // Nobody moves before the screen is black, but never wait on it longer.
+    constexpr ULONGLONG kFadeWaitMs = 1500;
+    // Four frames of black before moving, as the game's loader waits.
+    constexpr ULONGLONG kFadeBlackMs = 70;
+    // Never leave the screen black: the curtain comes down anyway after this.
+    // Longer than the travel's own give-up (1800 frames, 30 s at 60 fps), so
+    // a slow load never teleports the character in plain view.
+    constexpr ULONGLONG kCurtainGiveUpMs = 40000;
+    // A moment more after arriving, so the map left behind goes away behind it.
+    constexpr ULONGLONG kCurtainHoldMs = 1200;
+    // The game's own "the world is in", what its load machine waits for
+    // before taking its curtain down (FUN_140481900, states 4 and 0xd):
+    // FUN_1403bcfe0(*(ctx+0x38)) says every map owner has settled and
+    // nothing is queued, and FUN_140b04ca0(*(render+0x80)) says the drawing
+    // still has work. Measured 17/09 on every host travel of the day: our
+    // curtain came down 2.2 s after `ir` - 1.2 s after the physics contact -
+    // with the far pillars of Heide still streaming in behind the player.
+    // So after arriving the curtain also waits for these two, for at most
+    // this long: a transport that leaves an owner unsettled would otherwise
+    // turn every travel into a 25 s black screen.
+    constexpr size_t kWorldLoadedOffset = 0x3bcfe0;
+    constexpr uint8_t kWorldLoadedPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x08, 0x32, 0xc0, 0x48 };
+    constexpr size_t kRenderBusyOffset = 0xb04ca0;
+    constexpr uint8_t kRenderBusyPrologue[] = { 0x48, 0x83, 0xec, 0x28, 0x80, 0x79, 0x08, 0x00, 0x75, 0x07, 0x32, 0xc0, 0x48, 0x83, 0xc4, 0x28 };
+    constexpr size_t kWorldManager = 0x38;
+    constexpr ULONGLONG kWorldSettleGiveUpMs = 10000;
+
+    constexpr size_t kBonfireManager = 0x58;
+    constexpr size_t kBonfireList = 0x08;
+    constexpr size_t kBonfireNext = 0x60;
+    constexpr size_t kComponentEntity = 0x08;
+    constexpr size_t kEntityPosition = 0x70;
+
+    // The guest's own travel, which cannot go through the bonfire chain.
+    //
+    // Every warp goes through FUN_1401c2a80(ctx, pedido, flag), slot +0x40 of
+    // the context's vftable. The third argument is what decides whose world
+    // the player lands in: the entry folds it into `ctx+0x24b1 & 0x20`, and at
+    // loader state 0x12 that becomes the `0x40` bit, which is "I am a phantom
+    // in somebody else's world". The bonfire chain always passes 0, so a guest
+    // travelling by the menu goes home - which is what attempt 4 of the old
+    // work saw and never explained.
+    //
+    // So the guest builds the same request the host builds (motive 2, by
+    // FUN_1401843b0) and calls the warp itself with flag 1. The motive gate
+    // lets motive 2 through whenever the multiplay counter is positive, which
+    // it is inside a session.
+    //
+    // What this does **not** do is rebuild the snapshot of the host's world
+    // (flags, bonfires, objects), which only the join handler at session state
+    // 4 writes. Whether the guest needs it again after a warp inside the same
+    // session is not known and is what the test says.
+    constexpr size_t kWarpSlot = 0x40;
+    constexpr uint32_t kWatchNativeMs = 180000;   // the crash came four minutes out
+    // The loader saying "idle" with a character in place is not the same as a
+    // world that has settled. Measured 17/09 on the guest, twice: it died 14 ms
+    // and 21 ms after the silence was lifted, both times in the frame right
+    // after. So the net stays quiet for a moment longer, and the moment is
+    // generous on purpose - two seconds of a loading screen costs nothing and
+    // the alternative costs the session.
+    constexpr ULONGLONG kSettleMs = 2000;
+
+    // The registry of remote presences - the copies of the other players in
+    // this world - read in Ghidra and written down in
+    // DS2_PRESENCE_REBUILD_PLAN.md, whose thirteen prologues were checked
+    // against the executable twice.
+    //
+    //   R = *(*0x141616cf8 + 0x20), 0x2500 bytes
+    //   R+0x08                 how many active entries are alive
+    //   R+0x174                this player's net id
+    //   R+0x1a8 .. +0x5b8      five active entries of 0xd0 bytes
+    //
+    // An active entry E: +0x40 the copy's PlayerCtrl, +0x48 the state (0 free,
+    // 2 alive, 3 leaving), +0x4c the role, +0x6a the net id, +0x8c the name.
+    //
+    // FUN_14051c820(E) takes one presence out: it starts a half-second fade
+    // and writes state 3. It touches no session and sends nothing to the
+    // server - which is the whole reason it is interesting, and the premise
+    // this file is here to test rather than assume.
+    //
+    // Why it matters now, measured 16/09: with a guest's presence alive, the
+    // host's native travel killed the host 3.7 s in, at +0x5180a8, reading
+    // `*(obj+0x60)` and getting two floats where a pointer belongs - with the
+    // whole stack inside this same 0x51xxxx region. The same travel to the
+    // same bonfire with no presence in the world arrived clean. So the
+    // question is exactly: does taking the presences out **first** make that
+    // crash go away?
+    constexpr size_t kPresenceRootGlobal = 0x1616cf8;
+    constexpr size_t kPresenceRegistry = 0x20;
+    constexpr size_t kPresenceAliveCount = 0x08;
+    constexpr size_t kPresenceOwnNetId = 0x174;
+    constexpr size_t kPresenceFirstEntry = 0x1a8;
+    constexpr size_t kPresenceEntryStride = 0xd0;
+    constexpr int kPresenceEntries = 5;
+    constexpr size_t kEntryPlayerCtrl = 0x40;
+    constexpr size_t kEntryState = 0x48;
+    constexpr size_t kEntryRole = 0x4c;
+    constexpr size_t kEntryNetId = 0x6a;
+    constexpr size_t kEntryName = 0x8c;
+    constexpr uint32_t kEntryAlive = 2;
+    // Putting a presence back. FUN_14051b0e0(R, membro, blob, flag) finds a
+    // free pending slot from R+0x5c0 stepping 0x640, copies the member into
+    // it, copies the 0x5f0-byte player blob to slot+0x40 and writes the flag
+    // at slot+0x630; the registry's own tick then materialises it.
+    //
+    // The blob and the member are taken at the one moment the game itself has
+    // them - the ingress of that same function, when the guest joins - and
+    // kept. The member is kept as the **pointer** the game passed, not as a
+    // copy of its bytes: the copy is what the plan warns against, and the
+    // session outlives the travel, so the list it lives in should too. If that
+    // turns out to be wrong it will show as a failed recreate, not as damage.
+    // The session's live member list, which is where the `membro` has to
+    // come from.
+    //
+    // Measured 17/09: the net object `*(0x141616cf8)` holds six records of
+    // 0x48 bytes starting at `+0xb8`, with a validity mark at `+0x40`. In a
+    // two-player session there were exactly two valid ones. The first 0x40
+    // bytes are the member - the size `FUN_140a3dbd0` copies into the slot.
+    //
+    // Keeping the pointer the game passed on the way in does not work, and
+    // that is now measured rather than assumed: the guest kept
+    // `0x7FFFFE5C1B80` while the live list carried `0x7ffffe430600` and
+    // `0x7ffffe622280`. On the host the shortcut worked by luck; on the guest
+    // the recreate was accepted, the slot was consumed and none of the five
+    // entries was born.
+    constexpr size_t kNetMembers = 0xb8;
+    constexpr size_t kNetMemberStride = 0x48;
+    constexpr size_t kNetMemberValid = 0x40;
+    constexpr int kNetMemberSlots = 6;
+
+    constexpr size_t kPresenceRegisterOffset = 0x51b0e0;
+    constexpr uint8_t kPresenceRegisterPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18 };
+    constexpr size_t kPlayerBlob = 0x5f0;
+
+    constexpr size_t kPresenceRemoveOffset = 0x51c820;
+    constexpr uint8_t kPresenceRemovePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x41, 0x48, 0x48, 0x8b, 0xd9 };
+
+    // The host's world, again, for a guest that has just reloaded its map.
+    //
+    // A guest's join brings the host's world in **one** message (type 0xc,
+    // some 33 KB): the host's controller exports it in its state 0xd
+    // (FUN_1402bf8f0 - flags, event values, lit bonfires, map object states,
+    // dead enemies, the map's event script states, the member records) and
+    // the guest's controller imports it in join state 4 (FUN_1402c2fa0, slot
+    // 10 of its vftable), see docs/DS2_WORLD_STATE.md. The phantom warp
+    // rebuilds the map from the guest's own save and none of that comes
+    // again: measured 17/09 in Heide, after the warp the guest had **zero**
+    // event flags in every category, its map scripts evaluated nothing (the
+    // esd spy saw 0 queries in 4 s where the host saw 4 a frame) and the
+    // bonfire never offered "Rest" - the symptom the user reported.
+    //
+    // So the host is asked to export once more, from its own tick, and the
+    // import is let through with the guest's controller put in state 4 for
+    // the length of the call and back to 7 right after: the import ends in
+    // state 5 (presences from the records) and 6 (the "I am in" handshake
+    // with the host), and the host's controller is long past both. Left
+    // alone, FUN_1402c2fa0 in any state but 4 writes ctrl+0x120 = 1, which
+    // ends the session on the next frame.
+    //
+    // The import files the map sections under ctrl+0x19c, which still names
+    // the map of the original join (0a040000 read while standing in Heide),
+    // so it is pointed at the map this machine stands in first - the same
+    // place the host's export reads it from, `*(R+0x5b8)+0xc`.
+    constexpr size_t kSnapshotExportOffset = 0x2bf8f0;
+    constexpr uint8_t kSnapshotExportPrologue[] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x48, 0x8d, 0xac, 0x24, 0xb0, 0x76, 0xff, 0xff, 0xb8, 0x50 };
+    constexpr size_t kSnapshotImportOffset = 0x2c2fa0;
+    constexpr uint8_t kSnapshotImportPrologue[] = { 0x40, 0x55, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24, 0xf1, 0x48 };
+    constexpr size_t kAcceptCtrlVftable = 0x10d7998;
+    constexpr size_t kAcceptState = 0x150;
+    constexpr int32_t kAcceptPlaying = 0x10;
+    constexpr int32_t kAcceptExported = 0xe;
+    constexpr size_t kJoinMap = 0x19c;
+    // The way home, and the reason step 7 of M8 6b says four bytes and never
+    // eight. Read on a live guest on 20/09, summoned into 0a130000 from
+    // Majula:
+    //
+    //     +0x19c = 0a130000          the session's map
+    //     +0x1a0 = 0a040000          the map to go back to
+    //     +0x1a4 = 41286bac  10.526  the position to go back to
+    //     +0x1a8 = 40bd8f2b   5.924
+    //     +0x1ac = c1820962 -16.255
+    //
+    // - which is Majula's bonfire spawn to three decimals. So the way home is
+    // a sixteen-byte block, not one field: eight bytes at +0x19c would send
+    // the guest home to the map being freed, and more would drop him at the
+    // session map's coordinates in whatever map he landed in.
+    constexpr size_t kJoinHome = 0x1a0;
+    constexpr size_t kJoinHomeBytes = 16;
+    constexpr int32_t kJoinImporting = 4;
+    constexpr int32_t kJoinPresences = 5;
+    constexpr size_t kPresenceArea = 0x5b8;
+    constexpr size_t kAreaMap = 0xc;
+    constexpr ULONGLONG kSnapshotWaitMs = 30000;
+
+    // The net layer's per-frame sync of the map's characters, and the thing
+    // that killed the host on every native travel with a session live.
+    //
+    // FUN_140514020 is the net tick and it walks the slots of the global
+    // 0x141616cf8: slot 0x20 is the presence registry (FUN_14051c940), slot
+    // **0x28** is this one (FUN_1405170e0). Measured live 16/09 with a session
+    // up: it carries the **current map id** at +0x18, a state at +0x08, a
+    // count at +0x0c and an array of 0x18-byte records at +0x10 - thirty of
+    // them, each with a tag at +0x00, flags at +0x0a, a float that accumulates
+    // the frame delta at +0x04, and a pointer to a character at +0x10. The
+    // characters sat in one contiguous run, 0xa0 apart.
+    //
+    // FUN_1405170e0 only reaches the crashing work when the state is 1 or 2;
+    // at 0 it takes the branch that rebuilds instead. FUN_140518230 then walks
+    // the records, and for a tag of 0x7f00 with bit 1 of the flags clear it
+    // calls FUN_1405180a0 on the character, which reads `chr+0x60` and then
+    // `+0x18` of that to index the role table at 0x1410c0050.
+    //
+    // The two host crashes were records 11 and 24 of that array, both tagged
+    // 0x7f00 with flags 0x11 - exactly the ones that reach the lookup. The
+    // warp destroys the map's characters and nothing clears the list, so the
+    // next frame walks it and reads floats where a pointer belongs.
+    //
+    // So the state is put back to 0 for the travel. It is one int, it is the
+    // game's own idle state, and the list is per-map anyway: the map id at
+    // +0x18 says this thing is rebuilt when a map loads.
+    // The one place the whole net layer is walked from.
+    //
+    // FUN_140514020(objeto, delta) is the net tick: it reads the global
+    // 0x141616cf8 and calls every subsystem hanging off it - the presence
+    // registry at slot 0x20, the character sync at 0x28, and the rest. Every
+    // list that killed the host today is walked from under it.
+    //
+    // Three consumers were patched one at a time on 16/09 and the crash simply
+    // moved: the pre-draw guard, the entity component lists, the character
+    // sync. The warp tears the world down assuming nothing else points at it,
+    // and a live session points at it through several structures at once.
+    // There is no single list to fix - but there **is** a single place that
+    // walks them all, and that is this one.
+    //
+    // So instead of mending lists, the tick is skipped while there is no world
+    // to walk: armed just before the travel, dropped as soon as the loader is
+    // idle again with a character in place. Nothing in the net layer runs
+    // while the world does not exist.
+    //
+    // It also stops the two watchdogs for the duration, since they are ticked
+    // from this same tree - which is a side effect in our favour, and one to
+    // watch: a peer that hears nothing for about 23 s drops the session
+    // (measured, attempt 9). A load is 10 to 20 s, so it fits, and the server
+    // log is what says whether it fitted.
+    constexpr size_t kNetTickOffset = 0x514020;
+    constexpr uint8_t kNetTickPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0x05, 0xcb, 0x2c, 0x10, 0x01 };
+    constexpr size_t kLoaderState = 0x24ac;     // 0x1e when the loader is idle
+    constexpr uint8_t kLoaderIdle = 0x1e;
+    constexpr ULONGLONG kQuietCapMs = 60000;    // never silence the net for longer
+
+    constexpr size_t kNetSyncSlot = 0x28;
+    constexpr size_t kSyncState = 0x08;
+    constexpr size_t kSyncCount = 0x0c;
+    constexpr size_t kSyncRecords = 0x10;
+    // The map the object sync is bound to. It IS the id FUN_1405177c0 reads at
+    // +0x517843 (its param_1 is this object, handed over by FUN_140518920); an
+    // earlier note here said otherwise and was wrong. Rewriting it by hand does
+    // not stick, because every rebuild (FUN_140517880) writes it again from the
+    // session's own idea of the current map, which on a guest stays the map the
+    // session began in. See DS2_BonfireInSession_ForgetSyncedMap.
+    constexpr size_t kSyncMap = 0x18;
+    // A byte: on a guest, FUN_1405170e0 rebuilds the sync in state 0 only while
+    // this is set.
+    constexpr size_t kSyncGuestGate = 0x198;
+
+    // A travel the game itself starts, the way FUN_14017fdb0 does once a
+    // bonfire is picked: FUN_1401843b0(&request, id, 2) builds it,
+    // FUN_140184830(*(*(ctx+0x70)+0x70), &request) starts it, and
+    // FUN_14044fe30(*(ctx+0x70), {map, 0, spawn}) makes it the respawn point.
+    constexpr size_t kTravelBuildOffset = 0x1843b0;
+    constexpr uint8_t kTravelBuildPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x60 };
+    constexpr size_t kTravelStartOffset = 0x184830;
+    constexpr uint8_t kTravelStartPrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x60, 0x8b, 0x02, 0x48, 0x8b, 0xd9, 0x89, 0x01 };
+    constexpr size_t kRecordSetOffset = 0x44fe30;
+    constexpr uint8_t kRecordSetPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x60, 0x83, 0x7a, 0x04, 0x01 };
+    constexpr size_t kTravelObject = 0x70;
+    constexpr size_t kTravelBonfireOffset = 0xd4eb0;   // FUN_1400d4eb0(list): the bonfire id under the cursor
+    constexpr uint8_t kTravelBonfirePrologue[] = { 0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0x82, 0xd2, 0xf4, 0xff };
+
+    // A guest never gets "Rest at bonfire": an event script asks query 130602
+    // (FUN_140513440, "in a session as a guest") and stops there - measured
+    // 15/09 with the esd spy, the guest's script evaluated nothing else. The
+    // script is a plain EventEzStateCtrl evaluated by FUN_14045c6a0, with no
+    // pointer to the bonfire in it, so the answer is "no" when the local
+    // player is a white phantom standing within 3 m of a loaded bonfire.
+    constexpr size_t kInnerScriptOffset = 0x45c6a0;
+    constexpr uint8_t kInnerScriptPrologue[] = { 0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xac, 0x24 };
+    constexpr int32_t kQueryIsGuest = 130602;
+    constexpr size_t kCharacterPosition = 0x90;
+    constexpr float kNearBonfire = 3.0f;
+
+    // The prompt itself is refused in FUN_140453ce0, the event action entries:
+    // an entry of type 13 or 14 is dropped while the context says the player
+    // is in someone else's world (ctx vftable +0x58, FUN_1405135f0), before
+    // the distance is even checked. Type 14 is "Rest at bonfire": the guest's
+    // entry at a lit bonfire was 0x0e, and with the gate's `jne` gone that
+    // entry became the prompt, the guest sat and healed 400 -> 914 (15/09).
+    // Type 13 is left behind the gate (most likely lighting an unlit bonfire,
+    // not measured): `sub eax,0xd ; cmp eax,1 ; ja` becomes `cmp eax,0`, so
+    // only 13 reaches the gate. Patched only while the local player is a
+    // white phantom, so an invader still gets nothing.
+    //
+    //   +0x453db0  mov eax,[rbx+0x8c] ; sub eax,0xd ; cmp eax,<1> ; ja +0x453dde
+    //   +0x453dd1  call FUN_1405135f0 ; test al,al ; jne +0x45401c
+    constexpr size_t kPromptGate = 0x453dbb;
+    constexpr uint8_t kPromptGateExpected[] = { 0x01 };
+    constexpr uint8_t kPromptGatePatch[] = { 0x00 };
+    constexpr size_t kPromptGateBeforeAt = 0x453db0;
+    constexpr uint8_t kPromptGateBefore[] = { 0x8b, 0x83, 0x8c, 0x00, 0x00, 0x00, 0x83, 0xe8, 0x0d, 0x83, 0xf8 };
+    constexpr size_t kPromptGateAfterAt = 0x453dbc;
+    constexpr uint8_t kPromptGateAfter[] = { 0x77, 0x20 };
+    constexpr size_t kPromptGateCallAt = 0x453dd1;
+    constexpr uint8_t kPromptGateCall[] = { 0xe8, 0x1a, 0xf8, 0x0b, 0x00, 0x84, 0xc0, 0x0f, 0x85, 0x3e, 0x02, 0x00, 0x00 };
+
+    // A Yes/No box the way FeSubStateCommonWindow opens one (FUN_140104db0):
+    // FUN_1404fe1c0(frontend, text, yes, no, 1, 1, 1, 1) returns its number
+    // (+0x324); FUN_140500440(frontend, n) says it closed, FUN_1404ff940
+    // (frontend, n) which button (2 and 5 are the second, "No"), and
+    // FUN_1404ff2e0 / FUN_1404fe960 (frontend, n) put it away.
+    //
+    // **The second argument is a guard, and passing 0 disarms it.** All four
+    // of these read `param_2 < 1 || *(frontend+0x324) == param_2`, so a zero
+    // means "whatever box is up right now", and the release then lands on a
+    // box that may already be gone - the player's own OK press tears it down
+    // - or on somebody else's. This file passed 0 everywhere until 17/09,
+    // and it is the only thing the travel vote does that the plain `ir`
+    // travel does not: six legs by `ir` ran clean while two of two by the
+    // vote closed both games, with the crashes scattered over worker threads
+    // and freed addresses, which is what a double release looks like.
+    constexpr size_t kChoiceOffset = 0x4fe1c0;
+    constexpr uint8_t kChoicePrologue[] = { 0x40, 0x53, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00, 0x0f, 0xb6, 0x84, 0x24, 0x08, 0x01 };
+    constexpr size_t kClosedOffset = 0x500440;
+    constexpr size_t kButtonOffset = 0x4ff940;
+    constexpr uint8_t kByNumberPrologue[] = { 0x48, 0x8b, 0x81, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x14, 0x85, 0xd2, 0x7e, 0x08 };
+    constexpr size_t kCloseOffset = 0x4ff2e0;
+    constexpr size_t kReleaseOffset = 0x4fe960;
+    constexpr uint8_t kCloseByNumberPrologue[] = { 0x48, 0x8b, 0xc1, 0x48, 0x8b, 0x89, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x11, 0x85, 0xd2 };
+    constexpr size_t kDialogNumber = 0x324;
+    constexpr int kYesText = 100;
+    constexpr int kNoText = 0x65;
+    constexpr ULONGLONG kVoteTimeoutMs = 30000;
+    // Picking a bonfire in the travel list: FeGroupTestBonfireTransitionList
+    // (vftable 0x1410ba868) slot +0x80, FUN_1400d5170(list). It writes the
+    // destination into the bonfire job (+0x68, mark +0x67), and from there the
+    // character plays the travel animation, the load starts and the warp is
+    // asked for - a road whose only way out is the load: holding the warp, and
+    // then the travel's phase 1 (FUN_140184a10), both left the host frozen in
+    // the travel pose (15/09). So the vote happens before the pick is let
+    // through, with the list still open.
+    constexpr size_t kPickOffset = 0xd5170;
+    constexpr uint8_t kPickPrologue[] = { 0x40, 0x56, 0x48, 0x83, 0xec, 0x60, 0x48, 0x8b, 0x05, 0xd3, 0xca, 0x50, 0x01 };
+    constexpr size_t kTravelListVftable = 0x10ba868;
+    constexpr size_t kPickSlot = 0x80;
+    constexpr size_t kEventManager = 0x70;
+    constexpr size_t kQueueState = 0x54;
+    constexpr int32_t kQueueBonfireMenu = 10;
+    constexpr size_t kMenuQueue = 0x50;
+    constexpr ULONGLONG kLeaveSettleMs = 1500;
+    constexpr ULONGLONG kLeaveGiveUpMs = 20000;
+    constexpr const wchar_t* kTravelStuck = L"Travel canceled: a player could not leave the session.";
+
+    // The guest's session, NetSummonJoinMultiplayCtrl (vftable 0x1410d7bd8),
+    // playing in state 7 (+0xf8). A nonzero +0x120 makes its state-7 handler
+    // (FUN_1402c3830) end the session with reason 3 on the next frame: the
+    // same end the guest got when a host travelled on 15/09 (from +0x2c385c),
+    // armed 1 -> 0 with the penalty points unchanged.
+    constexpr size_t kJoinCtrlVftable = 0x10d7bd8;
+    constexpr size_t kJoinState = 0xf8;
+    constexpr int32_t kJoinPlaying = 7;
+    constexpr size_t kJoinLeave = 0x120;
+
+    // The local character's role: *(*0x1416148f0 + 0xd0) -> +0xb0 -> +0x3c.
+    constexpr size_t kGameGlobal = 0x16148f0;
+    constexpr size_t kLocalCharacter = 0xd0;
+    constexpr size_t kRoles = 0xb0;
+    constexpr size_t kRole = 0x3c;
+    constexpr uint8_t kRoleOwner = 0;
+    constexpr uint8_t kRoleWhitePhantom = 1;
+
+    // Why a travel vote ended without travelling, as TravelCanceled carries it.
+    enum class Cancel : uint32_t
+    {
+        Declined = 1,
+        NoAnswer = 2,
+        NotLit = 3,
+        Busy = 4,
+        Stuck = 5,
+        NoRoom = 6,
+    };
+
+    using SessionUp_p = uint64_t(*)(void* Session);
+    SessionUp_p s_original = nullptr;
+    using RestStart_p = uint64_t(*)(void* Manager, int32_t Bonfire);
+    RestStart_p s_original_rest = nullptr;
+    using WorldReset_p = void(*)();
+    WorldReset_p s_original_reset = nullptr;
+    using Dialog_p = uint32_t(*)(void* FrontEnd, const wchar_t* Text, const wchar_t* Title, uint8_t A, uint8_t B);
+    Dialog_p s_dialog = nullptr;
+    using Text_p = const wchar_t*(*)(int Category, int Id);
+    Text_p s_text = nullptr;
+    bool s_replaying = false;   // game thread only
+    using Choice_p = int32_t(*)(void* FrontEnd, const wchar_t* Text, const wchar_t* Yes, const wchar_t* No, uint8_t A, uint8_t B, uint8_t C, uint8_t D);
+    using ByNumber_p = uint64_t(*)(void* FrontEnd, int32_t Number);
+    using CloseByNumber_p = void(*)(void* FrontEnd, int32_t Number);
+    Choice_p s_choice = nullptr;
+    ByNumber_p s_closed = nullptr;
+    ByNumber_p s_button = nullptr;
+    CloseByNumber_p s_close = nullptr;
+    CloseByNumber_p s_release = nullptr;
+    bool s_votes_ready = false;
+    using Pick_p = void(*)(void* List);
+    Pick_p s_original_pick = nullptr;
+    using BonfireIndex_p = uint32_t*(*)(uint32_t* Out, uint16_t Id);
+    using BonfireMap_p = uint32_t*(*)(uint32_t* Index, uint32_t* Out);
+    using BonfireLit_p = uint8_t(*)(void* Manager, uint32_t Id);
+    using NetTick_p = void(*)(void* Object, float Delta);
+    using Warp_p = char(*)(void* Context, void* Request, uint32_t Flag);
+    using PresenceRegister_p = uint64_t(*)(void* Registry, void* Member, void* Blob, uint8_t Flag);
+    using PresenceRemove_p = void(*)(void* Entry);
+    using TravelBuild_p = void*(*)(uint8_t* Request, uint16_t Id, uint32_t Reason);
+    using TravelStart_p = void(*)(void* Travel, uint8_t* Request);
+    using RecordSet_p = void(*)(void* Record, int32_t* Fields);
+    using TravelBonfire_p = uint16_t(*)(void* List);
+    using MenuCancel_p = void(*)(void* Queue);
+    using Curtain_p = void(*)(void* Switch, char On);
+    using FrontEndOnly_p = void(*)(void* FrontEnd);
+    using FrontEndMask_p = void(*)(void* FrontEnd, uint32_t Mask);
+    FrontEndOnly_p s_loading_open = nullptr;
+    using Fade_p = void(*)(void* Context, float Seconds, int OnTop);
+    Fade_p s_fade_out = nullptr;
+    Fade_p s_fade_in = nullptr;
+    ULONGLONG s_black_since = 0;
+    // A guest that said yes goes black at once instead of when the host has
+    // arrived: before, for 0.5 to 1.8 s it watched the host's copy vanish
+    // with its HUD on. Cleared when its own travel starts, or on a cancel.
+    bool s_curtain_for_vote = false;
+    FrontEndOnly_p s_loading_close = nullptr;
+    FrontEndMask_p s_hud_hide = nullptr;
+    FrontEndMask_p s_hud_show = nullptr;
+    FrontEndOnly_p s_hud_drop = nullptr;
+    bool s_loading_screen = false;   // the loading screen is up, by us
+    using Script_p = uint64_t(*)(void* This, uint32_t* Out, void** Arguments, void* P4);
+    BonfireIndex_p s_bonfire_index = nullptr;
+    BonfireMap_p s_bonfire_map = nullptr;
+    BonfireLit_p s_bonfire_lit = nullptr;
+    NetTick_p s_original_net_tick = nullptr;
+    std::atomic<ULONGLONG> s_quiet_until{ 0 };
+
+    // The window cannot end on "the world is up", because the world is still
+    // up at the instant it is armed - the warp has not torn anything down
+    // yet. Measured 16/09: the window opened and closed three milliseconds
+    // later having skipped **zero** ticks, so the silence never happened and
+    // the run proved nothing about it. It ends on "the world went away and
+    // came back", which is two edges, not one.
+    std::atomic<bool> s_quiet_saw_teardown{ false };
+    std::atomic<ULONGLONG> s_quiet_up_at{ 0 };
+    std::atomic<uint64_t> s_quiet_skipped{ 0 };
+    std::atomic<uint64_t> s_quiet_windows{ 0 };
+    PresenceRegister_p s_original_register = nullptr;
+    // What the guest's join handed the game, kept for putting it back.
+    uint8_t s_blob[kPlayerBlob] = {};
+    void* s_member = nullptr;
+    uint8_t s_blob_flag = 0;
+    bool s_blob_known = false;
+    PresenceRemove_p s_presence_remove = nullptr;
+    using SnapshotExport_p = void(*)(void* Ctrl, float Delta);
+    // Eight arguments, not the seven the decompiler shows: the eighth is read
+    // at rbp+0x7f (+0x2c334c) into r8d, the count of 0xd0-byte records for
+    // FUN_1404434c0. Forwarding seven left garbage there and the first join
+    // through the detour killed the guest at +0x12d5a8 (17/09, 15:56).
+    using SnapshotImport_p = void(*)(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7, uint64_t Count);
+    SnapshotExport_p s_snapshot_export = nullptr;
+    SnapshotImport_p s_original_import = nullptr;
+    // Guest: an import is expected until then (0: none), and lets the
+    // controller through state 4. Host: export on the next frame.
+    std::atomic<ULONGLONG> s_reimport_until{ 0 };
+    std::atomic<bool> s_export_wanted{ false };
+    TravelBuild_p s_travel_build = nullptr;
+    TravelStart_p s_travel_start = nullptr;
+    RecordSet_p s_record_set = nullptr;
+    TravelBonfire_p s_travel_bonfire = nullptr;
+    MenuCancel_p s_menu_cancel = nullptr;
+    Curtain_p s_curtain = nullptr;
+    using WorldLoaded_p = uint8_t(*)(void* World);
+    using RenderBusy_p = uint8_t(*)(void* Switch);
+    WorldLoaded_p s_world_loaded = nullptr;
+    RenderBusy_p s_render_busy = nullptr;
+    ULONGLONG s_curtain_arrived_at = 0;   // when the travel said arrived; the world wait counts from here
+    bool s_curtain_settled_logged = false;
+    bool s_curtain_up = false;
+    ULONGLONG s_curtain_since = 0;
+    ULONGLONG s_curtain_down_at = 0;
+    Script_p s_original_inner_script = nullptr;
+    bool s_guest_rest_ready = false;
+    std::atomic<uint64_t> s_prompts_opened{ 0 };
+
+    // Host side, game thread only.
+    struct HeldTravel
+    {
+        bool Active = false;
+        bool Pass = false;
+        void* List = nullptr;          // the host's own list, when the host picked
+        uint64_t Proposer = 0;         // the guest who picked, otherwise
+        uint16_t Bonfire = 0;
+        uint32_t Map = 0;
+        bool HostAnswered = false;
+        bool HostYes = false;
+        uint32_t Vote = 0;
+        size_t Guests = 0;
+        ULONGLONG Since = 0;
+        bool Leaving = false;
+        ULONGLONG LeaveSince = 0;
+        ULONGLONG GuestsGone = 0;
+    };
+    HeldTravel s_travel;
+    uint32_t s_vote_counter = 0;
+
+    // The travel itself, once everyone agreed: each machine takes its own
+    // player to the bonfire without a warp, so nobody leaves the session.
+    struct Go
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        ULONGLONG At = 0;
+    };
+    Go s_go;
+    // The old transport's travel as the last tick saw it, so the end of one
+    // can be noticed: the net character sync has to be put back to idle right
+    // there, and only the warp paths were doing it.
+    bool s_was_moving = false;
+    // Travelling without leaving the session is on by default (16/09), and
+    // this time the number behind that says so.
+    //
+    // Every close that was left came from one place after all: the game's
+    // generic task runner, FUN_140354e80, where the CharacterManager does a
+    // character's post-physics work. DS2_TravelWatchHook now runs the work
+    // under __try and the completion always, so a character loses a frame of
+    // animation instead of everyone losing the session. Measured with two
+    // players, counting a leg only when **both** register standing on the
+    // destination map: **forty legs Heide<->Majula, no failed travel, no game
+    // closed, no penalty point spent**, with the host catching fifty-nine
+    // faults along the way and surviving all of them. The best before that was
+    // ten.
+    //
+    // `DS2_Bonfire.req` takes `junta desliga` to fall back to the old shape
+    // (the guests leave the session and the party puts them back).
+    bool s_together = true;
+    // The host travels first and calls the guests only once it is standing in
+    // the new map: both machines bringing a map in at the same instant closed
+    // both games twice (15/09), once inside the CharacterManager and once on
+    // the frame the old map was let go.
+    struct CallGuests
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        ULONGLONG Ready = 0;
+        ULONGLONG Since = 0;
+    };
+    CallGuests s_call;
+    // Long enough for a travel that first makes room (park, the map left
+    // taken down, up to 30 s) and then loads.
+    constexpr ULONGLONG kCallGiveUpMs = 70000;
+
+    // Everybody arrives behind their own loading screen and nobody comes out
+    // of it until the last one is standing. The machines do not load at the
+    // same time on purpose - both loading at once closed both games on 15/09 -
+    // so they land seconds apart; without this the player who arrived first
+    // watched the other pop into the world. The host collects one receipt per
+    // participant for one vote and then tells everyone to drop the curtain
+    // with the same message.
+    constexpr ULONGLONG kBarrierGiveUpMs = 25000;
+    // A guest arriving by warp has a real load, the host's world to ask for
+    // and a presence to rebuild in front of it; 25 s is the old transport's
+    // budget and would cut it loose halfway.
+    constexpr ULONGLONG kBarrierWarpGiveUpMs = 70000;
+    constexpr size_t kMaxReporters = 4;
+
+    // Host side, game thread only.
+    struct Barrier
+    {
+        bool Active = false;
+        uint32_t Vote = 0;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        size_t Guests = 0;
+        bool HostArrived = false;
+        bool Incomplete = false;      // somebody failed, or the wait ran out
+        bool HadWarp = false;         // a guest is coming by warp, which is slower
+        ULONGLONG Since = 0;
+        size_t ReporterCount = 0;
+        uint64_t Reporters[kMaxReporters] = {};
+    };
+    Barrier s_barrier;
+
+    // Guest side, game thread only: this machine is done and is waiting for
+    // the host to let the whole group out at once.
+    struct AwaitRelease
+    {
+        bool Active = false;
+        bool Reported = false;
+        bool Failed = false;
+        // The warp does not go through the travel outcome contract - that one
+        // is the old transport's - so the ghost machine is what reports it.
+        bool ByWarp = false;
+        uint32_t Vote = 0;
+        ULONGLONG Since = 0;
+    };
+    AwaitRelease s_await;
+
+    // Guest: the phantom warp under way, so the host's world is asked for
+    // once this machine stands in the destination with a character again.
+    struct GhostTravel
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        ULONGLONG Since = 0;
+        ULONGLONG SeenAt = 0;   // first frame in the destination with a character; 0 not yet
+        // Second half: the world has been asked for, and what is left is to
+        // put the presence back and tell the host this machine is in.
+        bool Asked = false;
+        ULONGLONG AskedAt = 0;
+        uint32_t Vote = 0;      // 0 when the warp came from a request, not a vote
+    };
+    GhostTravel s_ghost;
+    constexpr ULONGLONG kGhostSettleMs = 3000;
+    // After the host's world is back, before the presence is rebuilt.
+    constexpr ULONGLONG kGhostRebuildMs = 5000;
+
+    // A warp the guest announced and has not started yet: the host is given a
+    // moment to take its copy out first, which is the order the recipe was
+    // measured in (host removes, then the guest warps a few seconds later).
+    struct PendingWarp
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        uint32_t Vote = 0;
+        ULONGLONG At = 0;
+    };
+    PendingWarp s_pending_warp;
+    constexpr ULONGLONG kWarpAnnounceMs = 2500;
+
+    // Which road to take is **asked of the streamer**, not predicted.
+    //
+    // `MapReachable` only says an owner exists for that map, and every one of
+    // the 38 owners exists from the first load. It cannot tell "has an owner"
+    // from "will load", so it answers yes for both. Measured 17/09, 19:01,
+    // the documented failing case driven for real: the guest voted to travel
+    // from Heide to Iron Keep, the gate said yes, the guest took the old
+    // road, and the owner's load state went `255 -> 0` and never moved. Three
+    // seconds later the map it was standing in was released under it and it
+    // died at +0x517843. A working load walks `255 -> 1 -> 2 -> 3 -> 4 -> 5`
+    // in about half a second, so the difference is visible in a second and a
+    // half - long before anything is torn down.
+    //
+    // So the map is asked for first and the state watched. Reaching 5 means
+    // the old road works; not moving means the warp. Nothing is torn down
+    // while this runs: the player has not left yet.
+    struct MapProbe
+    {
+        bool Active = false;
+        uint32_t Map = 0;
+        uint16_t Bonfire = 0;
+        uint32_t Vote = 0;
+        ULONGLONG Since = 0;
+    };
+    MapProbe s_probe;
+    constexpr ULONGLONG kProbeMs = 3000;
+    constexpr uint8_t kMapLoaded = 5;
+
+    // Host side: a guest warped, so this machine's presence has to be put
+    // back once that guest is in.
+    struct HostRebuild
+    {
+        bool Active = false;
+        ULONGLONG At = 0;
+    };
+    HostRebuild s_host_rebuild;
+
+    // A receipt counts once per player.
+    bool NoteReporter(uint64_t Who)
+    {
+        for (size_t i = 0; i < s_barrier.ReporterCount; ++i)
+        {
+            if (s_barrier.Reporters[i] == Who)
+            {
+                return false;
+            }
+        }
+        if (s_barrier.ReporterCount < kMaxReporters)
+        {
+            s_barrier.Reporters[s_barrier.ReporterCount++] = Who;
+        }
+        return true;
+    }
+    ULONGLONG s_job_unpatched_at = 0;
+    constexpr ULONGLONG kJobUnpatchMs = 1500;
+    ULONGLONG s_lit_tick = 0;
+    uint8_t s_lit_applied_count = 0;
+    uint32_t s_lit_applied[3] = {};
+
+    // Guest side, game thread only.
+    struct OpenVote
+    {
+        bool Active = false;
+        bool Host = false;
+        uint32_t Vote = 0;
+        int32_t Number = 0;
+    };
+    OpenVote s_open_vote;
+
+    // Guest side, game thread only: what this guest proposed and answered.
+    struct Proposal
+    {
+        bool Active = false;
+        uint16_t Bonfire = 0;
+        ULONGLONG Since = 0;
+    };
+    Proposal s_proposal;
+    uint32_t s_answered_vote = 0;
+    bool s_answered_yes = false;
+
+    // Text handed to the game's message boxes; they are kept, not copied.
+    wchar_t s_question[512] = {};
+    wchar_t s_message[512] = {};
+    std::atomic<bool> s_events_ready{ false };
+    std::filesystem::path s_log_path;
+    std::filesystem::path s_request_path;
+    ULONGLONG s_request_tick = 0;
+    std::mutex s_log_mutex;
+    uintptr_t s_base = 0;
+    bool s_job_patched = false;
+    bool s_prompt_patched = false;
+    bool s_prompt_gate_broken = false;
+    std::atomic<uint64_t> s_answered{ 0 };
+
+    bool ReadByte(uintptr_t At, uint8_t& Out)
+    {
+        __try
+        {
+            Out = *(const uint8_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool ReadPointer(uintptr_t At, uintptr_t& Out)
+    {
+        __try
+        {
+            Out = *(const uintptr_t*)At;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    bool WriteBytes(uintptr_t At, const void* In, size_t Length)
+    {
+        __try
+        {
+            memcpy((void*)At, In, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    // The same, for a field that is not a pointer. Its own function because
+    // __try cannot sit anywhere a C++ object would have to be unwound past,
+    // which is what C2712 says and what the travel watch learned by having a
+    // build refused.
+    bool ReadBytes(uintptr_t At, void* Out, size_t Length)
+    {
+        __try
+        {
+            memcpy(Out, (const void*)At, Length);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void Append(const std::string& Text);
+    void ShowMessage(const wchar_t* Text);
+    void WorldResetHook();
+    bool WriteCode(uintptr_t Address, const uint8_t* From, size_t Length);
+
+    // 0xff without a local character.
+    uint8_t LocalRole()
+    {
+        uintptr_t Context = 0, Character = 0, Roles = 0;
+        uint8_t Role = 0xff;
+        if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kLocalCharacter, Character) && Character != 0 &&
+            ReadPointer(Character + kRoles, Roles) && Roles != 0 &&
+            ReadByte(Roles + kRole, Role))
+        {
+            return Role;
+        }
+        return 0xff;
+    }
+
+    bool OwnsTheWorld()
+    {
+        return LocalRole() == kRoleOwner;
+    }
+
+    bool IsWhitePhantom()
+    {
+        return LocalRole() == kRoleWhitePhantom;
+    }
+
+    uintptr_t BonfireManager()
+    {
+        uintptr_t Context = 0, Events = 0, Manager = 0;
+        if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kEventManager, Events) && Events != 0 &&
+            ReadPointer(Events + kBonfireManager, Manager))
+        {
+            return Manager;
+        }
+        return 0;
+    }
+
+    // 0xffffffff when the bonfire is not in the table.
+    uint32_t MapOfBonfire(uint16_t Id)
+    {
+        if (s_bonfire_index == nullptr || BonfireManager() == 0)
+        {
+            return 0xffffffff;
+        }
+        uint32_t Index = 0, Map = 0xffffffff;
+        s_bonfire_index(&Index, Id);
+        s_bonfire_map(&Index, &Map);
+        return Map;
+    }
+
+    const wchar_t* TextOrEmpty(int Category, int Id)
+    {
+        const wchar_t* Text = s_text != nullptr ? s_text(Category, Id) : nullptr;
+        __try
+        {
+            if (Text == nullptr || Text[0] == 0 || Text[0] > 0xffff || Text[0] == L'?')
+            {
+                return L"";
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return L"";
+        }
+        return Text;
+    }
+
+    // "Heide's Ruin (Heide's Tower of Flame)", or a plain "another bonfire".
+    std::wstring PlaceName(uint16_t Bonfire, uint32_t Map)
+    {
+        const wchar_t* Name = TextOrEmpty(kBonfireNames, Bonfire);
+        const int Area = Map == 0xffffffff || Map == 0 ? 0 : (int)(((Map >> 24) & 0xff) * 1000000 + ((Map >> 16) & 0xff) * 10000);
+        const wchar_t* AreaName = Area != 0 ? TextOrEmpty(kAreaNames, Area) : L"";
+        std::wstring Out = Name[0] != 0 ? Name : L"another bonfire";
+        if (AreaName[0] != 0)
+        {
+            Out += L" (";
+            Out += AreaName;
+            Out += L")";
+        }
+        return Out;
+    }
+
+    std::string Narrow(const std::wstring& Text)
+    {
+        std::string Out;
+        for (wchar_t C : Text)
+        {
+            Out += C < 0x80 ? (char)C : '?';
+        }
+        return Out;
+    }
+
+    bool HostHasLit(uint16_t Bonfire)
+    {
+        const uintptr_t Manager = BonfireManager();
+        return s_bonfire_lit != nullptr && Manager != 0 && (s_bonfire_lit((void*)Manager, Bonfire) & 1) != 0;
+    }
+
+    // The bonfire table: where it is, how many entries, and which lit column
+    // this machine reads.
+    // The table is written into, so it is checked before it is believed: the
+    // count in range, the column one of the two, and the ids of every entry
+    // strictly ascending and nonzero, which is what the game's own binary
+    // search over this table needs. A manager caught half built would fail
+    // here instead of sending 77 byte writes into the heap.
+    bool BonfireTable(uintptr_t& Table, uint32_t& Count, uint8_t& Column)
+    {
+        const uintptr_t Manager = BonfireManager();
+        uint8_t Col = 0;
+        uint32_t Many = 0;
+        uintptr_t At = 0;
+        if (Manager == 0 || !ReadPointer(Manager + kBonfireTable, At) || At == 0 ||
+            !ReadByte(Manager + kBonfireColumn, Col) || Col > 3)
+        {
+            return false;
+        }
+        memcpy(&Many, (const void*)(Manager + kBonfireCount), sizeof(Many));
+        if (Many < 8 || Many > DS2_CoopChannel::kMaxLitBonfires)
+        {
+            return false;
+        }
+        uint16_t Last = 0;
+        for (uint32_t i = 0; i < Many; ++i)
+        {
+            uint16_t Id = 0;
+            memcpy(&Id, (const void*)(At + i * kBonfireEntry), sizeof(Id));
+            if (Id == 0 || Id <= Last)
+            {
+                return false;
+            }
+            Last = Id;
+        }
+        Table = At;
+        Count = Many;
+        Column = Col;
+        return true;
+    }
+
+    // The host says which bonfires it has lit, so a guest's travel list is
+    // the host's world and not the two maps it happens to have loaded.
+    void PublishLitBonfires()
+    {
+        uintptr_t Table = 0;
+        uint32_t Count = 0;
+        uint8_t Column = 0;
+        if (!BonfireTable(Table, Count, Column))
+        {
+            return;
+        }
+        uint32_t Bits[3] = {};
+        for (uint32_t i = 0; i < Count; ++i)
+        {
+            uint8_t Lit = 0;
+            if (ReadByte(Table + i * kBonfireEntry + kBonfireLitByte + Column, Lit) && (Lit & 1) != 0)
+            {
+                Bits[i / 32] |= 1u << (i % 32);
+            }
+        }
+        DS2_CoopChannel::PublishLit((uint8_t)Count, Bits);
+    }
+
+    void ApplyHostLitBonfires()
+    {
+        uint8_t Count = 0;
+        uint32_t Bits[3] = {};
+        uint64_t AgeMs = 0;
+        if (!DS2_CoopChannel::HostLit(Count, Bits, AgeMs))
+        {
+            return;
+        }
+        uintptr_t Table = 0;
+        uint32_t Mine = 0;
+        uint8_t Column = 0;
+        // Never while a map is coming in: that is when a half built manager
+        // could be read, and there is nothing to gain from the hurry.
+        if (DS2_DeathIntercept::Moving() || !BonfireTable(Table, Mine, Column) || Column == 0 || Mine != Count)
+        {
+            return;
+        }
+        uint32_t Written = 0;
+        for (uint32_t i = 0; i < Count; ++i)
+        {
+            const uint8_t Want = (Bits[i / 32] >> (i % 32)) & 1;
+            const uintptr_t At = Table + i * kBonfireEntry + kBonfireLitByte + Column;
+            uint8_t Now = 0;
+            if (ReadByte(At, Now) && (Now & 1) != Want)
+            {
+                const uint8_t Next = (uint8_t)((Now & ~1u) | Want);
+                memcpy((void*)At, &Next, 1);
+                ++Written;
+            }
+        }
+        const bool Changed = Count != s_lit_applied_count || memcmp(Bits, s_lit_applied, sizeof(Bits)) != 0;
+        if (Written != 0 || Changed)
+        {
+            s_lit_applied_count = Count;
+            memcpy(s_lit_applied, Bits, sizeof(Bits));
+            Append(StringFormat("convidado: %u fogueira(s) da tabela alinhada(s) com o mundo do host (%u entradas, coluna %u, ha %llu ms)\n",
+                Written, Count, (unsigned)Column, (unsigned long long)AgeMs));
+        }
+    }
+
+    // Is a bonfire menu open here (the queue in state 10)?
+    bool BonfireMenuOpen()
+    {
+        uintptr_t Context = 0, Events = 0, Queue = 0;
+        int32_t State = 0;
+        if (!ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
+            !ReadPointer(Events + kMenuQueue, Queue) || Queue == 0)
+        {
+            return false;
+        }
+        memcpy(&State, (const void*)(Queue + kQueueState), sizeof(State));
+        return State == kQueueBonfireMenu;
+    }
+
+    // The bonfire menu is closed by the game, not by us: calling
+    // FUN_1401994e0 from this tick closed it on a host and killed a guest
+    // twice (15/09, c0000005 writing to 0 inside the menu teardown, on the
+    // frame of the call). What the game itself does, and what was measured
+    // live, is the rest job cancelling the menu because a session is up: so
+    // the job's branch patch comes off for a moment and the job does it.
+    // True when there was a menu to close.
+    bool CloseBonfireMenu()
+    {
+        if (!BonfireMenuOpen())
+        {
+            return false;
+        }
+        if (s_job_patched && WriteCode(s_base + kJobBranch, kJobExpected, sizeof(kJobExpected)))
+        {
+            s_job_patched = false;
+            s_job_unpatched_at = GetTickCount64();
+            Append("menu da fogueira: a trava do job sai por um instante para o jogo fechar o menu\n");
+        }
+        return true;
+    }
+
+    // Put the job's branch back once the menu is gone (or after a second).
+    void KeepJobPatch(ULONGLONG Now)
+    {
+        if (s_job_patched || s_job_unpatched_at == 0)
+        {
+            return;
+        }
+        if (BonfireMenuOpen() && Now - s_job_unpatched_at < kJobUnpatchMs)
+        {
+            return;
+        }
+        if (WriteCode(s_base + kJobBranch, kJobPatch, sizeof(kJobPatch)))
+        {
+            s_job_patched = true;
+            Append(StringFormat("menu da fogueira: trava do job de volta depois de %llu ms\n",
+                (unsigned long long)(Now - s_job_unpatched_at)));
+        }
+        s_job_unpatched_at = 0;
+    }
+
+    // Whether the local character stands within a few metres of a loaded bonfire.
+    bool NearBonfire()
+    {
+        const uintptr_t Manager = BonfireManager();
+        uintptr_t Context = 0, Character = 0, Component = 0;
+        if (Manager == 0 || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kLocalCharacter, Character) || Character == 0 ||
+            !ReadPointer(Manager + kBonfireList, Component))
+        {
+            return false;
+        }
+        float Me[3] = {};
+        memcpy(Me, (const void*)(Character + kCharacterPosition), sizeof(Me));
+        for (int Guard = 0; Component != 0 && Guard < 64; ++Guard)
+        {
+            uintptr_t Entity = 0;
+            if (!ReadPointer(Component + kComponentEntity, Entity))
+            {
+                return false;
+            }
+            if (Entity != 0)
+            {
+                float At[3] = {};
+                memcpy(At, (const void*)(Entity + kEntityPosition), sizeof(At));
+                const float Dx = At[0] - Me[0], Dy = At[1] - Me[1], Dz = At[2] - Me[2];
+                if (Dx * Dx + Dy * Dy + Dz * Dz <= kNearBonfire * kNearBonfire)
+                {
+                    return true;
+                }
+            }
+            if (!ReadPointer(Component + kBonfireNext, Component))
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // No C++ objects here: __try cannot sit in a function that unwinds.
+    bool AnswerNotGuest(uint32_t* Out, void** Arguments)
+    {
+        __try
+        {
+            if (Out != nullptr && Arguments != nullptr && Out[0] != 0)
+            {
+                using Id_p = int32_t(*)(void*);
+                const int32_t Id = ((Id_p)((*(void***)Arguments)[1]))(Arguments);
+                if (Id == kQueryIsGuest && IsWhitePhantom() && NearBonfire())
+                {
+                    Out[0] = 0;
+                    return true;
+                }
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        return false;
+    }
+
+    uint64_t InnerScriptHook(void* This, uint32_t* Out, void** Arguments, void* P4)
+    {
+        const uint64_t Result = s_original_inner_script(This, Out, Arguments, P4);
+        if (AnswerNotGuest(Out, Arguments) && s_prompts_opened.fetch_add(1) == 0)
+        {
+            Append("convidado: perto da fogueira, a pergunta 'sou convidado?' do script respondeu nao\n");
+        }
+        return Result;
+    }
+
+    // The loading curtain, up and down. True when it moved.
+    bool Curtain(bool Up)
+    {
+        uintptr_t Context = 0, Render = 0, Switch = 0;
+        if (s_curtain == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(s_base + kRenderGlobal, Render) || Render == 0 ||
+            !ReadPointer(Render + kRenderSwitch, Switch) || Switch == 0)
+        {
+            return false;
+        }
+        const uint8_t Flag = Up ? 1 : 0;
+        uintptr_t FrontEnd = 0;
+        const bool Screen = s_loading_open != nullptr && ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0;
+        if (Up)
+        {
+            if (s_fade_out != nullptr)
+            {
+                s_fade_out((void*)Context, kFadeSeconds, 1);
+            }
+            s_black_since = 0;
+            memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+            s_curtain((void*)Switch, 1);
+            if (Screen && !s_loading_screen)
+            {
+                s_hud_hide((void*)FrontEnd, kHudMask);
+                s_loading_open((void*)FrontEnd);
+                s_loading_screen = true;
+            }
+        }
+        else
+        {
+            if (Screen && s_loading_screen)
+            {
+                s_hud_show((void*)FrontEnd, kHudMask);
+                s_loading_close((void*)FrontEnd);
+                s_hud_drop((void*)FrontEnd);
+            }
+            s_loading_screen = false;
+            s_curtain((void*)Switch, 0);
+            memcpy((void*)(Context + kLoadingFlag), &Flag, 1);
+            if (s_fade_in != nullptr)
+            {
+                s_fade_in((void*)Context, kFadeSeconds, 1);
+            }
+        }
+        s_curtain_up = Up;
+        s_curtain_since = GetTickCount64();
+        s_curtain_arrived_at = 0;
+        s_curtain_settled_logged = false;
+        Append(Up ? StringFormat("tela de carregamento: subiu%s\n", Screen ? " (com a tela do jogo)" : " (so o desenho do mundo)")
+                  : "tela de carregamento: desceu\n");
+        return true;
+    }
+
+    // Called every frame: the curtain comes down once this machine's player
+    // has arrived and stood still for a moment, and always before 25 s.
+    // True when the game itself would take its curtain down: every map owner
+    // settled and the drawing idle. True as well when there is nothing to
+    // ask, so a missing object never holds the screen black.
+    bool WorldLoaded()
+    {
+        uintptr_t Context = 0, World = 0, Render = 0, Switch = 0;
+        if (s_world_loaded == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kWorldManager, World) || World == 0)
+        {
+            return true;
+        }
+        if (s_world_loaded((void*)World) == 0)
+        {
+            return false;
+        }
+        if (s_render_busy != nullptr && ReadPointer(s_base + kRenderGlobal, Render) && Render != 0 &&
+            ReadPointer(Render + kRenderSwitch, Switch) && Switch != 0 && s_render_busy((void*)Switch) != 0)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    // True once the fade has covered the screen for a few frames, or when
+    // there is no fade to wait for, or it has taken too long.
+    bool ScreenBlack(ULONGLONG Now)
+    {
+        uintptr_t Context = 0, Fade = 0;
+        float State[3] = {};
+        const bool Black = s_fade_out == nullptr ||
+            !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kFadeObject, Fade) || Fade == 0 ||
+            (ReadBytes(Fade, State, sizeof(State)) && State[0] >= 0.999f && State[2] <= 0.0f);
+        if (!Black)
+        {
+            s_black_since = 0;
+            return s_curtain_up && Now - s_curtain_since > kFadeWaitMs;
+        }
+        if (s_black_since == 0)
+        {
+            s_black_since = Now;
+        }
+        return Now - s_black_since >= kFadeBlackMs;
+    }
+
+    void KeepCurtain(ULONGLONG Now)
+    {
+        if (!s_curtain_up)
+        {
+            return;
+        }
+        // Nobody leaves the loading screen while the group is still gathering.
+        const bool Waiting = s_barrier.Active || s_await.Active || s_curtain_for_vote || s_probe.Active;
+        const bool Arrived = !s_go.Active && !DS2_DeathIntercept::Moving() && !Waiting;
+        if (!Arrived)
+        {
+            s_curtain_down_at = 0;
+            s_curtain_arrived_at = 0;
+            if (Now - s_curtain_since > kCurtainGiveUpMs)
+            {
+                Append("tela de carregamento: a viagem nao terminou a tempo; desco assim mesmo\n");
+                Curtain(false);
+            }
+            return;
+        }
+        // Arrived, but the game is still bringing the world in.
+        if (s_curtain_arrived_at == 0)
+        {
+            s_curtain_arrived_at = Now;
+        }
+        if (!WorldLoaded())
+        {
+            s_curtain_down_at = 0;
+            if (Now - s_curtain_arrived_at > kWorldSettleGiveUpMs)
+            {
+                Append(StringFormat("tela de carregamento: o mundo nao assentou em %llu ms depois de chegar; desco assim mesmo\n",
+                    (unsigned long long)kWorldSettleGiveUpMs));
+                s_curtain_arrived_at = 0;
+                Curtain(false);
+            }
+            return;
+        }
+        // Once per curtain: the predicate flickers for a few frames on its
+        // way to true (three lines 50 ms apart on 17/09).
+        if (!s_curtain_settled_logged && Now != s_curtain_arrived_at)
+        {
+            s_curtain_settled_logged = true;
+            Append(StringFormat("tela de carregamento: o mundo assentou %llu ms depois de chegar\n",
+                (unsigned long long)(Now - s_curtain_arrived_at)));
+        }
+        if (s_curtain_down_at == 0)
+        {
+            s_curtain_down_at = Now + kCurtainHoldMs;
+        }
+        else if (Now >= s_curtain_down_at)
+        {
+            s_curtain_down_at = 0;
+            Curtain(false);
+        }
+    }
+
+    // The host's respawn record, moved to the bonfire everyone travels to,
+    // the way the game's own travel does it: the request the travel builds
+    // carries the map at +0x08 and the spawn point at +0x18.
+    void SetRecord(uint16_t Bonfire)
+    {
+        uintptr_t Context = 0, Events = 0;
+        if (s_travel_build == nullptr || s_record_set == nullptr ||
+            !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 || MapOfBonfire(Bonfire) == 0xffffffff)
+        {
+            return;
+        }
+        uint8_t Request[0x40] = {};
+        s_travel_build(Request, Bonfire, 2);
+        int32_t Fields[3] = {};
+        memcpy(&Fields[0], Request + 0x08, 4);
+        memcpy(&Fields[2], Request + 0x18, 4);
+        s_record_set((void*)Events, Fields);
+        Append(StringFormat("registro de renascimento na fogueira %04x (mapa %08x, ponto %08x)\n", (unsigned)Bonfire,
+            (uint32_t)Fields[0], (uint32_t)Fields[2]));
+    }
+
+    // Close whatever bonfire menu is open here and take this machine's player
+    // to the bonfire once it is on its feet.
+    void StartGo(uint32_t Map, uint16_t Bonfire)
+    {
+        const bool Closed = CloseBonfireMenu();
+        s_curtain_for_vote = false;
+        if (!s_curtain_up)
+        {
+            Curtain(true);
+        }
+        s_go = Go();
+        s_go.Active = true;
+        s_go.Map = Map;
+        s_go.Bonfire = Bonfire;
+        // The host still goes first, but now because the guests are only told
+        // to move once the host's **physics contact** says it is standing on
+        // the destination, not after a timer. So the two seconds a guest used
+        // to wait for nothing are gone; only standing up from a bonfire menu
+        // still costs time.
+        s_go.At = GetTickCount64() + (Closed ? kStandUpMs : 0);
+        (void)s_menu_cancel;
+        Append(StringFormat("viagem para a fogueira %04x (mapa %08x)%s\n", (unsigned)Bonfire, Map,
+            Closed ? "; menu da fogueira fechado, esperando levantar" : ""));
+    }
+
+    // The registry of remote presences, or 0 when there is none yet.
+    // Capture, then pass through. Nothing is changed on the way in.
+    uint64_t PresenceRegisterHook(void* Registry, void* Member, void* Blob, uint8_t Flag)
+    {
+        if (Blob != nullptr && Member != nullptr)
+        {
+            if (ReadBytes((uintptr_t)Blob, s_blob, sizeof(s_blob)))
+            {
+                s_member = Member;
+                s_blob_flag = Flag;
+                s_blob_known = true;
+                Append(StringFormat("presencas: guardei o blob de %zu bytes e o membro %p (flag %u)\n",
+                    sizeof(s_blob), Member, (unsigned)Flag));
+            }
+        }
+        return s_original_register(Registry, Member, Blob, Flag);
+    }
+
+    uintptr_t PresenceRegistry()
+    {
+        uintptr_t Root = 0, Registry = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 ||
+            !ReadPointer(Root + kPresenceRegistry, Registry))
+        {
+            return 0;
+        }
+        return Registry;
+    }
+
+    // Every active entry written down, and nothing touched. The name is
+    // UTF-16 in the game and is left out here on purpose: the net id and the
+    // PlayerCtrl are what identify a copy across a travel, and a name would
+    // only make the line harder to read.
+    void ReportPresences(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0)
+        {
+            Append(StringFormat("presencas (%s): nao ha registro nesta maquina\n", Why));
+            return;
+        }
+        uint32_t Alive = 0, OwnId = 0;
+        ReadBytes(R + kPresenceAliveCount, &Alive, sizeof(Alive));
+        ReadBytes(R + kPresenceOwnNetId, &OwnId, sizeof(OwnId));
+        Append(StringFormat("presencas (%s): registro %p, %u viva(s), meu net id %u\n", Why, (void*)R, Alive, OwnId));
+        for (int i = 0; i < kPresenceEntries; ++i)
+        {
+            const uintptr_t E = R + kPresenceFirstEntry + (uintptr_t)i * kPresenceEntryStride;
+            uint32_t State = 0, Role = 0;
+            uint16_t NetId = 0;
+            uintptr_t Ctrl = 0;
+            ReadBytes(E + kEntryState, &State, sizeof(State));
+            if (State == 0)
+            {
+                continue;   // a free slot says nothing
+            }
+            ReadBytes(E + kEntryRole, &Role, sizeof(Role));
+            ReadBytes(E + kEntryNetId, &NetId, sizeof(NetId));
+            ReadPointer(E + kEntryPlayerCtrl, Ctrl);
+            Append(StringFormat("  entrada %d em %p: estado %u (%s), papel %u, net id %u, personagem %p\n",
+                i, (void*)E, State,
+                State == kEntryAlive ? "viva" : (State == 3 ? "saindo" : "?"), Role, (unsigned)NetId, (void*)Ctrl));
+        }
+    }
+
+    // The net object, which hosts the member list.
+    uintptr_t NetObject()
+    {
+        uintptr_t Root = 0, Net = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 || !ReadPointer(Root, Net))
+        {
+            return 0;
+        }
+        return Net;
+    }
+
+    // The map this machine stands in, as the net layer keeps it; 0 unknown.
+    uint32_t AreaMap()
+    {
+        const uintptr_t R = PresenceRegistry();
+        uintptr_t Area = 0;
+        uint32_t Map = 0;
+        if (R == 0 || !ReadPointer(R + kPresenceArea, Area) || Area == 0 ||
+            !ReadBytes(Area + kAreaMap, &Map, sizeof(Map)))
+        {
+            return 0;
+        }
+        return Map;
+    }
+
+    // Guest: the import of the host's world, let through once outside the
+    // join. Anything not asked for goes to the game untouched.
+    void SnapshotImportHook(void* Ctrl, void* Blob, void* P3, void* P4, void* P5, void* P6, void* P7, uint64_t Count)
+    {
+        int32_t State = -1;
+        ReadBytes((uintptr_t)Ctrl + kJoinState, &State, sizeof(State));
+        if (State != kJoinPlaying || s_reimport_until.load() == 0)
+        {
+            if (State != kJoinImporting)
+            {
+                Append(StringFormat("convidado: o mundo do host chegou com o controlador no estado %d, sem eu ter pedido; o jogo decide\n", State));
+            }
+            s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7, Count);
+            return;
+        }
+        s_reimport_until.store(0);
+        const uint32_t Map = AreaMap();
+        uint32_t Before = 0;
+        ReadBytes((uintptr_t)Ctrl + kJoinMap, &Before, sizeof(Before));
+        if (Map != 0)
+        {
+            memcpy((void*)((uintptr_t)Ctrl + kJoinMap), &Map, sizeof(Map));
+        }
+        int32_t Importing = kJoinImporting;
+        memcpy((void*)((uintptr_t)Ctrl + kJoinState), &Importing, sizeof(Importing));
+        s_original_import(Ctrl, Blob, P3, P4, P5, P6, P7, Count);
+        int32_t After = -1;
+        ReadBytes((uintptr_t)Ctrl + kJoinState, &After, sizeof(After));
+        if (After == kJoinPresences)
+        {
+            int32_t Playing = kJoinPlaying;
+            memcpy((void*)((uintptr_t)Ctrl + kJoinState), &Playing, sizeof(Playing));
+        }
+        Append(StringFormat("convidado: mundo do host importado de novo (mapa do controlador %08x -> %08x; estado 7 -> 4 -> %d -> %s)\n",
+            Before, Map, After, After == kJoinPresences ? "7" : "deixado como esta"));
+    }
+
+    // Guest: ask the host for its world, and expect the import for a while.
+    void AskSnapshot(const char* Why)
+    {
+        if (s_original_import == nullptr)
+        {
+            Append(StringFormat("convidado (%s): o import do mundo nao esta enganchado; nao peco\n", Why));
+            return;
+        }
+        s_reimport_until.store(GetTickCount64() + kSnapshotWaitMs);
+        DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::SnapshotPlease, AreaMap(), 0);
+        Append(StringFormat("convidado (%s): pedi ao host o mundo dele de novo (mapa %08x); espero o import por %llu s\n",
+            Why, AreaMap(), (unsigned long long)(kSnapshotWaitMs / 1000)));
+    }
+
+    // Host: the world exported once more, by the controller's own state-0xd
+    // code, from the game's thread.
+    void ExportSnapshot(const char* Why)
+    {
+        void* Ctrl = DS2_SeamlessSession_HostCtrl();
+        uintptr_t Vftable = 0;
+        int32_t State = -1;
+        if (s_snapshot_export == nullptr || Ctrl == nullptr || !ReadPointer((uintptr_t)Ctrl, Vftable) ||
+            Vftable != s_base + kAcceptCtrlVftable ||
+            !ReadBytes((uintptr_t)Ctrl + kAcceptState, &State, sizeof(State)) || State != kAcceptPlaying)
+        {
+            Append(StringFormat("host (%s): nao exporto o mundo (funcao %p, controlador %p, vftable %s, estado 0x%x)\n", Why,
+                (void*)s_snapshot_export, Ctrl, Vftable == s_base + kAcceptCtrlVftable ? "certa" : "outra", State));
+            return;
+        }
+        s_snapshot_export(Ctrl, 0.0f);
+        // The handler moves the controller on to 0xe, where it waits for the
+        // guest's "I am in" - a message the guest never sends, because its
+        // states 5 and 6 are skipped. Measured 17/09, 16:32: the session
+        // kept its packets and both presences with the host at 0xe, but the
+        // harness read it unverified, and the game's own checks for a playing
+        // host key on 0x10. Writing 0x10 back live brought it to verified.
+        int32_t After = -1;
+        ReadBytes((uintptr_t)Ctrl + kAcceptState, &After, sizeof(After));
+        if (After == kAcceptExported)
+        {
+            int32_t Playing = kAcceptPlaying;
+            memcpy((void*)((uintptr_t)Ctrl + kAcceptState), &Playing, sizeof(Playing));
+        }
+        Append(StringFormat("host (%s): mundo exportado de novo para o convidado (controlador %p, mapa %08x; estado 0x10 -> 0x%x -> %s)\n",
+            Why, Ctrl, AreaMap(), After, After == kAcceptExported ? "0x10" : "deixado como esta"));
+    }
+
+    // Puts the captured presence back, by the game's own registration.
+    bool RebuildPresence(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0 || s_original_register == nullptr || !s_blob_known)
+        {
+            Append(StringFormat("presencas (%s): nao da para recriar (registro %p, funcao %p, blob %s)\n", Why,
+                (void*)R, (void*)s_original_register, s_blob_known ? "guardado" : "nunca visto"));
+            return false;
+        }
+        // A living entry for this player already there would be overwritten
+        // without being destroyed - the duplication the plan names - so the
+        // count is checked first and nothing is done when it is not zero.
+        uint32_t Alive = 0;
+        ReadBytes(R + kPresenceAliveCount, &Alive, sizeof(Alive));
+        if (Alive != 0)
+        {
+            Append(StringFormat("presencas (%s): ja ha %u viva(s); nao recrio para nao duplicar\n", Why, Alive));
+            return false;
+        }
+        // Every living member is tried, and the proof is the entry being
+        // born. With two players there are two candidates and one of them is
+        // this player; rather than guess which, try and look at the result.
+        const uintptr_t Net = NetObject();
+        if (Net == 0)
+        {
+            Append(StringFormat("presencas (%s): nao achei o objeto de rede\n", Why));
+            return false;
+        }
+        for (int i = 0; i < kNetMemberSlots; ++i)
+        {
+            const uintptr_t Member = Net + kNetMembers + (uintptr_t)i * kNetMemberStride;
+            uint32_t Valid = 0;
+            if (!ReadBytes(Member + kNetMemberValid, &Valid, sizeof(Valid)) || Valid == 0)
+            {
+                continue;
+            }
+            const uint64_t Went = s_original_register((void*)R, (void*)Member, s_blob, s_blob_flag);
+            Append(StringFormat("presencas (%s): membro vivo %d (%p), o jogo %s\n", Why, i, (void*)Member,
+                Went != 0 ? "aceitou" : "recusou"));
+            if (Went == 0)
+            {
+                continue;
+            }
+            // Gives the registry's tick time to materialise it before
+            // judging. Two seconds were not enough: on 17/09 both sides said
+            // "nenhum membro produziu presenca" and eight seconds later both
+            // registries read one living. The judgement was early, not the
+            // recipe.
+            for (int w = 0; w < 240; ++w)
+            {
+                Sleep(50);
+                uint32_t Now = 0;
+                if (ReadBytes(R + kPresenceAliveCount, &Now, sizeof(Now)) && Now != 0)
+                {
+                    Append(StringFormat("presencas (%s): nasceu pelo membro %d\n", Why, i));
+                    return true;
+                }
+            }
+            Append(StringFormat("presencas (%s): o membro %d foi aceito e nao nasceu; tento o proximo\n", Why, i));
+        }
+        Append(StringFormat("presencas (%s): nenhum membro vivo produziu uma presenca\n", Why));
+        return false;
+    }
+
+    // Takes every living presence out, by the game's own FUN_14051c820.
+    // Returns how many were asked to go.
+    //
+    // This does **not** wait for them to be gone: the function starts a fade
+    // and writes state 3, and the real destruction is deferred by a list, so
+    // "state 3" is a request and not a receipt. Whoever calls this has to give
+    // the game frames before doing anything that assumes they are gone.
+    int RemovePresences(const char* Why)
+    {
+        const uintptr_t R = PresenceRegistry();
+        if (R == 0 || s_presence_remove == nullptr)
+        {
+            Append(StringFormat("presencas (%s): nao da para retirar (registro %p, funcao %p)\n", Why, (void*)R,
+                (void*)s_presence_remove));
+            return 0;
+        }
+        int Asked = 0;
+        for (int i = 0; i < kPresenceEntries; ++i)
+        {
+            const uintptr_t E = R + kPresenceFirstEntry + (uintptr_t)i * kPresenceEntryStride;
+            uint32_t State = 0;
+            if (!ReadBytes(E + kEntryState, &State, sizeof(State)) || State != kEntryAlive)
+            {
+                continue;
+            }
+            uint16_t NetId = 0;
+            ReadBytes(E + kEntryNetId, &NetId, sizeof(NetId));
+            s_presence_remove((void*)E);
+            ++Asked;
+            Append(StringFormat("presencas (%s): pedi a saida da entrada %d (%p), net id %u\n", Why, i, (void*)E,
+                (unsigned)NetId));
+        }
+        if (Asked == 0)
+        {
+            Append(StringFormat("presencas (%s): nenhuma viva para retirar\n", Why));
+        }
+        return Asked;
+    }
+
+    int32_t IdleNetSync(const char* Why);   // defined below, used when the window closes
+
+    // Is the world back? The loader idle and a local character in place.
+    // Both, because the loader reaching idle before the character exists is
+    // exactly the window the crashes live in.
+    bool WorldIsUp()
+    {
+        uintptr_t Context = 0, Character = 0;
+        uint8_t State = 0;
+        if (!ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadBytes(Context + kLoaderState, &State, sizeof(State)) ||
+            !ReadPointer(Context + kLocalCharacter, Character))
+        {
+            return false;
+        }
+        return State == kLoaderIdle && Character != 0;
+    }
+
+    // The net tick, skipped while the world is being torn down and rebuilt.
+    void NetTickHook(void* Object, float Delta)
+    {
+        const ULONGLONG Until = s_quiet_until.load();
+        if (Until != 0)
+        {
+            if (GetTickCount64() >= Until)
+            {
+                // The cap, so a load that never finishes cannot leave the net
+                // silent forever.
+                s_quiet_until.store(0);
+                Append(StringFormat("rede: a janela acabou pelo teto de %llu ms (%s, %llu batida(s) puladas); volto a bater\n",
+                    (unsigned long long)kQuietCapMs,
+                    s_quiet_saw_teardown.load() ? "o mundo caiu e nao voltou" : "o mundo nunca caiu",
+                    (unsigned long long)s_quiet_skipped.load()));
+            }
+            else if (!WorldIsUp())
+            {
+                s_quiet_saw_teardown.store(true);
+                s_quiet_skipped.fetch_add(1);
+                return;     // nothing to walk, so nothing walks
+            }
+            else if (s_quiet_saw_teardown.load() && s_quiet_up_at.load() == 0)
+            {
+                // First frame with a world again: start the settle timer and
+                // keep quiet.
+                s_quiet_up_at.store(GetTickCount64());
+                s_quiet_skipped.fetch_add(1);
+                return;
+            }
+            else if (s_quiet_saw_teardown.load() &&
+                     GetTickCount64() - s_quiet_up_at.load() < kSettleMs)
+            {
+                s_quiet_skipped.fetch_add(1);
+                return;     // the world is back but has not settled
+            }
+            else if (s_quiet_saw_teardown.load())
+            {
+                // The world is back, but the character sync is still the old
+                // map's: measured 16/09, its map field read the origin while
+                // the player stood in the destination, and the very first tick
+                // after the silence walked that stale list and killed the host
+                // in the same millisecond the window closed.
+                //
+                // So the sync is put back to its idle state here, in the one
+                // instant where it matters - the tick that is about to run is
+                // the one that reads it. Writing this thirteen seconds early,
+                // which is what was tried first, achieved nothing: the state
+                // machine had restored it by the time the travel began.
+                IdleNetSync("o mundo voltou");
+                s_quiet_until.store(0);
+                Append(StringFormat("rede: o mundo voltou; %llu batida(s) puladas\n",
+                    (unsigned long long)s_quiet_skipped.load()));
+            }
+            else
+            {
+                // Still the old world, before the warp took it down. Let the
+                // net run normally until it does.
+                s_quiet_skipped.fetch_add(0);
+            }
+        }
+        s_original_net_tick(Object, Delta);
+    }
+
+    // Stops the net layer until the world is back, or the cap runs out.
+    void QuietNet(const char* Why)
+    {
+        if (s_original_net_tick == nullptr)
+        {
+            Append(StringFormat("rede (%s): sem detour; nao da para silenciar\n", Why));
+            return;
+        }
+        s_quiet_skipped.store(0);
+        s_quiet_saw_teardown.store(false);
+        s_quiet_up_at.store(0);
+        s_quiet_windows.fetch_add(1);
+        s_quiet_until.store(GetTickCount64() + kQuietCapMs);
+        Append(StringFormat("rede (%s): parei a batida ate o mundo voltar (teto %llu ms)\n", Why,
+            (unsigned long long)kQuietCapMs));
+    }
+
+    uintptr_t NetSync()
+    {
+        uintptr_t Root = 0, Sync = 0;
+        if (!ReadPointer(s_base + kPresenceRootGlobal, Root) || Root == 0 ||
+            !ReadPointer(Root + kNetSyncSlot, Sync))
+        {
+            return 0;
+        }
+        return Sync;
+    }
+
+    void ReportNetSync(const char* Why)
+    {
+        const uintptr_t Sync = NetSync();
+        if (Sync == 0)
+        {
+            Append(StringFormat("sync (%s): nao ha subsistema nesta maquina\n", Why));
+            return;
+        }
+        uint32_t State = 0, Count = 0, Map = 0;
+        ReadBytes(Sync + kSyncState, &State, sizeof(State));
+        ReadBytes(Sync + kSyncCount, &Count, sizeof(Count));
+        ReadBytes(Sync + kSyncMap, &Map, sizeof(Map));
+        Append(StringFormat("sync (%s): %p, estado %u, %u registro(s), mapa %08x\n", Why, (void*)Sync, State, Count,
+            Map));
+    }
+
+    // Puts the sync back to its idle state, which is what stops
+    // FUN_1405170e0 from walking a list of characters the warp is about to
+    // destroy. Returns the state it found, or -1 when there is nothing to do.
+    int32_t IdleNetSync(const char* Why)
+    {
+        const uintptr_t Sync = NetSync();
+        if (Sync == 0)
+        {
+            Append(StringFormat("sync (%s): nao ha subsistema; nada a fazer\n", Why));
+            return -1;
+        }
+        uint32_t State = 0;
+        if (!ReadBytes(Sync + kSyncState, &State, sizeof(State)))
+        {
+            return -1;
+        }
+        if (State == 0)
+        {
+            Append(StringFormat("sync (%s): ja estava parado\n", Why));
+            return 0;
+        }
+        const uint32_t Zero = 0;
+        WriteBytes(Sync + kSyncState, &Zero, sizeof(Zero));
+        uint32_t After = 0;
+        ReadBytes(Sync + kSyncState, &After, sizeof(After));
+        Append(StringFormat("sync (%s): estado %u -> %u\n", Why, State, After));
+        return (int32_t)State;
+    }
+
+    // The guest's travel: the host's request, the guest's flag.
+    bool TravelAsPhantom(uint16_t Bonfire)
+    {
+        uintptr_t Context = 0, Vftable = 0;
+        if (s_travel_build == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context, Vftable) || Vftable == 0 || MapOfBonfire(Bonfire) == 0xffffffff)
+        {
+            Append("convidado: nao da para viajar (contexto ou fogueira fora da tabela)\n");
+            return false;
+        }
+        uintptr_t Entry = 0;
+        if (!ReadPointer(Vftable + kWarpSlot, Entry) || Entry == 0)
+        {
+            Append("convidado: nao achei a entrada do warp no slot +0x40\n");
+            return false;
+        }
+        uint8_t Request[0x40] = {};
+        s_travel_build(Request, Bonfire, 2);
+        const char Took = ((Warp_p)Entry)((void*)Context, Request, 1);
+        Append(StringFormat("convidado: warp para a fogueira %04x com a flag de outro mundo; o jogo %s\n",
+            (unsigned)Bonfire, Took != 0 ? "aceitou" : "RECUSOU"));
+        if (Took != 0)
+        {
+            s_ghost = GhostTravel();
+            s_ghost.Active = true;
+            s_ghost.Map = MapOfBonfire(Bonfire);
+            s_ghost.Since = GetTickCount64();
+        }
+        return Took != 0;
+    }
+
+    // The host's own travel, started by the game's functions. False when the
+    // bonfire is not in the table.
+    bool StartTravel(uint16_t Bonfire)
+    {
+        uintptr_t Context = 0, Events = 0, Travel = 0;
+        if (s_travel_build == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
+            !ReadPointer(Events + kTravelObject, Travel) || Travel == 0 || MapOfBonfire(Bonfire) == 0xffffffff)
+        {
+            return false;
+        }
+        uint8_t Request[0x40] = {};
+        s_travel_build(Request, Bonfire, 2);
+        int32_t Fields[3] = {};
+        memcpy(&Fields[0], Request + 0x08, 4);
+        memcpy(&Fields[2], Request + 0x18, 4);
+        s_travel_start((void*)Travel, Request);
+        s_record_set((void*)Events, Fields);
+        Append(StringFormat("host: viagem iniciada para a fogueira %04x (mapa %08x, ponto %08x)\n", (unsigned)Bonfire,
+            (uint32_t)Fields[0], (uint32_t)Fields[2]));
+        return true;
+    }
+
+    void Append(const std::string& Text)
+    {
+        std::scoped_lock Lock(s_log_mutex);
+        std::ofstream Stream(s_log_path, std::ios::app);
+        if (Stream)
+        {
+            SYSTEMTIME Now;
+            GetLocalTime(&Now);
+            Stream << StringFormat("%02u:%02u:%02u.%03u  ", Now.wHour, Now.wMinute, Now.wSecond, Now.wMilliseconds) << Text;
+        }
+    }
+
+    uint64_t RestStartHook(void* Manager, int32_t Bonfire)
+    {
+        const uint64_t Started = s_original_rest(Manager, Bonfire);
+        if ((uint8_t)Started != 0 && IsWhitePhantom())
+        {
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::RestStarted, MapOfBonfire((uint16_t)Bonfire), (uint32_t)Bonfire);
+            Append(StringFormat("convidado: descanso na fogueira %08x no mundo do host; aviso ao host\n", (uint32_t)Bonfire));
+        }
+        if ((uint8_t)Started != 0 && OwnsTheWorld())
+        {
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted);
+            Append(StringFormat("host: descanso na fogueira %08x; aviso para a sessao\n", (uint32_t)Bonfire));
+        }
+        return Started;
+    }
+
+    void WorldResetHook()
+    {
+        if (!s_replaying && IsWhitePhantom())
+        {
+            // The host resets its world and the reset comes back to every
+            // guest, this one included: resetting here too would do it twice.
+            Append("convidado: o reinicio do meu descanso fica com o host\n");
+            return;
+        }
+        s_original_reset();
+        if (!s_replaying && OwnsTheWorld())
+        {
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::WorldReset);
+            Append("host: o mundo foi reiniciado pelo descanso; pedido para a sessao\n");
+        }
+    }
+
+    void* FrontEndOrNull()
+    {
+        uintptr_t Context = 0, FrontEnd = 0;
+        if (ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+            ReadPointer(Context + kFrontEnd, FrontEnd) && FrontEnd != 0)
+        {
+            return (void*)FrontEnd;
+        }
+        return nullptr;
+    }
+
+    void OpenQuestion(uint32_t Vote, bool AsHost, const std::wstring& Place, bool GuestProposed)
+    {
+        void* FrontEnd = FrontEndOrNull();
+        if (FrontEnd == nullptr)
+        {
+            if (AsHost)
+            {
+                s_travel.HostAnswered = true;
+                s_travel.HostYes = false;
+            }
+            else
+            {
+                DS2_CoopChannel::SendGuestAnswer(Vote, false);
+            }
+            Append(StringFormat("votacao %u sem frontend; resposta nao\n", Vote));
+            return;
+        }
+        _snwprintf_s(s_question, _TRUNCATE, GuestProposed ? L"A player wants to travel to %ls. Travel together?"
+                                                          : L"The host wants to travel to %ls. Travel together?", Place.c_str());
+        s_open_vote = OpenVote();
+        s_open_vote.Active = true;
+        s_open_vote.Host = AsHost;
+        s_open_vote.Vote = Vote;
+        s_open_vote.Number = s_choice(FrontEnd, s_question, s_text(0, kYesText), s_text(0, kNoText), 1, 1, 1, 1);
+        Append(StringFormat("%s: votacao %u aberta para %s (caixa %d)\n", AsHost ? "host" : "convidado", Vote,
+            Narrow(Place).c_str(), s_open_vote.Number));
+    }
+
+    void TellCanceled(Cancel Why, const wchar_t* Text);
+
+    // Whether a destination can ever fit, before anybody is asked.
+    //
+    // The session's map is the one map that is never released - the game's own
+    // join bindings assume it stays - so its target cost is spent for as long
+    // as the session lives, and at the tightest moment of a travel the only
+    // two maps in are that one and the destination. If those two alone do not
+    // fit, no amount of making room will help.
+    //
+    // This is what killed the host on 19/09. Over Majula (312 targets) every
+    // leg of the route passed for days; the same route with Forest of Fallen
+    // Giants as the session's map (940) has 1898 - 940 = 958 left, and Brume
+    // Tower costs 1126. The travel waited its 25 s, made no room, and loaded
+    // anyway into the game's own `out of memory` trap. A leg that cannot work
+    // is now refused before the vote instead.
+    bool DestinationCanFit(uint32_t Map, uint32_t& Need, uint64_t& Room)
+    {
+        const uint32_t Session = DS2_BonfireInSession_SessionMap();
+        const uint32_t Cost = DS2_Backread::TargetCost(Map);
+        Need = Cost;
+        Room = DS2_Backread::TargetLimit();
+        if (Session == 0 || Session == Map || Cost == 0)
+        {
+            return true;
+        }
+        const uint32_t Held = DS2_Backread::TargetCost(Session);
+        if (Held == 0 || Held >= Room)
+        {
+            return true;
+        }
+        Room -= Held;
+        return Cost <= Room;
+    }
+
+    void BeginVote(void* List, uint64_t Proposer, uint16_t Bonfire, uint32_t Map)
+    {
+        const size_t Guests = DS2_CoopChannel::GuestCount();
+        s_travel = HeldTravel();
+        s_travel.Active = true;
+        s_travel.List = List;
+        s_travel.Proposer = Proposer;
+        s_travel.Bonfire = Bonfire;
+        s_travel.Map = Map;
+        s_travel.HostAnswered = Proposer == 0;   // the host picked: its pick is its yes
+        s_travel.HostYes = Proposer == 0;
+        s_travel.Vote = ++s_vote_counter;
+        s_travel.Guests = Guests;
+        s_travel.Since = GetTickCount64();
+        uint32_t Need = 0;
+        uint64_t Room = 0;
+        if (!DestinationCanFit(Map, Need, Room))
+        {
+            Append(StringFormat("host: votacao %u para o mapa %08x recusada: %u alvos e so cabem %llu ao lado do mapa da sessao %08x\n",
+                s_travel.Vote, Map, Need, (unsigned long long)Room, DS2_BonfireInSession_SessionMap()));
+            TellCanceled(Cancel::NoRoom, L"That place does not fit beside the world this session began in.");
+            s_travel = HeldTravel();
+            return;
+        }
+        const uint32_t Carried = s_travel.Vote | (Proposer != 0 ? 0x80000000u : 0u);
+        DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Map, Carried, (int32_t)Bonfire);
+        const std::wstring Place = PlaceName(Bonfire, Map);
+        Append(StringFormat("host: votacao %u para %s (fogueira %04x, mapa %08x), %s, %zu convidado(s)\n", s_travel.Vote,
+            Narrow(Place).c_str(), (unsigned)Bonfire, Map, Proposer != 0 ? "proposta por um convidado" : "escolhida pelo host", Guests));
+        if (Proposer != 0)
+        {
+            OpenQuestion(s_travel.Vote, true, Place, true);
+        }
+    }
+
+    void TellCanceled(Cancel Why, const wchar_t* Text)
+    {
+        DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, s_travel.Map, (uint32_t)Why, (int32_t)s_travel.Bonfire);
+        ShowMessage(Text);
+    }
+
+    void PickHook(void* List)
+    {
+        if (List == nullptr || !s_votes_ready)
+        {
+            s_original_pick(List);
+            return;
+        }
+        const uint8_t Role = LocalRole();
+        if (Role == kRoleOwner)
+        {
+            if (s_travel.Pass)
+            {
+                s_travel.Pass = false;
+                s_original_pick(List);
+                return;
+            }
+            if (s_travel.Active)
+            {
+                return;   // a vote is running; the pick waits for it
+            }
+            if (DS2_CoopChannel::GuestCount() != 0)
+            {
+                const uint16_t Bonfire = s_travel_bonfire(List);
+                BeginVote(List, 0, Bonfire, MapOfBonfire(Bonfire));
+                return;
+            }
+        }
+        else if (Role == kRoleWhitePhantom)
+        {
+            // A guest's pick never travels by itself: it is a proposal to
+            // the host, who travels if everyone agrees.
+            const ULONGLONG Now = GetTickCount64();
+            if (s_proposal.Active && Now - s_proposal.Since < kVoteTimeoutMs + 5000)
+            {
+                return;
+            }
+            const uint16_t Bonfire = s_travel_bonfire(List);
+            const uint32_t Map = MapOfBonfire(Bonfire);
+            s_proposal = Proposal();
+            s_proposal.Active = true;
+            s_proposal.Bonfire = Bonfire;
+            s_proposal.Since = Now;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelPropose, Map, Bonfire);
+            Append(StringFormat("convidado: proponho viajar para %s (fogueira %04x, mapa %08x)\n", Narrow(PlaceName(Bonfire, Map)).c_str(),
+                (unsigned)Bonfire, Map));
+            return;
+        }
+        s_original_pick(List);
+    }
+
+    // The list the vote was opened from, if it is still what it was: the
+    // bonfire menu open (menu queue state 10) and the object still a travel
+    // list. The host may have backed out while the others answered.
+    bool ListStillOpen(void* List)
+    {
+        uintptr_t Context = 0, Events = 0, Queue = 0, Vftable = 0;
+        uint8_t State[4] = {};
+        if (List == nullptr || !ReadPointer(s_base + kGameGlobal, Context) || Context == 0 ||
+            !ReadPointer(Context + kEventManager, Events) || Events == 0 ||
+            !ReadPointer(Events + kMenuQueue, Queue) || Queue == 0)
+        {
+            return false;
+        }
+        for (size_t i = 0; i < sizeof(State); ++i)
+        {
+            if (!ReadByte(Queue + kQueueState + i, State[i]))
+            {
+                return false;
+            }
+        }
+        int32_t QueueState = 0;
+        memcpy(&QueueState, State, sizeof(QueueState));
+        return QueueState == kQueueBonfireMenu && ReadPointer((uintptr_t)List, Vftable) && Vftable == s_base + kTravelListVftable;
+    }
+
+    void ShowMessage(const wchar_t* Text)
+    {
+        if (void* FrontEnd = FrontEndOrNull())
+        {
+            s_dialog(FrontEnd, Text, s_text(kTitleCategory, kTitleId), 1, 1);
+        }
+    }
+
+    uint64_t SessionUpHook(void* Session)
+    {
+        const uintptr_t Caller = (uintptr_t)_ReturnAddress();
+        const uint64_t Answer = s_original(Session);
+        const uint8_t Role = (uint8_t)Answer != 0 && (Caller == s_base + kRestReturn || Caller == s_base + kQueueReturn) ? LocalRole() : 0xff;
+        if (Role == kRoleOwner || (Role == kRoleWhitePhantom && s_guest_rest_ready))
+        {
+            s_answered.fetch_add(1, std::memory_order_relaxed);
+            return Answer & ~(uint64_t)0xff;
+        }
+        return Answer;
+    }
+
+    bool WriteCode(uintptr_t Address, const uint8_t* From, size_t Length)
+    {
+        DWORD Previous = 0;
+        if (!VirtualProtect((void*)Address, Length, PAGE_EXECUTE_READWRITE, &Previous))
+        {
+            return false;
+        }
+        memcpy((void*)Address, From, Length);
+        FlushInstructionCache(GetCurrentProcess(), (void*)Address, Length);
+        DWORD Ignored = 0;
+        VirtualProtect((void*)Address, Length, Previous, &Ignored);
+        return true;
+    }
+
+    bool Matches(uintptr_t Address, const uint8_t* Expected, size_t Length)
+    {
+        return memcmp((const void*)Address, Expected, Length) == 0;
+    }
+
+#endif
+}
+
+bool DS2_BonfireInSessionHook::Install(Injector& injector)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    const uintptr_t Base = (uintptr_t)injector.GetBaseAddress();
+    if (!Matches(Base + kSessionUpOffset, kSessionUpPrologue, sizeof(kSessionUpPrologue)) ||
+        !Matches(Base + kRestReturn, kRestAfter, sizeof(kRestAfter)) ||
+        !Matches(Base + kQueueReturn, kQueueAfter, sizeof(kQueueAfter)) ||
+        !Matches(Base + kJobBranch, kJobExpected, sizeof(kJobExpected)))
+    {
+        Error("[DS2BonfireInSession] o codigo de uma das tres travas nao e o esperado; nao aplicado");
+        return false;
+    }
+    s_base = Base;
+
+    s_original = (SessionUp_p)(Base + kSessionUpOffset);
+    DetourTransactionBegin();
+    DetourUpdateThread(GetCurrentThread());
+    DetourAttach(&(PVOID&)s_original, SessionUpHook);
+    if (DetourTransactionCommit() != NO_ERROR)
+    {
+        s_original = nullptr;
+        Error("[DS2BonfireInSession] nao consegui instalar o detour");
+        return false;
+    }
+
+    if (!WriteCode(Base + kJobBranch, kJobPatch, sizeof(kJobPatch)))
+    {
+        Error("[DS2BonfireInSession] nao consegui escrever em +0x%zx", (size_t)kJobBranch);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)s_original, SessionUpHook);
+        DetourTransactionCommit();
+        s_original = nullptr;
+        return false;
+    }
+    s_job_patched = true;
+
+    // The guest's half: optional, the rest in session works without it.
+    s_log_path = injector.GetDllPath() / "DS2_Bonfire.log";
+    s_request_path = injector.GetDllPath() / "DS2_Bonfire.req";
+    if (Matches(Base + kRestStartOffset, kRestStartPrologue, sizeof(kRestStartPrologue)) &&
+        Matches(Base + kWorldResetOffset, kWorldResetPrologue, sizeof(kWorldResetPrologue)) &&
+        Matches(Base + kDialogOffset, kDialogPrologue, sizeof(kDialogPrologue)) &&
+        Matches(Base + kTextOffset, kTextPrologue, sizeof(kTextPrologue)))
+    {
+        s_votes_ready = Matches(Base + kChoiceOffset, kChoicePrologue, sizeof(kChoicePrologue)) &&
+            Matches(Base + kClosedOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
+            Matches(Base + kButtonOffset, kByNumberPrologue, sizeof(kByNumberPrologue)) &&
+            Matches(Base + kCloseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
+            Matches(Base + kReleaseOffset, kCloseByNumberPrologue, sizeof(kCloseByNumberPrologue)) &&
+            Matches(Base + kPickOffset, kPickPrologue, sizeof(kPickPrologue)) &&
+            *(const uintptr_t*)(Base + kTravelListVftable + kPickSlot) == Base + kPickOffset &&
+            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue)) &&
+            Matches(Base + kBonfireMapOffset, kBonfireMapPrologue, sizeof(kBonfireMapPrologue)) &&
+            Matches(Base + kBonfireLitOffset, kBonfireLitPrologue, sizeof(kBonfireLitPrologue)) &&
+            Matches(Base + kTravelBuildOffset, kTravelBuildPrologue, sizeof(kTravelBuildPrologue)) &&
+            Matches(Base + kTravelStartOffset, kTravelStartPrologue, sizeof(kTravelStartPrologue)) &&
+            Matches(Base + kRecordSetOffset, kRecordSetPrologue, sizeof(kRecordSetPrologue)) &&
+            Matches(Base + kTravelBonfireOffset, kTravelBonfirePrologue, sizeof(kTravelBonfirePrologue)) &&
+            Matches(Base + kMenuCancelOffset, kMenuCancelPrologue, sizeof(kMenuCancelPrologue));
+        // DS2_TraceHook's esd spy may have detoured it first (a jmp); Detours chains.
+        s_guest_rest_ready = (Matches(Base + kInnerScriptOffset, kInnerScriptPrologue, sizeof(kInnerScriptPrologue)) ||
+                              *(const uint8_t*)(Base + kInnerScriptOffset) == 0xe9) &&
+            Matches(Base + kBonfireIndexOffset, kBonfireIndexPrologue, sizeof(kBonfireIndexPrologue)) &&
+            Matches(Base + kPromptGateBeforeAt, kPromptGateBefore, sizeof(kPromptGateBefore)) &&
+            Matches(Base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected)) &&
+            Matches(Base + kPromptGateAfterAt, kPromptGateAfter, sizeof(kPromptGateAfter)) &&
+            Matches(Base + kPromptGateCallAt, kPromptGateCall, sizeof(kPromptGateCall));
+        s_bonfire_index = (BonfireIndex_p)(Base + kBonfireIndexOffset);
+        s_bonfire_map = (BonfireMap_p)(Base + kBonfireMapOffset);
+        s_bonfire_lit = (BonfireLit_p)(Base + kBonfireLitOffset);
+        // Checked before it is ever called: a function this file pokes into
+        // the game with the wrong bytes under it would be the worst kind of
+        // failure, silent and in another object's memory.
+        s_original_register = Matches(Base + kPresenceRegisterOffset, kPresenceRegisterPrologue, sizeof(kPresenceRegisterPrologue))
+            ? (PresenceRegister_p)(Base + kPresenceRegisterOffset) : nullptr;
+        s_original_net_tick = Matches(Base + kNetTickOffset, kNetTickPrologue, sizeof(kNetTickPrologue))
+            ? (NetTick_p)(Base + kNetTickOffset) : nullptr;
+        s_presence_remove = Matches(Base + kPresenceRemoveOffset, kPresenceRemovePrologue, sizeof(kPresenceRemovePrologue))
+            ? (PresenceRemove_p)(Base + kPresenceRemoveOffset) : nullptr;
+        s_snapshot_export = Matches(Base + kSnapshotExportOffset, kSnapshotExportPrologue, sizeof(kSnapshotExportPrologue))
+            ? (SnapshotExport_p)(Base + kSnapshotExportOffset) : nullptr;
+        s_original_import = Matches(Base + kSnapshotImportOffset, kSnapshotImportPrologue, sizeof(kSnapshotImportPrologue))
+            ? (SnapshotImport_p)(Base + kSnapshotImportOffset) : nullptr;
+        s_travel_build = (TravelBuild_p)(Base + kTravelBuildOffset);
+        s_travel_start = (TravelStart_p)(Base + kTravelStartOffset);
+        s_record_set = (RecordSet_p)(Base + kRecordSetOffset);
+        s_travel_bonfire = (TravelBonfire_p)(Base + kTravelBonfireOffset);
+        s_menu_cancel = (MenuCancel_p)(Base + kMenuCancelOffset);
+        s_curtain = Matches(Base + kCurtainOffset, kCurtainPrologue, sizeof(kCurtainPrologue))
+            ? (Curtain_p)(Base + kCurtainOffset) : nullptr;
+        s_world_loaded = Matches(Base + kWorldLoadedOffset, kWorldLoadedPrologue, sizeof(kWorldLoadedPrologue))
+            ? (WorldLoaded_p)(Base + kWorldLoadedOffset) : nullptr;
+        s_render_busy = Matches(Base + kRenderBusyOffset, kRenderBusyPrologue, sizeof(kRenderBusyPrologue))
+            ? (RenderBusy_p)(Base + kRenderBusyOffset) : nullptr;
+        if (s_world_loaded == nullptr || s_render_busy == nullptr)
+        {
+            Error("[DS2BonfireInSession] o 'mundo carregado' do jogo nao tem o codigo esperado; a cortina desce pelo contato fisico");
+        }
+        if (Matches(Base + kLoadingOpenOffset, kLoadingOpenPrologue, sizeof(kLoadingOpenPrologue)) &&
+            Matches(Base + kLoadingCloseOffset, kLoadingClosePrologue, sizeof(kLoadingClosePrologue)) &&
+            Matches(Base + kHudHideOffset, kHudHidePrologue, sizeof(kHudHidePrologue)) &&
+            Matches(Base + kHudShowOffset, kHudShowPrologue, sizeof(kHudShowPrologue)) &&
+            Matches(Base + kHudDropOffset, kHudDropPrologue, sizeof(kHudDropPrologue)))
+        {
+            s_loading_open = (FrontEndOnly_p)(Base + kLoadingOpenOffset);
+            s_loading_close = (FrontEndOnly_p)(Base + kLoadingCloseOffset);
+            s_hud_hide = (FrontEndMask_p)(Base + kHudHideOffset);
+            s_hud_show = (FrontEndMask_p)(Base + kHudShowOffset);
+            s_hud_drop = (FrontEndOnly_p)(Base + kHudDropOffset);
+        }
+        else
+        {
+            Error("[DS2BonfireInSession] a tela de carregamento do jogo nao tem o codigo esperado; a cortina so desliga o desenho");
+        }
+        if (Matches(Base + kFadeOutOffset, kFadePrologue, sizeof(kFadePrologue)) &&
+            Matches(Base + kFadeInOffset, kFadePrologue, sizeof(kFadePrologue)))
+        {
+            s_fade_out = (Fade_p)(Base + kFadeOutOffset);
+            s_fade_in = (Fade_p)(Base + kFadeInOffset);
+        }
+        else
+        {
+            Error("[DS2BonfireInSession] the game's fade is not the expected code; the travel is not faded to black");
+        }
+        s_original_inner_script = (Script_p)(Base + kInnerScriptOffset);
+        s_original_pick = (Pick_p)(Base + kPickOffset);
+        s_choice = (Choice_p)(Base + kChoiceOffset);
+        s_closed = (ByNumber_p)(Base + kClosedOffset);
+        s_button = (ByNumber_p)(Base + kButtonOffset);
+        s_close = (CloseByNumber_p)(Base + kCloseOffset);
+        s_release = (CloseByNumber_p)(Base + kReleaseOffset);
+        s_original_rest = (RestStart_p)(Base + kRestStartOffset);
+        s_original_reset = (WorldReset_p)(Base + kWorldResetOffset);
+        s_dialog = (Dialog_p)(Base + kDialogOffset);
+        s_text = (Text_p)(Base + kTextOffset);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(&(PVOID&)s_original_rest, RestStartHook);
+        DetourAttach(&(PVOID&)s_original_reset, WorldResetHook);
+        if (s_original_net_tick != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_net_tick, NetTickHook);
+        }
+        if (s_original_register != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_register, PresenceRegisterHook);
+        }
+        if (s_original_import != nullptr)
+        {
+            DetourAttach(&(PVOID&)s_original_import, SnapshotImportHook);
+        }
+        if (s_votes_ready)
+        {
+            DetourAttach(&(PVOID&)s_original_pick, PickHook);
+        }
+        if (s_guest_rest_ready)
+        {
+            DetourAttach(&(PVOID&)s_original_inner_script, InnerScriptHook);
+        }
+        if (DetourTransactionCommit() == NO_ERROR)
+        {
+            s_events_ready.store(true);
+            Append(StringFormat("=== ds2os fogueira em sessao: descanso, reinicio do mundo, aviso, votacao de viagem (%s), descanso do convidado (%s) ===\n",
+                s_votes_ready ? "pronta" : "codigo inesperado", s_guest_rest_ready ? "pronto" : "codigo inesperado"));
+            Append(StringFormat("=== batida da rede (FUN_140514020) %s ===\n",
+                s_original_net_tick != nullptr ? "enganchada; posso silenciar na viagem" : "codigo inesperado; nao vou enganchar"));
+            Append(StringFormat("=== registro de presenca (FUN_14051b0e0) %s ===\n",
+                s_original_register != nullptr ? "enganchado; guardo o blob e posso recriar" : "codigo inesperado"));
+            Append(StringFormat("=== mundo do host de novo: export (FUN_1402bf8f0) %s, import (FUN_1402c2fa0) %s ===\n",
+                s_snapshot_export != nullptr ? "pronto" : "codigo inesperado",
+                s_original_import != nullptr ? "enganchado" : "codigo inesperado"));
+            Append(StringFormat("=== retirada de presenca (FUN_14051c820) %s ===\n",
+                s_presence_remove != nullptr ? "pronta" : "codigo inesperado; nao vou chamar"));
+        }
+        else
+        {
+            s_original_rest = nullptr;
+            s_original_reset = nullptr;
+            Error("[DS2BonfireInSession] nao consegui instalar o aviso e o reinicio do convidado");
+        }
+    }
+    else
+    {
+        Error("[DS2BonfireInSession] o codigo do descanso, do reinicio ou da caixa de mensagem nao e o esperado; so o host descansa");
+    }
+    Log("[DS2BonfireInSession] o dono do mundo descansa em fogueira com a sessao de pe");
+#endif
+    return true;
+}
+
+namespace
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // Every change of the object sync, written down: state, record count, the
+    // map it is bound to and the block its first record points at. The drop in
+    // ForgetSyncedMap stopped one writer; what is left crashes on the second
+    // return to the map the session began in, and whether a rebuild happened
+    // first - on which machine, bound to which table - is the question this
+    // answers. A rebuild whose first block is the same address as the one bound
+    // at the join is a rebuild against freed memory.
+    uint32_t s_seen_state = 0xffffffff, s_seen_count = 0xffffffff, s_seen_map = 0xffffffff;
+    uintptr_t s_seen_block = ~(uintptr_t)0;
+
+    void WatchObjectSync()
+    {
+        const uintptr_t Sync = NetSync();
+        uint32_t State = 0, Count = 0, Map = 0;
+        uintptr_t Records = 0, Block = 0;
+        if (Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+            !ReadBytes(Sync + kSyncCount, &Count, sizeof(Count)) || !ReadBytes(Sync + kSyncMap, &Map, sizeof(Map)))
+        {
+            return;
+        }
+        if (ReadPointer(Sync + kSyncRecords, Records) && Records != 0 && Count != 0)
+        {
+            ReadPointer(Records + 0x10, Block);
+        }
+        if (State == s_seen_state && Count == s_seen_count && Map == s_seen_map && Block == s_seen_block)
+        {
+            return;
+        }
+        uint8_t Gate = 0;
+        ReadBytes(Sync + kSyncGuestGate, &Gate, sizeof(Gate));
+        Append(StringFormat("object sync: state %u count %u map %08x first block %p gate %u\n", State, Count, Map,
+            (void*)Block, (unsigned)Gate));
+        s_seen_state = State;
+        s_seen_count = Count;
+        s_seen_map = Map;
+        s_seen_block = Block;
+    }
+#endif
+}
+
+bool DS2_BonfireInSession_IsSessionMap(uint32_t Map)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // The enemy sync is bound (state 1 on a host, 2 on a guest) to the map the
+    // session began in; that binding is the session's map.
+    const uintptr_t Sync = NetSync();
+    uint32_t State = 0, Bound = 0;
+    if (Map == 0 || Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+        !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)))
+    {
+        return false;
+    }
+    return (State == 1 || State == 2) && Bound == Map;
+#else
+    return false;
+#endif
+}
+
+bool DS2_BonfireInSession_RepointSessionMap(uint32_t NewMap, uint32_t Expected)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    const uintptr_t Session = (uintptr_t)DS2_RespawnInSession_PlayingSession();
+    uintptr_t Vftable = 0;
+    if (NewMap == 0 || Session == 0 || !ReadPointer(Session, Vftable) ||
+        Vftable != s_base + kJoinCtrlVftable)
+    {
+        // A host's holder reads 0 here and there is nothing to repoint: the
+        // staleness this fixes is the guest's alone.
+        return false;
+    }
+
+    uint32_t Before = 0;
+    uint8_t Home[kJoinHomeBytes] = {};
+    if (!ReadBytes(Session + kJoinMap, &Before, sizeof(Before)) ||
+        !ReadBytes(Session + kJoinHome, Home, sizeof(Home)))
+    {
+        return false;
+    }
+    if (Before == NewMap)
+    {
+        return true;
+    }
+    // The same rule a .text patch follows: refuse on a value that is not the
+    // one this was measured against, rather than write over something else.
+    if (Expected != 0 && Before != Expected)
+    {
+        Append(StringFormat("convidado: nao repontei o mapa da sessao; +0x19c vale %08x e eu esperava %08x\n",
+            Before, Expected));
+        return false;
+    }
+
+    memcpy((void*)(Session + kJoinMap), &NewMap, sizeof(NewMap));
+
+    uint32_t After = 0;
+    uint8_t HomeAfter[kJoinHomeBytes] = {};
+    const bool ReadBack = ReadBytes(Session + kJoinMap, &After, sizeof(After)) &&
+        ReadBytes(Session + kJoinHome, HomeAfter, sizeof(HomeAfter));
+    const bool HomeKept = ReadBack && memcmp(Home, HomeAfter, sizeof(Home)) == 0;
+    if (!HomeKept)
+    {
+        // Four bytes cannot reach the block next door, so this can only mean
+        // the write was not four bytes or somebody else moved it in between.
+        // Either way the guest's way home is worth more than the repoint.
+        memcpy((void*)(Session + kJoinHome), Home, sizeof(Home));
+        Append(StringFormat("convidado: o caminho de volta MUDOU ao repontar o mapa da sessao; devolvi e desisti\n"));
+        memcpy((void*)(Session + kJoinMap), &Before, sizeof(Before));
+        return false;
+    }
+    uint32_t HomeMap = 0;
+    memcpy(&HomeMap, Home, sizeof(HomeMap));
+    Append(StringFormat("convidado: mapa da sessao repontado %08x -> %08x (lido de volta %08x); volta para %08x intacta\n",
+        Before, NewMap, After, HomeMap));
+    return After == NewMap;
+#else
+    (void)NewMap;
+    (void)Expected;
+    return false;
+#endif
+}
+
+uint32_t DS2_BonfireInSession_SessionMap()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    const uintptr_t Sync = NetSync();
+    uint32_t State = 0, Bound = 0;
+    if (Sync == 0 || !ReadBytes(Sync + kSyncState, &State, sizeof(State)) ||
+        !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)) || (State != 1 && State != 2))
+    {
+        return 0;
+    }
+    return Bound;
+#else
+    return 0;
+#endif
+}
+
+void DS2_BonfireInSession_ForgetSyncedMap(uint32_t Map)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    // The object sync binds to the world's primary map once, when the guest
+    // loads in (FUN_140517880 walks that map's table of 0xa0-byte object blocks
+    // and writes the record count at +0xc), and nothing but a real load binds
+    // it again. Travel here is not a real load, so on the guest the sync stays
+    // bound to the map the session began in for as long as the session lasts.
+    //
+    // When the backread lets that map go, its heap goes with it, and the host's
+    // object packets keep arriving: FUN_140518920 finds each record by index,
+    // checks only that the index is below the count, and writes the update
+    // into the block the record points at. Measured 18/09, reading the guest's
+    // records live: 56 of them, unchanged after the travel and after the
+    // release, and the first eight bytes of several blocks were exactly the
+    // "vftables" of the crashes - 0000002e00290c00, 0000007e023dcd02. The
+    // blocks had become MapEntities, and the sync was writing into them.
+    //
+    // A count of zero makes the packet handler skip every record. It is
+    // written as the release begins, which is at least 700 ms before the map's
+    // memory is actually handed back.
+    const uintptr_t Sync = NetSync();
+    uint32_t Bound = 0, Count = 0;
+    if (Sync == 0 || !ReadBytes(Sync + kSyncMap, &Bound, sizeof(Bound)) ||
+        !ReadBytes(Sync + kSyncCount, &Count, sizeof(Count)))
+    {
+        return;
+    }
+    if (Bound != Map || Count == 0)
+    {
+        return;
+    }
+    const uint32_t Zero = 0;
+    WriteBytes(Sync + kSyncCount, &Zero, sizeof(Zero));
+
+    // And it must not bind itself again. On a guest, state 0 rebuilds the sync
+    // (FUN_140517880) as soon as the world says it is loaded and the byte at
+    // +0x198 is set, and the rebuild asks for the object table of the session's
+    // map - the one being released here. Measured 18/09 with only the count
+    // dropped: the sync read state 0 after the crash, and the guest died about
+    // a second after the first return to Majula, with the rebuild's own stores
+    // into the object blocks in the shape of the damage. Closing the gate keeps
+    // the sync empty for the rest of the session; the cost is that the host's
+    // object state stops reaching this guest, which is written down in
+    // docs/DS2_SEAMLESS_COOP_TASKS.md.
+    uint8_t Gate = 0;
+    ReadBytes(Sync + kSyncGuestGate, &Gate, sizeof(Gate));
+    const uint8_t Closed = 0;
+    WriteBytes(Sync + kSyncGuestGate, &Closed, sizeof(Closed));
+    Append(StringFormat("object sync: map %08x is going and the sync was bound to it; dropped its %u records "
+        "and closed the rebuild gate (was %u)\n", Map, Count, (unsigned)Gate));
+#endif
+}
+
+void DS2_BonfireInSession_IdleNetSync(const char* Why)
+{
+#if defined(_WIN32) && defined(_M_X64)
+    if (s_events_ready.load())
+    {
+        IdleNetSync(Why);
+    }
+#else
+    (void)Why;
+#endif
+}
+
+void DS2_BonfireInSession_Tick()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    if (!s_events_ready.load())
+    {
+        return;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    DS2_CoopChannel::Bonfire Said;
+
+    // The bonfire prompt's guest gate is open exactly while this player is a
+    // white phantom; each write checks the bytes it replaces.
+    if (s_guest_rest_ready && !s_prompt_gate_broken)
+    {
+        const bool Want = IsWhitePhantom();
+        if (Want != s_prompt_patched)
+        {
+            const uint8_t* From = Want ? kPromptGateExpected : kPromptGatePatch;
+            const uint8_t* To = Want ? kPromptGatePatch : kPromptGateExpected;
+            if (Matches(s_base + kPromptGate, From, sizeof(kPromptGateExpected)) &&
+                WriteCode(s_base + kPromptGate, To, sizeof(kPromptGateExpected)))
+            {
+                s_prompt_patched = Want;
+                Append(Want ? "convidado: a trava do 'Rest at bonfire' para convidados foi aberta\n"
+                            : "a trava do 'Rest at bonfire' para convidados foi restaurada\n");
+            }
+            else
+            {
+                s_prompt_gate_broken = true;
+                Append("a trava do 'Rest at bonfire' nao tem os bytes esperados; o convidado nao descansa\n");
+            }
+        }
+    }
+
+    // The old transport tears the map's characters down just as the warp
+    // does - the player leaves the map behind - but it never went through
+    // the net silence, which is what puts the character sync back to idle.
+    // So the sync kept walking the map that was left: measured 17/09, 18:34,
+    // the guest died at +0x517843 on the net thread with the sync object in
+    // r13 and the origin map id in rdx, three seconds after arriving by a
+    // plain `ir` with no vote anywhere near it.
+    //
+    // Right here is the moment that matters, and the warp path learned it the
+    // expensive way: written early the state machine restores it before the
+    // travel, so it has to be the instant the move ends.
+    //
+    // Not any more, and on purpose: state 0 is not "stop", it is "rebuild",
+    // and the rebuild (FUN_140517880) binds the sync to the table of objects
+    // the world still calls its primary map. After a travel that is not a
+    // real load, that table belongs to the map the session began in, and once
+    // that map has been released it is freed memory. Measured 18/09: the
+    // records were dropped as Majula went (ForgetSyncedMap), the state-0 write
+    // at the end of the next travel brought all 56 back, pointing at the old
+    // blocks, and 0.7 s later the guest died with the writer's 0x528 in a
+    // pointer. The sync is left alone here now.
+    s_was_moving = DS2_DeathIntercept::Moving();
+
+    WatchObjectSync();
+
+    KeepJobPatch(Now);
+    KeepCurtain(Now);
+
+    // The host calls the guests the moment its own arrival is **physical**,
+    // and never on a timer: the old code treated "stopped moving" as arrived,
+    // and on 16/09 at 05:23 that sent the guests into a map the host had given
+    // up loading thirty seconds earlier.
+    if (s_call.Active)
+    {
+        const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
+        const bool Done = !s_go.Active;
+        if (Done && Outcome == DS2_DeathIntercept::Outcome::Arrived)
+        {
+            s_call.Active = false;
+            s_barrier.HostArrived = true;
+            SetRecord(s_call.Bonfire);
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelGo, s_call.Map, s_call.Bonfire,
+                (int32_t)s_barrier.Vote);
+            Append(StringFormat("host: cheguei na fogueira %04x em %llu ms; os convidados podem vir (votacao %u)\n",
+                (unsigned)s_call.Bonfire, (unsigned long long)(Now - s_call.Since), s_barrier.Vote));
+        }
+        else if ((Done && Outcome == DS2_DeathIntercept::Outcome::Failed) || Now - s_call.Since > kCallGiveUpMs)
+        {
+            s_call.Active = false;
+            s_barrier.Active = false;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, s_barrier.Map,
+                (uint32_t)Cancel::Stuck, (int32_t)s_barrier.Bonfire);
+            ShowMessage(kTravelStuck);
+            Append(StringFormat("host: nao cheguei na fogueira %04x (%s); ninguem viaja e a tela desce\n",
+                (unsigned)s_call.Bonfire,
+                Outcome == DS2_DeathIntercept::Outcome::Failed ? "a viagem falhou" : "tempo esgotado"));
+        }
+    }
+
+    // The receipts of the group, and the one message that lets everybody out.
+    //
+    // The channel keeps **one** receipt per kind, overwriting, so with three or
+    // more players a receipt could be lost and the group would leave on the
+    // wait running out instead of on the last arrival. Two Steam accounts is
+    // all this machine can test (docs/DS2_TO_VALIDATE.md), so this is written
+    // down rather than solved.
+    // A guest that reloaded its map wants the host's world again; the host
+    // answers from its own tick. On a guest the wait has an end.
+    {
+        DS2_CoopChannel::Bonfire Asked;
+        // A guest is about to warp: this machine's copy of it goes out before
+        // the warp destroys it, and goes back when that guest is in.
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Asked))
+        {
+            if (OwnsTheWorld())
+            {
+                Append(StringFormat("host: o convidado %016llx nao alcanca o mapa %08x e vai de warp; retiro a presenca\n",
+                    (unsigned long long)Asked.From, Asked.Map));
+                RemovePresences("um convidado vai de warp");
+                s_barrier.HadWarp = true;
+            }
+        }
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::SnapshotPlease, Asked))
+        {
+            if (OwnsTheWorld())
+            {
+                Append(StringFormat("host: o convidado %016llx pediu o mundo de novo (mapa %08x)\n",
+                    (unsigned long long)Asked.From, Asked.Map));
+                ExportSnapshot("pedido do convidado");
+                // The guest rebuilds its own presence a few seconds from now;
+                // this side does the same, so the two registries match again.
+                s_host_rebuild.Active = true;
+                s_host_rebuild.At = Now + kGhostRebuildMs;
+            }
+        }
+        if (s_host_rebuild.Active && Now >= s_host_rebuild.At)
+        {
+            s_host_rebuild.Active = false;
+            RebuildPresence("o convidado chegou de warp");
+        }
+        const ULONGLONG Until = s_reimport_until.load();
+        if (Until != 0 && Now > Until)
+        {
+            s_reimport_until.store(0);
+            Append("convidado: o mundo do host nao chegou a tempo; deixo de esperar o import\n");
+        }
+        // The phantom warp landed: standing in the destination with a
+        // character for a moment, the host's world is asked for by itself.
+        if (s_ghost.Active)
+        {
+            uintptr_t Context = 0, Character = 0;
+            const bool There = AreaMap() == s_ghost.Map && ReadPointer(s_base + kGameGlobal, Context) && Context != 0 &&
+                ReadPointer(Context + kLocalCharacter, Character) && Character != 0;
+            if (!There)
+            {
+                s_ghost.SeenAt = 0;
+            }
+            else if (s_ghost.SeenAt == 0)
+            {
+                s_ghost.SeenAt = Now;
+            }
+            else if (!s_ghost.Asked && Now - s_ghost.SeenAt >= kGhostSettleMs)
+            {
+                s_ghost.Asked = true;
+                s_ghost.AskedAt = Now;
+                Append(StringFormat("convidado: o warp de fantasma chegou ao mapa %08x em %llu ms\n", s_ghost.Map,
+                    (unsigned long long)(Now - s_ghost.Since)));
+                AskSnapshot("chegada do warp de fantasma");
+            }
+            // The world is back (the import cleared the wait, or it ran out):
+            // the presence goes back and the host is told this machine is in.
+            else if (s_ghost.Asked && s_reimport_until.load() == 0 && Now - s_ghost.AskedAt >= kGhostRebuildMs)
+            {
+                s_ghost.Active = false;
+                RebuildPresence("chegada do warp de fantasma");
+                if (s_ghost.Vote != 0)
+                {
+                    s_await.Reported = true;
+                    DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, 0, s_ghost.Vote);
+                    Append(StringFormat("convidado: cheguei de warp (votacao %u); espero o resto do grupo\n", s_ghost.Vote));
+                }
+            }
+            if (s_ghost.Active && Now - s_ghost.Since > kWatchNativeMs)
+            {
+                s_ghost.Active = false;
+                Append(StringFormat("convidado: o warp de fantasma nao chegou ao mapa %08x em %u ms; nao peco o mundo\n",
+                    s_ghost.Map, kWatchNativeMs));
+                if (s_ghost.Vote != 0 && !s_await.Reported)
+                {
+                    s_await.Reported = true;
+                    s_await.Failed = true;
+                    DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, s_ghost.Vote);
+                }
+            }
+        }
+    }
+
+    if (s_barrier.Active)
+    {
+        DS2_CoopChannel::Bonfire Got;
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, Got))
+        {
+            if (Got.Id == s_barrier.Vote && NoteReporter(Got.From))
+            {
+                Append(StringFormat("host: o convidado %016llx chegou (votacao %u): %zu de %zu\n",
+                    (unsigned long long)Got.From, s_barrier.Vote, s_barrier.ReporterCount, s_barrier.Guests));
+            }
+        }
+        while (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, Got))
+        {
+            if (Got.Id == s_barrier.Vote && NoteReporter(Got.From))
+            {
+                s_barrier.Incomplete = true;
+                Append(StringFormat("host: o convidado %016llx nao conseguiu chegar (votacao %u)\n",
+                    (unsigned long long)Got.From, s_barrier.Vote));
+            }
+        }
+        const bool Everyone = s_barrier.HostArrived && s_barrier.ReporterCount >= s_barrier.Guests;
+        const bool RanOut = Now - s_barrier.Since >
+            (s_barrier.HadWarp ? kBarrierWarpGiveUpMs : kBarrierGiveUpMs);
+        if (Everyone || RanOut)
+        {
+            const bool Whole = Everyone && !s_barrier.Incomplete;
+            s_barrier.Active = false;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelRelease, s_barrier.Map,
+                s_barrier.Vote, Whole ? 1 : 0);
+            Append(StringFormat("host: %s em %llu ms; todo mundo sai da tela de carregamento junto\n",
+                Whole ? "o grupo inteiro chegou" : "a espera acabou sem todos", (unsigned long long)(Now - s_barrier.Since)));
+        }
+    }
+
+    if (s_go.Active && Now >= s_go.At && ScreenBlack(Now))
+    {
+        s_go.Active = false;
+        DS2_DeathIntercept::GoToBonfire(s_go.Map, s_go.Bonfire);
+        Append(StringFormat("indo para a fogueira %04x (mapa %08x) sem warp e sem sair da sessao\n",
+            (unsigned)s_go.Bonfire, s_go.Map));
+    }
+
+    // `DS2_Bonfire.req`: `ir <map hex> <bonfire hex>` takes this machine's
+    // player to that bonfire the way a travel does, with no session and no
+    // vote - the control for a travel that closed the game. `votar <map hex>
+    // <bonfire hex>` on the host starts the vote itself, without the travel
+    // list, so the whole road (vote, host first, guests called) can be
+    // measured from the request file.
+    if (Now - s_request_tick >= 500)
+    {
+        s_request_tick = Now;
+        std::error_code Error;
+        if (!s_request_path.empty() && std::filesystem::exists(s_request_path, Error))
+        {
+            std::ifstream Stream(s_request_path);
+            std::string Line;
+            while (std::getline(Stream, Line))
+            {
+                unsigned Map = 0, Bonfire = 0;
+                if (Line.rfind("junta", 0) == 0)
+                {
+                    s_together = Line.find("liga") != std::string::npos && Line.find("desliga") == std::string::npos;
+                    Append(StringFormat("pedido: viagem junta (sem sair da sessao) %s\n", s_together ? "ligada" : "desligada"));
+                }
+                else if (sscanf_s(Line.c_str(), "ir %x %x", &Map, &Bonfire) == 2)
+                {
+                    Append(StringFormat("pedido: ir para a fogueira %04x do mapa %08x (alcancavel: %s)\n", Bonfire, Map,
+                        DS2_DeathIntercept::MapReachable(Map) ? "sim" : "nao"));
+                    StartGo(Map, (uint16_t)Bonfire);
+                }
+                else if (Line.rfind("sync", 0) == 0)
+                {
+                    // `sync` writes the net sync down; `sync para` puts it in
+                    // its idle state, which is the experiment: does the host
+                    // survive a native travel once this list stops being
+                    // walked?
+                    if (Line.find("para") != std::string::npos)
+                    {
+                        ReportNetSync("antes de parar");
+                        IdleNetSync("pedido");
+                    }
+                    else
+                    {
+                        ReportNetSync("pedido");
+                    }
+                }
+                else if (Line.rfind("presenca", 0) == 0)
+                {
+                    // `presenca` writes the registry down; `presenca retira`
+                    // asks every living copy to go. Apart on purpose: reading
+                    // costs nothing and is how the removal is checked.
+                    if (Line.find("recria") != std::string::npos)
+                    {
+                        ReportPresences("antes de recriar");
+                        RebuildPresence("pedido");
+                    }
+                    else if (Line.find("retira") != std::string::npos)
+                    {
+                        ReportPresences("antes de retirar");
+                        const int Asked = RemovePresences("pedido");
+                        Append(StringFormat("pedido: presencas, %d retirada(s) pedida(s)\n", Asked));
+                    }
+                    else
+                    {
+                        ReportPresences("pedido");
+                    }
+                }
+                else if (Line.rfind("snapshot", 0) == 0)
+                {
+                    // `snapshot`: the host exports its world again; a guest
+                    // asks the host for it and lets the import through.
+                    if (OwnsTheWorld())
+                    {
+                        ExportSnapshot("pedido");
+                    }
+                    else
+                    {
+                        AskSnapshot("pedido");
+                    }
+                }
+                else if (sscanf_s(Line.c_str(), "fantasma %x %x", &Map, &Bonfire) == 2)
+                {
+                    // The net silence was made for the host's warp, which is
+                    // what brings the session down. On the guest it may not
+                    // be needed - and it may be harmful: on 17/09 the guest
+                    // died at +0x2f0987 during its own load, on a **worker
+                    // thread** (360, not the game's 364), where neither the
+                    // silence nor the guards reach. `sem-silencio` allows
+                    // both cases to be measured without another build.
+                    const bool Quiet = Line.find("sem-silencio") == std::string::npos;
+                    DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma");
+                    ReportNetSync("antes da viagem de fantasma");
+                    if (Quiet)
+                    {
+                        QuietNet("viagem de fantasma");
+                    }
+                    else
+                    {
+                        Append("rede: a pedido, NAO vou calar a batida nesta viagem\n");
+                    }
+                    const bool Went = TravelAsPhantom((uint16_t)Bonfire);
+                    Append(StringFormat("pedido: viagem de fantasma para a fogueira %04x do mapa %08x: %s\n",
+                        Bonfire, Map, Went ? "iniciada" : "recusada"));
+                }
+                else if (sscanf_s(Line.c_str(), "nativo %x %x", &Map, &Bonfire) == 2)
+                {
+                    // The host's own travel, by the game's own chain, with the
+                    // session **left alone**: no TravelLeave, the guests stay.
+                    //
+                    // This has no other caller on purpose. The fallback path
+                    // also ends in StartTravel, but it sends the guests out of
+                    // the session first, so it can never answer the question
+                    // phase 2 of DS2_NATIVE_TRAVEL_PLAN.md asks - whether the
+                    // host can warp natively while a session is live. Measured
+                    // 16/09 by the fallback: the host arrives, and the host
+                    // controller object is gone by then, because the session
+                    // ended before the warp, not because of it.
+                    //
+                    // Phase 1 is what makes this worth trying: ctrl+0x30 read
+                    // 1 in a live session, and the branch of FUN_1402bd0d0
+                    // case 2 that ends the session needs it >= 5 (or 0, which
+                    // wraps). So the warp should leave the session standing.
+                    const bool Owner = OwnsTheWorld();
+                    // The travel watch's window is what runs the sweep of the
+                    // entity component lists. The native path never opened it,
+                    // so the whole net of guards was bypassed - which is how a
+                    // dead node survived a travel on 17/09 and killed the host
+                    // four minutes later. Three minutes, because the crash was
+                    // delayed and a short window proves nothing.
+                    DS2_TravelWatch::Open(kWatchNativeMs, "viagem nativa");
+                    ReportPresences("antes da viagem nativa");
+                    ReportNetSync("antes da viagem nativa");
+                    QuietNet("viagem nativa");
+                    const bool Went = StartTravel((uint16_t)Bonfire);
+                    Append(StringFormat("pedido: viagem nativa para a fogueira %04x do mapa %08x sem tocar na sessao (dono do mundo: %s); %s\n",
+                        Bonfire, Map, Owner ? "sim" : "nao",
+                        Went ? "iniciada" : "a fogueira nao esta na tabela"));
+                }
+                else if (Line.rfind("sincronia", 0) == 0)
+                {
+                    // M8 6b steps 2 and 9 by hand, the pair. Nothing calls
+                    // either outside the teardown yet, and the question step 9
+                    // actually has to answer is what arming does and does not
+                    // do: FUN_140517040 writes the armed byte and clears the
+                    // gate, and nothing in it binds. Which map the records
+                    // come back for has to be watched, not assumed.
+                    const bool Guest = DS2_RespawnInSession_PlayingSession() != nullptr;
+                    Append(StringFormat("pedido: sincronia, antes: %s\n", DS2_EnemySync::Describe().c_str()));
+                    if (Line.find("desligar") != std::string::npos)
+                    {
+                        DS2_EnemySync::Unbind("pedido pela bancada");
+                    }
+                    else if (Line.find("armar") != std::string::npos)
+                    {
+                        DS2_EnemySync::Rearm(Guest, "pedido pela bancada");
+                    }
+                    Append(StringFormat("pedido: sincronia, depois: %s\n", DS2_EnemySync::Describe().c_str()));
+                }
+                else if (sscanf_s(Line.c_str(), "repontar %x", &Map) == 1)
+                {
+                    // M8 6b step 7, by hand. Nothing calls the repoint yet -
+                    // step 6 is what will - and an operation nobody calls is
+                    // an operation nobody has checked. This is how it gets
+                    // exercised on the bench, on a live session, without
+                    // arming any of the release.
+                    Append(StringFormat("pedido: repontar o mapa da sessao para %08x\n", Map));
+                    DS2_BonfireInSession_RepointSessionMap(Map, 0);
+                }
+                else if (sscanf_s(Line.c_str(), "votar %x %x", &Map, &Bonfire) == 2)
+                {
+                    // The host starts the vote as if it had picked that bonfire
+                    // in its travel list, with no list open: what the vote
+                    // does after a yes from everyone is the same.
+                    if (!OwnsTheWorld() || !s_votes_ready)
+                    {
+                        Append("pedido: votar, mas este jogador nao e o dono do mundo (ou a votacao nao esta pronta)\n");
+                    }
+                    else if (s_travel.Active)
+                    {
+                        Append("pedido: votar, mas ja ha uma votacao em andamento\n");
+                    }
+                    else
+                    {
+                        Append(StringFormat("pedido: votacao para a fogueira %04x do mapa %08x\n", Bonfire, Map));
+                        BeginVote(nullptr, 0, (uint16_t)Bonfire, Map);
+                    }
+                }
+            }
+            Stream.close();
+            std::filesystem::remove(s_request_path, Error);
+        }
+    }
+
+    if (Now - s_lit_tick >= kLitEveryMs)
+    {
+        s_lit_tick = Now;
+        if (OwnsTheWorld())
+        {
+            PublishLitBonfires();
+        }
+        else if (IsWhitePhantom())
+        {
+            ApplyHostLitBonfires();
+        }
+    }
+
+    if (OwnsTheWorld())
+    {
+        if (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::RestStarted, Said))
+        {
+            const uint32_t Low = (uint32_t)Said.From;
+            DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said.Map, Said.Id, (int32_t)Low);
+            Append(StringFormat("host: o convidado %016llx descansou na fogueira %04x; reinicio o mundo para todos\n",
+                (unsigned long long)Said.From, Said.Id));
+            WorldResetHook();
+        }
+        if (DS2_CoopChannel::TakeGuestEvent(DS2_CoopChannel::GuestEvent::TravelPropose, Said))
+        {
+            const uint16_t Bonfire = (uint16_t)Said.Id;
+            const uint32_t Map = MapOfBonfire(Bonfire);
+            if (s_travel.Active)
+            {
+                const HeldTravel Running = s_travel;
+                s_travel.Map = Said.Map;
+                s_travel.Bonfire = Bonfire;
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said.Map, (uint32_t)Cancel::Busy, (int32_t)Bonfire);
+                s_travel.Map = Running.Map;
+                s_travel.Bonfire = Running.Bonfire;
+                Append(StringFormat("host: proposta de %016llx recusada: votacao %u em andamento\n", (unsigned long long)Said.From, s_travel.Vote));
+            }
+            else if (!HostHasLit(Bonfire) || Map == 0xffffffff)
+            {
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said.Map, (uint32_t)Cancel::NotLit, (int32_t)Bonfire);
+                Append(StringFormat("host: proposta de %016llx recusada: a fogueira %04x nao esta acesa no meu mundo\n",
+                    (unsigned long long)Said.From, (unsigned)Bonfire));
+            }
+            else
+            {
+                BeginVote(nullptr, Said.From, Bonfire, Map);
+            }
+        }
+    }
+
+    if (s_travel.Active)
+    {
+        size_t Yes = 0, No = 0;
+        DS2_CoopChannel::GuestAnswers(s_travel.Vote, Yes, No);
+        const size_t Guests = DS2_CoopChannel::GuestCount();
+        if (No > 0 || (s_travel.HostAnswered && !s_travel.HostYes))
+        {
+            s_travel.Active = false;
+            TellCanceled(Cancel::Declined, kTravelDeclined);
+            Append(StringFormat("host: votacao %u recusada (%zu sim, %zu nao, host %s); viagem cancelada\n", s_travel.Vote, Yes, No,
+                s_travel.HostYes ? "sim" : "nao"));
+        }
+        else if (s_travel.Leaving)
+        {
+            if (Guests != 0)
+            {
+                s_travel.GuestsGone = 0;
+                if (Now - s_travel.LeaveSince > kLeaveGiveUpMs)
+                {
+                    s_travel.Active = false;
+                    TellCanceled(Cancel::Stuck, kTravelStuck);
+                    Append(StringFormat("host: votacao %u: %zu convidado(s) ainda na sessao depois de %llu ms; viagem cancelada\n",
+                        s_travel.Vote, Guests, (unsigned long long)(Now - s_travel.LeaveSince)));
+                }
+            }
+            else if (s_travel.GuestsGone == 0)
+            {
+                s_travel.GuestsGone = Now;
+            }
+            else if (Now - s_travel.GuestsGone >= kLeaveSettleMs)
+            {
+                s_travel.Active = false;
+                const bool Open = s_travel.Proposer == 0 && ListStillOpen(s_travel.List);
+                Append(StringFormat("host: convidados fora da sessao em %llu ms; %s\n",
+                    (unsigned long long)(s_travel.GuestsGone - s_travel.LeaveSince),
+                    Open ? "a escolha na lista segue" : "a viagem comeca por aqui"));
+                if (Open)
+                {
+                    s_travel.Pass = true;
+                    PickHook(s_travel.List);
+                }
+                else if (!StartTravel(s_travel.Bonfire))
+                {
+                    ShowMessage(kTravelStuck);
+                    Append(StringFormat("host: a fogueira %04x nao esta na tabela; nao viajei\n", (unsigned)s_travel.Bonfire));
+                }
+            }
+        }
+        else if (s_travel.HostAnswered && (Guests == 0 || Yes >= Guests))
+        {
+            // Everyone goes to the bonfire on its own machine, without a
+            // warp and without leaving the session; the old way - guests out
+            // of the session, the host's own travel, the party putting them
+            // back together a minute later - is what is left when the map
+            // cannot be brought in beside this one.
+            const bool Together = s_together && DS2_DeathIntercept::MapReachable(s_travel.Map);
+            if (Together)
+            {
+                s_travel.Active = false;
+                // The respawn record is written **after** the host lands, not
+                // here. Writing it first means calling the game's own travel
+                // request builder (FUN_1401843b0) before the move, and with
+                // that done the backread never brings the destination in: the
+                // owner sits at state 0 for the full thirty seconds. Measured
+                // 16/09, twice, from a position where the same travel asked
+                // for by `ir` - which does not touch the record - worked
+                // twenty-three times out of twenty-four.
+                StartGo(s_travel.Map, s_travel.Bonfire);
+                s_call = CallGuests();
+                s_call.Active = true;
+                s_call.Map = s_travel.Map;
+                s_call.Bonfire = s_travel.Bonfire;
+                s_call.Since = Now;
+                s_barrier = Barrier();
+                s_barrier.Active = true;
+                s_barrier.Vote = s_travel.Vote;
+                s_barrier.Map = s_travel.Map;
+                s_barrier.Bonfire = s_travel.Bonfire;
+                s_barrier.Guests = Guests;
+                s_barrier.Since = Now;
+                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; vou primeiro para a fogueira %04x e chamo os convidados ao chegar\n",
+                    s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since), (unsigned)s_travel.Bonfire));
+            }
+            else
+            {
+                s_travel.Leaving = true;
+                s_travel.LeaveSince = Now;
+                DS2_CoopChannel::SendHostEvent(DS2_CoopChannel::HostEvent::TravelLeave);
+                Append(StringFormat("host: votacao %u aprovada (%zu sim de %zu, host sim) em %llu ms; %s, convidados saem da sessao\n",
+                    s_travel.Vote, Yes, Guests, (unsigned long long)(Now - s_travel.Since),
+                    s_together ? StringFormat("o mapa %08x nao pode ser trazido", s_travel.Map).c_str() : "viagem junta desligada"));
+            }
+        }
+        // `Now` was read at the top of this tick, and a vote that a guest's
+        // proposal (or `DS2_Bonfire.req votar`) opened **later in the same
+        // tick** is stamped with a clock that has already moved on. Subtracting
+        // unsigned then wraps to an enormous number and the vote is thrown out
+        // as unanswered the instant it opens - measured 16/09, the box was
+        // still on the guest's screen when the host had already cancelled.
+        else if (Now > s_travel.Since && Now - s_travel.Since > kVoteTimeoutMs)
+        {
+            s_travel.Active = false;
+            if (s_open_vote.Active && s_open_vote.Host)
+            {
+                if (void* FrontEnd = FrontEndOrNull())
+                {
+                    s_close(FrontEnd, s_open_vote.Number);
+                    s_release(FrontEnd, s_open_vote.Number);
+                }
+                s_open_vote.Active = false;
+            }
+            TellCanceled(Cancel::NoAnswer, kTravelNoAnswer);
+            Append(StringFormat("host: votacao %u sem resposta de todos (%zu sim de %zu, host %s); viagem cancelada\n", s_travel.Vote,
+                Yes, Guests, s_travel.HostAnswered ? "respondeu" : "nao respondeu"));
+        }
+    }
+
+    if (s_open_vote.Active)
+    {
+        void* FrontEnd = FrontEndOrNull();
+        const bool Ours = FrontEnd != nullptr && *(const int32_t*)((const uint8_t*)FrontEnd + kDialogNumber) == s_open_vote.Number;
+        if (!Ours || (uint8_t)s_closed(FrontEnd, s_open_vote.Number) != 0)
+        {
+            const uint64_t Button = Ours ? s_button(FrontEnd, s_open_vote.Number) : 2;
+            const bool Yes = Ours && (uint32_t)Button != 2 && (uint32_t)Button != 5;
+            if (Ours)
+            {
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
+            }
+            s_open_vote.Active = false;
+            if (s_open_vote.Host)
+            {
+                if (s_travel.Active && s_travel.Vote == s_open_vote.Vote)
+                {
+                    s_travel.HostAnswered = true;
+                    s_travel.HostYes = Yes;
+                }
+            }
+            else
+            {
+                DS2_CoopChannel::SendGuestAnswer(s_open_vote.Vote, Yes);
+                s_answered_vote = s_open_vote.Vote;
+                s_answered_yes = Yes;
+                if (Yes && !s_curtain_up && Curtain(true))
+                {
+                    s_curtain_for_vote = true;
+                }
+            }
+            Append(StringFormat("%s: votacao %u respondida %s (botao %llu%s)\n", s_open_vote.Host ? "host" : "convidado", s_open_vote.Vote,
+                Yes ? "sim" : "nao", (unsigned long long)Button, Ours ? "" : ", a caixa foi trocada"));
+        }
+    }
+
+    if (OwnsTheWorld())
+    {
+        return;
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelVote, Said) && s_votes_ready)
+    {
+        const uint32_t Vote = Said.Id & 0x7fffffff;
+        const bool GuestProposed = (Said.Id & 0x80000000) != 0;
+        const uint16_t Bonfire = (uint16_t)Said.Type;
+        if (GuestProposed && s_proposal.Active && s_proposal.Bonfire == Bonfire)
+        {
+            // Our own proposal: our pick was our yes.
+            s_proposal.Active = false;
+            DS2_CoopChannel::SendGuestAnswer(Vote, true);
+            s_answered_vote = Vote;
+            s_answered_yes = true;
+            if (!s_curtain_up && Curtain(true))
+            {
+                s_curtain_for_vote = true;
+            }
+            Append(StringFormat("convidado: votacao %u e a minha proposta; respondo sim\n", Vote));
+        }
+        else
+        {
+            s_answered_vote = 0;
+            OpenQuestion(Vote, false, PlaceName(Bonfire, Said.Map), GuestProposed);
+        }
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelCanceled, Said))
+    {
+        if (s_curtain_for_vote)
+        {
+            s_curtain_for_vote = false;
+            if (s_curtain_up && !s_go.Active)
+            {
+                Curtain(false);
+            }
+        }
+        const Cancel Why = (Cancel)Said.Id;
+        const uint16_t Bonfire = (uint16_t)Said.Type;
+        const bool Mine = s_proposal.Active && s_proposal.Bonfire == Bonfire;
+        // A question still open vanishes here; its player is told why.
+        const bool WasAsked = s_open_vote.Active && !s_open_vote.Host;
+        if (WasAsked)
+        {
+            if (void* FrontEnd = FrontEndOrNull())
+            {
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
+            }
+            s_open_vote.Active = false;
+        }
+        bool Show = false;
+        if (Why == Cancel::NotLit && Mine)
+        {
+            _snwprintf_s(s_message, _TRUNCATE, L"Travel canceled: the host has not lit %ls.", PlaceName(Bonfire, Said.Map).c_str());
+            Show = true;
+        }
+        else if (Why == Cancel::Busy && Mine)
+        {
+            wcsncpy_s(s_message, kTravelBusy, _TRUNCATE);
+            Show = true;
+        }
+        else if (Why == Cancel::Declined || Why == Cancel::NoAnswer || Why == Cancel::Stuck)
+        {
+            wcsncpy_s(s_message, Why == Cancel::Declined ? kTravelDeclined : Why == Cancel::NoAnswer ? kTravelNoAnswer : kTravelStuck, _TRUNCATE);
+            Show = Mine || s_answered_yes || WasAsked;
+        }
+        if (Mine)
+        {
+            s_proposal.Active = false;
+        }
+        if (Show)
+        {
+            ShowMessage(s_message);
+        }
+        Append(StringFormat("convidado: viagem cancelada pelo host (motivo %u, fogueira %04x)%s\n", (unsigned)Why, (unsigned)Bonfire,
+            Show ? "; aviso mostrado" : ""));
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelPark, Said))
+    {
+        if (!s_curtain_up)
+        {
+            Curtain(true);
+        }
+        s_curtain_for_vote = true;
+        DS2_DeathIntercept::Park();
+        Append(StringFormat("convidado: the host needs room for %08x; waiting at the session's map\n", Said.Map));
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelGo, Said))
+    {
+        const uint16_t Bonfire = (uint16_t)Said.Id;
+        if (s_open_vote.Active && !s_open_vote.Host)
+        {
+            if (void* FrontEnd = FrontEndOrNull())
+            {
+                s_close(FrontEnd, s_open_vote.Number);
+                s_release(FrontEnd, s_open_vote.Number);
+            }
+            s_open_vote.Active = false;
+        }
+        s_proposal.Active = false;
+        // The probe loads the destination at once, beside whatever this
+        // machine still holds. When that would not fit the target budget the
+        // travel itself goes instead, which makes room before it loads
+        // (19/09: the guest probed Eleum Loyce with 0a170000 and Majula still
+        // in, 2496 targets, and the TargetManager was full).
+        uint64_t InUse = 0;
+        uint8_t DestState = 0;
+        uint32_t DestMask[4] = {};
+        const bool DestIn = DS2_Backread::Query(Said.Map, DestState, DestMask) && DestState == 5;
+        const uint32_t DestCost = DestIn ? 0 : DS2_Backread::TargetCost(Said.Map);
+        const bool Tight = DestCost > 0 && DS2_Backread::Targets(InUse) && InUse + DestCost > DS2_Backread::TargetLimit();
+        if (Tight)
+        {
+            Append(StringFormat("convidado: %llu targets in use + %u for %08x do not fit; no probe, the travel makes room first\n",
+                (unsigned long long)InUse, DestCost, Said.Map));
+        }
+        if (!Tight && s_original_import != nullptr && s_travel_build != nullptr)
+        {
+            // Ask the streamer for the map and watch its load state; the road
+            // is chosen from the answer, below, with nobody moved yet.
+            const uint32_t Every[4] = { 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu };
+            s_probe = MapProbe();
+            s_probe.Active = true;
+            s_probe.Map = Said.Map;
+            s_probe.Bonfire = Bonfire;
+            s_probe.Vote = (uint32_t)Said.Type;
+            s_probe.Since = Now;
+            DS2_Backread::Request(Said.Map, Every);
+            s_await = AwaitRelease();
+            s_await.Active = true;
+            s_await.Vote = (uint32_t)Said.Type;
+            s_await.Since = Now;
+            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); pedindo o mapa para ver por onde vou (votacao %d)\n",
+                (unsigned)Bonfire, Said.Map, Said.Type));
+        }
+        else if (DS2_DeathIntercept::MapReachable(Said.Map))
+        {
+            Append(StringFormat("convidado: viagem aprovada para a fogueira %04x (mapa %08x); vou junto (votacao %d)\n",
+                (unsigned)Bonfire, Said.Map, Said.Type));
+            StartGo(Said.Map, Bonfire);
+            s_await = AwaitRelease();
+            s_await.Active = true;
+            s_await.Vote = (uint32_t)Said.Type;
+            s_await.Since = Now;
+        }
+        else
+        {
+            _snwprintf_s(s_message, _TRUNCATE, L"Travel canceled: %ls could not be reached from here.",
+                PlaceName(Bonfire, Said.Map).c_str());
+            ShowMessage(s_message);
+            Append(StringFormat("convidado: viagem para a fogueira %04x (mapa %08x), mas o mapa nao pode ser trazido aqui e o warp nao esta pronto\n",
+                (unsigned)Bonfire, Said.Map));
+        }
+    }
+
+    // The streamer has answered: the old road if the map is coming, the warp
+    // if it is not. Nobody has moved yet either way, which is the whole point
+    // of asking before leaving.
+    if (s_probe.Active)
+    {
+        uint8_t State = 0;
+        uint32_t Mask[4] = {};
+        const bool Known = DS2_Backread::Query(s_probe.Map, State, Mask);
+        const bool Loaded = Known && State >= kMapLoaded;
+        const bool GaveUp = Now - s_probe.Since > kProbeMs;
+        if (Loaded || GaveUp)
+        {
+            const MapProbe Asked = s_probe;
+            s_probe.Active = false;
+            if (Loaded)
+            {
+                // The travel asks for the map itself, and one request replaces
+                // another, so this one is left standing rather than released
+                // into a gap.
+                Append(StringFormat("convidado: o mapa %08x veio (estado %u em %llu ms); vou junto (votacao %u)\n",
+                    Asked.Map, (unsigned)State, (unsigned long long)(Now - Asked.Since), Asked.Vote));
+                StartGo(Asked.Map, Asked.Bonfire);
+            }
+            else
+            {
+                // Tell first, then let go. The host takes its copy of this
+                // guest out on WarpNotice, and it should have the message
+                // before this machine starts dropping the map underneath.
+                Append(StringFormat("convidado: o mapa %08x nao veio (estado %u depois de %llu ms); vou de warp (votacao %u)\n",
+                    Asked.Map, Known ? (unsigned)State : 0xffu, (unsigned long long)(Now - Asked.Since), Asked.Vote));
+                DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::WarpNotice, Asked.Map, Asked.Vote);
+                DS2_Backread::Release();
+                RemovePresences("vou de warp; o mapa nao vem ate aqui");
+                s_pending_warp = PendingWarp();
+                s_pending_warp.Active = true;
+                s_pending_warp.Map = Asked.Map;
+                s_pending_warp.Bonfire = Asked.Bonfire;
+                s_pending_warp.Vote = Asked.Vote;
+                s_pending_warp.At = Now + kWarpAnnounceMs;
+                s_await.ByWarp = true;
+            }
+        }
+    }
+
+    // The announced warp, once the host has had its moment to take its copy
+    // of this guest out.
+    if (s_pending_warp.Active && Now >= s_pending_warp.At)
+    {
+        const PendingWarp Asked = s_pending_warp;
+        s_pending_warp.Active = false;
+        DS2_TravelWatch::Open(kWatchNativeMs, "viagem de fantasma (votacao)");
+        const bool Went = TravelAsPhantom(Asked.Bonfire);
+        if (Went)
+        {
+            s_ghost.Vote = Asked.Vote;
+        }
+        else
+        {
+            s_await.Reported = true;
+            s_await.Failed = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, Asked.Vote);
+            Append(StringFormat("convidado: o warp para a fogueira %04x foi recusado; aviso o host (votacao %u)\n",
+                (unsigned)Asked.Bonfire, Asked.Vote));
+        }
+    }
+    // This machine is done: tell the host how it went, then stand behind the
+    // loading screen until the host says everybody is in.
+    // `s_probe.Active` belongs in this guard, and leaving it out cost a run.
+    // The travel outcome still holds `Arrived` from the **previous** travel
+    // while the probe is deciding, and nothing else here is false yet - the
+    // player has not been sent anywhere. Measured 17/09, 19:14: the guest
+    // announced the probe and reported "cheguei" in the same millisecond, the
+    // host released the group, and the guest never left Heide.
+    if (s_await.Active && !s_await.Reported && !s_await.ByWarp && !s_go.Active && !s_probe.Active)
+    {
+        const DS2_DeathIntercept::Outcome Outcome = DS2_DeathIntercept::TravelOutcome();
+        if (Outcome == DS2_DeathIntercept::Outcome::Arrived)
+        {
+            s_await.Reported = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelArrived, 0, s_await.Vote);
+            Append(StringFormat("convidado: cheguei (votacao %u); espero o resto do grupo atras da tela\n", s_await.Vote));
+        }
+        else if (Outcome == DS2_DeathIntercept::Outcome::Failed)
+        {
+            s_await.Reported = true;
+            s_await.Failed = true;
+            DS2_CoopChannel::SendGuestEvent(DS2_CoopChannel::GuestEvent::TravelFailed, 0, s_await.Vote);
+            Append(StringFormat("convidado: nao consegui chegar (votacao %u); aviso o host\n", s_await.Vote));
+        }
+    }
+    if (s_await.Active &&
+        Now - s_await.Since > (s_await.ByWarp ? kBarrierWarpGiveUpMs : kBarrierGiveUpMs) + 5000)
+    {
+        s_await.Active = false;
+        Append("convidado: o host nao mandou soltar a tela a tempo; solto por conta propria\n");
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelRelease, Said))
+    {
+        if (s_await.Active && (Said.Id == s_await.Vote || s_await.Vote == 0))
+        {
+            s_await.Active = false;
+            Append(StringFormat("convidado: o host soltou o grupo (votacao %u, %s); a tela desce\n",
+                (unsigned)Said.Id, Said.Type != 0 ? "todos chegaram" : "sem todos"));
+            if (s_await.Failed || Said.Type == 0)
+            {
+                ShowMessage(kTravelStuck);
+            }
+        }
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::TravelLeave, Said))
+    {
+        const uintptr_t Session = (uintptr_t)DS2_RespawnInSession_PlayingSession();
+        uintptr_t Vftable = 0;
+        uint8_t State[4] = {};
+        const bool Playing = Session != 0 && ReadPointer(Session, Vftable) && Vftable == s_base + kJoinCtrlVftable &&
+            ReadByte(Session + kJoinState, State[0]) && ReadByte(Session + kJoinState + 1, State[1]) &&
+            ReadByte(Session + kJoinState + 2, State[2]) && ReadByte(Session + kJoinState + 3, State[3]);
+        int32_t StateValue = 0;
+        memcpy(&StateValue, State, sizeof(StateValue));
+        if (Playing && StateValue == kJoinPlaying)
+        {
+            int32_t* Leave = (int32_t*)(Session + kJoinLeave);
+            const int32_t Before = *Leave;
+            if (Before == 0)
+            {
+                *Leave = 1;
+            }
+            Append(StringFormat("convidado: votacao aprovada; saio da sessao para o host viajar (sessao %p, +0x120 %d -> %d)\n",
+                (void*)Session, Before, *Leave));
+        }
+        else
+        {
+            Append(StringFormat("convidado: pedido de saida para a viagem, mas nao ha sessao jogando (sessao %p, vftable %s, estado %d)\n",
+                (void*)Session, Vftable == s_base + kJoinCtrlVftable ? "certa" : "outra", StateValue));
+        }
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::RestStarted, Said) &&
+        (uint32_t)Said.Type != (uint32_t)DS2_CoopChannel::SelfSteamId())
+    {
+        Append(StringFormat("convidado: um jogador descansou na fogueira %08x (mapa %08x, ha %llu ms)\n",
+            Said.Id, Said.Map, (unsigned long long)Said.AgeMs));
+    }
+    if (DS2_CoopChannel::TakeHostEvent(DS2_CoopChannel::HostEvent::WorldReset, Said))
+    {
+        s_replaying = true;
+        s_original_reset();
+        s_replaying = false;
+        Append(StringFormat("convidado: mundo do host reiniciado aqui tambem (pedido ha %llu ms)\n", (unsigned long long)Said.AgeMs));
+    }
+#endif
+}
+
+void DS2_BonfireInSessionHook::Uninstall()
+{
+#if defined(_WIN32) && defined(_M_X64)
+    s_events_ready.store(false);
+    if (s_original_rest != nullptr)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        s_quiet_until.store(0);
+        s_quiet_saw_teardown.store(false);
+        s_quiet_up_at.store(0);
+        if (s_original_net_tick != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_net_tick, NetTickHook);
+        }
+        if (s_original_register != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_register, PresenceRegisterHook);
+        }
+        if (s_original_import != nullptr)
+        {
+            DetourDetach(&(PVOID&)s_original_import, SnapshotImportHook);
+        }
+        DetourDetach(&(PVOID&)s_original_rest, RestStartHook);
+        DetourDetach(&(PVOID&)s_original_reset, WorldResetHook);
+        if (s_votes_ready)
+        {
+            DetourDetach(&(PVOID&)s_original_pick, PickHook);
+        }
+        if (s_guest_rest_ready)
+        {
+            DetourDetach(&(PVOID&)s_original_inner_script, InnerScriptHook);
+        }
+        DetourTransactionCommit();
+        s_original_rest = nullptr;
+        s_original_reset = nullptr;
+    }
+    if (s_curtain_up)
+    {
+        Curtain(false);
+    }
+    if (s_prompt_patched && Matches(s_base + kPromptGate, kPromptGatePatch, sizeof(kPromptGatePatch)))
+    {
+        WriteCode(s_base + kPromptGate, kPromptGateExpected, sizeof(kPromptGateExpected));
+        s_prompt_patched = false;
+    }
+    if (s_job_patched)
+    {
+        WriteCode(s_base + kJobBranch, kJobExpected, sizeof(kJobExpected));
+        s_job_patched = false;
+    }
+    if (s_original != nullptr)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(&(PVOID&)s_original, SessionUpHook);
+        DetourTransactionCommit();
+        s_original = nullptr;
+    }
+#endif
+}
+
+const char* DS2_BonfireInSessionHook::GetName()
+{
+    return "DS2 Bonfire In Session";
+}

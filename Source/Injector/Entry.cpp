@@ -30,12 +30,26 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 
 void main()
 {
-    // Alloc a new console and redirect standard IO to it.
+    // The hooks' log goes to a file beside this DLL, not to a console window.
+    //
+    // This used to call AllocConsole() and point stdout at it, which put a
+    // second black window on top of the game for the whole session. Nothing
+    // needed it: WriteToConsole (Win32Platform.cpp) writes through `printf`,
+    // so pointing stdout at a file carries every line across. The colour call
+    // next to it, SetConsoleTextAttribute, simply fails on a handle that is
+    // not a console, and OutputDebugStringA keeps working for a debugger.
     FILE* dummy;
-    AllocConsole();
-    freopen_s(&dummy, "CONIN$", "r", stdin);
-    freopen_s(&dummy, "CONOUT$", "w", stderr);
-    freopen_s(&dummy, "CONOUT$", "w", stdout);
+    std::filesystem::path log = std::filesystem::path(".") / "DS2OS_Hooks.log";
+    wchar_t module[MAX_PATH] = {};
+    HMODULE self = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCWSTR)&main, &self) &&
+        GetModuleFileNameW(self, module, MAX_PATH) != 0)
+    {
+        log = std::filesystem::path(module).parent_path() / "DS2OS_Hooks.log";
+    }
+    freopen_s(&dummy, log.string().c_str(), "a", stdout);
+    freopen_s(&dummy, log.string().c_str(), "a", stderr);
 
     Log(R"--(    ____             __      _____             __    )--");
     Log(R"--(   / __ \____ ______/ /__   / ___/____  __  __/ /____)--");

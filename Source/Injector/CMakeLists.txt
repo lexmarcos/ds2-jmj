@@ -37,8 +37,30 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_UnlockAreaMultiPlayHook.cpp
     Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.h
     Hooks/DarkSouls2/DS2_UnblockMultiPlayHook.cpp
+    Hooks/DarkSouls2/DS2_EnemySyncHook.cpp
+    Hooks/DarkSouls2/DS2_GhostNpcHook.cpp
+    Hooks/DarkSouls2/DS2_PhantomActionHook.cpp
     Hooks/DarkSouls2/DS2_PhantomFogHook.cpp
+    Hooks/DarkSouls2/DS2_HollowSummonHook.cpp
+    Hooks/DarkSouls2/DS2_PartyHook.cpp
+    Hooks/DarkSouls2/DS2_ProgressCarryHook.cpp
+    Hooks/DarkSouls2/DS2_NetSyncGuardHook.cpp
+    Hooks/DarkSouls2/DS2_PartNotifyGuardHook.cpp
+    Hooks/DarkSouls2/DS2_BonfireInSessionHook.cpp
     Hooks/DarkSouls2/DS2_RematchHook.cpp
+    Hooks/DarkSouls2/DS2_SeamlessCoopHook.cpp
+    Hooks/DarkSouls2/DS2_SeamlessSessionHook.cpp
+    Hooks/DarkSouls2/DS2_NavHook.cpp
+    Hooks/DarkSouls2/DS2_RespawnInSessionHook.cpp
+    Hooks/DarkSouls2/DS2_DeathInterceptHook.h
+    Hooks/DarkSouls2/DS2_DeathInterceptHook.cpp
+    Hooks/DarkSouls2/DS2_CoopChannelHook.h
+    Hooks/DarkSouls2/DS2_CoopChannelHook.cpp
+    Hooks/DarkSouls2/DS2_BackreadHook.h
+    Hooks/DarkSouls2/DS2_BackreadHook.cpp
+    Hooks/DarkSouls2/DS2_TravelWatchHook.cpp
+    Hooks/DarkSouls2/DS2_CrashHook.h
+    Hooks/DarkSouls2/DS2_CrashHook.cpp
     Hooks/DarkSouls2/DS2_TraceHook.h
     Hooks/DarkSouls2/DS2_TraceHook.cpp
     Hooks/Shared/ReplaceServerPortHook.h
@@ -63,6 +85,11 @@ endforeach()
 target_include_directories(${PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../")
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE -D_CRT_SECURE_NO_WARNINGS -D_WINSOCK_DEPRECATED_NO_WARNINGS -D_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS)
+
+# The commit the DLL is built from, written into its hook receipt. CI passes
+# -DDS2OS_BUILD_SHA=<sha>; a local build says "unknown".
+set(DS2OS_BUILD_SHA "unknown" CACHE STRING "Commit the injector is built from")
+target_compile_definitions(${PROJECT_NAME} PRIVATE DS2OS_BUILD_SHA="${DS2OS_BUILD_SHA}")
 
 util_setup_folder_structure(${PROJECT_NAME} SOURCES "DS3OS")
 

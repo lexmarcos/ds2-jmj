@@ -166,7 +166,7 @@ fn wait_until_listening(timeout: Duration) -> Result<(), String> {
                 paths::server_log().display()
             ));
         }
-        std::thread::sleep(Duration::from_millis(400));
+        crate::control::sleep(Duration::from_millis(400))?;
     }
     Err(format!(
         "o servidor não abriu as portas em {}s; veja {}",
@@ -234,4 +234,74 @@ pub fn public_key(server: &ServerPaths) -> Result<String, String> {
         .map_err(|e| format!("não consegui ler {}: {e}", server.public_key.display()))?;
     ds2os_core::normalize_public_key(&raw)
         .ok_or_else(|| format!("{} não é uma chave RSA válida", server.public_key.display()))
+}
+
+/// One `Sign poll` line, sanitised:
+/// `2026-09-14 17:14:58 | Log  | 3:Chico  | Sign poll: area 0x009d5170, ..., room for 20, 0 signs cached, sticky skipped.`
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignPoll { pub at: String, pub player: String, pub cached: u64 }
+
+pub fn parse_sign_poll(line: &str) -> Option<SignPoll> {
+    let fields: Vec<&str> = line.split('|').map(str::trim).collect();
+    let message = fields.iter().position(|f| f.starts_with("Sign poll:"))?;
+    let (before, _) = fields[message].split_once(" signs cached")?;
+    let cached = before.rsplit(", ").next()?.parse().ok()?;
+    Some(SignPoll { at: fields.first()?.to_string(), player: fields.get(message.checked_sub(1)?)?.to_string(), cached })
+}
+
+/// Waits until the server's sign cache holds `signs` entries, by the `Sign poll`
+/// lines it writes after this starts. The count is the whole cache, not one
+/// player's; the line is throttled to one per player every ten seconds and only
+/// written with `DS2_StickySigns`. Passes on the newest poll saying `signs`;
+/// no poll at all by the deadline is inconclusive, never a pass.
+pub fn wait_signs(signs: u64, timeout: Duration) -> Result<(), String> {
+    let log = paths::server_log();
+    let mut from = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
+    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    let mut latest: std::collections::BTreeMap<String, SignPoll> = Default::default();
+    let mut newest: Option<SignPoll> = None;
+    loop {
+        crate::control::check()?;
+        if let Ok((text, next)) = crate::logs::read_lines_from(&log, from) {
+            for poll in text.lines().filter_map(parse_sign_poll) {
+                latest.insert(poll.player.clone(), poll.clone());
+                newest = Some(poll);
+            }
+            from = next;
+        }
+        let data = json!({"signs": signs, "newest": newest, "byPlayer": latest, "elapsedMs": started.elapsed().as_millis()});
+        if newest.as_ref().is_some_and(|p| p.cached == signs) {
+            crate::output::data(data);
+            crate::output::line(format_args!("  {signs} sign(s) no cache, pelo poll de {}", newest.as_ref().map(|p| p.player.as_str()).unwrap_or("")));
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            crate::output::data(data);
+            return match &newest {
+                Some(poll) => Err(format!("signs_remain: o último poll ({}, {}) ainda mostra {} sign(s) no cache", poll.player, poll.at, poll.cached)),
+                None => {
+                    crate::output::outcome("inconclusive");
+                    Err(format!("inconclusive: nenhum Sign poll no log do servidor em {}s", timeout.as_secs()))
+                }
+            };
+        }
+        crate::control::sleep(Duration::from_millis(1000))?;
+    }
+}
+
+#[cfg(test)]
+mod sign_tests {
+    use super::*;
+
+    #[test]
+    fn a_sign_poll_line_gives_the_player_and_the_cache_size() {
+        // From server.log on 14/09, after crate::logs sanitised it.
+        let line = "2026-09-14 17:14:58 | Log  | 3:Chico  | Sign poll: area 0x009d5170, activity area 103110, 27 search cells (first 0x00000000007ffc00), room for 20, 0 signs cached, sticky skipped.";
+        assert_eq!(parse_sign_poll(line), Some(SignPoll { at: "2026-09-14 17:14:58".into(), player: "3:Chico".into(), cached: 0 }));
+        let one = line.replace(", 0 signs cached", ", 1 signs cached");
+        assert_eq!(parse_sign_poll(&one).map(|p| p.cached), Some(1));
+        assert_eq!(parse_sign_poll("2026-09-14 17:14:58 | Log  | 3:Chico  | Sign 1000 created"), None);
+    }
 }

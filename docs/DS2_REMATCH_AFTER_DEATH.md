@@ -1,290 +1,294 @@
-# Revanche depois da morte
+# Rematch after death
 
-O que acontece entre uma morte em PvP e a próxima invasão do mesmo par, medido
-nas duas instâncias desta máquina (Samuel, conta 1; Chico, conta 2), em Heide's
-Tower of Flame, servidor local.
+What happens between a PvP death and the same pair's next invasion, measured
+on this machine's two instances (Samuel, account 1; Chico, account 2), in
+Heide's Tower of Flame, local server.
 
-Este documento existe para responder uma pergunta de projeto: **quanto do
-caminho de volta o servidor consegue percorrer sozinho?** A resposta curta é
-"quase nada", e o motivo é o item.
+This document exists to answer one design question: **how much of the way
+back can the server walk on its own?** The short answer is "almost none", and
+the reason is the item.
 
-## O servidor não consegue iniciar uma invasão
+## The server cannot start an invasion
 
-Já estava registrado em [DS2_STICKY_SIGNS.md](DS2_STICKY_SIGNS.md) e continua
-valendo: um `PushRequestBreakInTarget` fabricado, enviado sem que o invasor
-tenha usado o orbe, não produz nada — nem em Majula, nem em Heide, que é o
-controle onde a invasão comum funciona.
+It was already recorded in [DS2_STICKY_SIGNS.md](DS2_STICKY_SIGNS.md) and
+still holds: a fabricated `PushRequestBreakInTarget`, sent without the invader
+having used the orb, produces nothing — not in Majula, not in Heide, which is
+the control where an ordinary invasion works.
 
-> Uma invasão precisa que o cliente **do próprio invasor** esteja em estado de
-> invasão. Nada que o servidor mande falsifica isso.
+> An invasion needs the **invader's own** client to be in an invading state.
+> Nothing the server sends fakes that.
 
-Portanto uma revanche automática não é uma funcionalidade de servidor. O
-servidor pode tornar o pareamento determinístico; quem recomeça a sessão é o
-cliente do invasor.
+So an automatic rematch is not a server feature. The server can make the
+pairing deterministic; whoever restarts the session is the invader's client.
 
-## Usar o orbe exige forma humana
+## Using the orb requires human form
 
-Com o personagem **hollow**, apertar X com o Cracked Red Eye Orb selecionado no
-cinto não faz absolutamente nada: sem animação, sem mensagem na tela e sem
-nenhum pedido chegando ao servidor. Parece um botão que não funciona, e foi
-assim que custou tempo.
+With the character **hollow**, pressing X with the Cracked Red Eye Orb
+selected in the belt does absolutely nothing: no animation, no message on
+screen and no request reaching the server. It looks like a button that does
+not work, and that is how it cost time.
 
-O controle que separa as duas explicações possíveis:
+The control that separates the two possible explanations:
 
-| estado | lugar | X com o orbe |
+| state | place | X with the orb |
 | --- | --- | --- |
-| hollow | colado na fogueira | nada |
-| hollow | longe da fogueira | nada |
-| humano | longe da fogueira | "Attempt to invade another world?" |
-| humano | **no mesmo ponto**, colado na fogueira | "Attempt to invade another world?" |
+| hollow | right on the bonfire | nothing |
+| hollow | away from the bonfire | nothing |
+| human | away from the bonfire | "Attempt to invade another world?" |
+| human | **at the same spot**, right on the bonfire | "Attempt to invade another world?" |
 
-E a Red Sign Soapstone é igual, medida em 12/09 com o mesmo controle: hollow,
-apertar X não coloca placa nenhuma; uma Human Effigy sem o personagem dar um
-passo e a placa sai na hora (`Sign 1002 created`). **Forma humana vale para os
-dois itens.**
+And the Red Sign Soapstone is the same, measured 12/09 with the same control:
+hollow, pressing X places no sign at all; a Human Effigy without the
+character taking a step and the sign goes down at once (`Sign 1002 created`).
+**Human form counts for both items.**
 
-A última linha é a que importa: a efígie foi usada sem o personagem dar um
-passo, e o diálogo passou a aparecer. O bloqueio é a forma humana, não a
-fogueira.
+The last row is the one that matters: the effigy was used without the
+character taking a step, and the dialog started appearing. The blocker is
+human form, not the bonfire.
 
-## Mas morrer como invasor não tira a forma humana
+## But dying as an invader does not take human form away
 
-Esta é a descoberta que muda o projeto, e ela quase passou batida porque a
-primeira leitura dos dados estava errada.
+This is the finding that changes the project, and it nearly went unnoticed
+because the first reading of the data was wrong.
 
-O que hollowa é morrer **no próprio mundo**. Uma morte como invasor, dentro do
-mundo do host, devolve o jogador para casa **ainda humano**.
+What hollows you is dying **in your own world**. A death as an invader,
+inside the host's world, sends the player home **still human**.
 
-A confusão: na primeira rodada o invasor morreu como fantasma, voltou, e o
-orbe não funcionou — mas entre as duas coisas ele tinha caído de um penhasco
-**no próprio mundo**, e foi essa segunda morte que o deixou hollow. A efígie
-seguinte pareceu ser o que consertou a morte do duelo. Não era.
+The confusion: in the first round the invader died as a phantom, came back,
+and the orb did not work — but between those two things it had fallen off a
+cliff **in its own world**, and it was that second death that left it hollow.
+The next effigy looked like what fixed the duel death. It was not.
 
-**Ressalva, de 12/09:** numa noite de testes o mesmo jogador apareceu hollow
-depois de mortes que só aconteceram como fantasma, e precisou de efígie para
-recolocar a placa. Ou existe um caso em que a morte de fantasma hollowa, ou
-uma das mortes daquela sequência foi no próprio mundo sem eu perceber. As duas
-observações estão registradas de propósito; o que decide é uma rodada isolada,
-com o personagem humano, uma única morte como fantasma e o item testado logo
-depois.
+**Caveat, from 12/09:** on one night of testing the same player came up
+hollow after deaths that only happened as a phantom, and needed an effigy to
+put the sign back down. Either there is a case where a phantom death hollows
+you, or one of the deaths in that sequence was in its own world without my
+noticing. Both observations are recorded on purpose; what decides it is an
+isolated round, with the character human, a single death as a phantom and the
+item tested right afterwards.
 
-A medição limpa, sem nenhuma efígie envolvida:
+The clean measurement, with no effigy involved:
 
-    01:42:17  3:Chico   última posição dentro do mundo do host
-      (morte por queda como fantasma)
-    01:42:52  3:Chico   Location: de volta à própria fogueira
+    01:42:17  3:Chico   last position inside the host's world
+      (death by falling, as a phantom)
+    01:42:52  3:Chico   Location: back at its own bonfire
     01:42:54  3:Chico   Break-in target request: target 1
-    01:42:54  servidor  Invading '1:Samuel' across areas.
+    01:42:54  server    Invading '1:Samuel' across areas.
 
-Duas invasões seguidas, a segunda dois segundos depois de chegar em casa, sem
-Human Effigy no meio. O contador de efígies não se moveu.
+Two invasions in a row, the second two seconds after getting home, with no
+Human Effigy in between. The effigy counter did not move.
 
-**Consequência:** a revanche não custa item nenhum além do próprio orbe, e a
-exigência de forma humana **não** precisa ser removida para o invasor. Ela só
-apareceria se o mesmo jogador morresse também no mundo dele.
+**Consequence:** the rematch costs no item beyond the orb itself, and the
+human form requirement does **not** need to be removed for the invader. It
+would only show up if the same player also died in their own world.
 
-## O ciclo completo da revanche, medido
+## The full rematch cycle, measured
 
-    morte como invasor                  t+0       (±10s: a queda só é visível
-                                                   na tela, e a última posição
-                                                   no mundo do host é de 01:42:17)
-    LeaveSession                        t+12s     (medido na primeira rodada)
-    de volta ao próprio mundo           ~t+35s
-    X, esquerda, A                      ~t+37s
-    pedido de invasão no servidor       ~t+37s
-    fantasma no mundo do host           ~t+55s
+    death as an invader                 t+0       (±10s: the fall is only
+                                                   visible on screen, and the
+                                                   last position in the host's
+                                                   world is at 01:42:17)
+    LeaveSession                        t+12s     (measured in the first round)
+    back in its own world               ~t+35s
+    X, left, A                          ~t+37s
+    invasion request at the server      ~t+37s
+    phantom in the host's world         ~t+55s
 
-| trecho | quem controla | dá para encurtar? |
+| stretch | who controls it | can it be shortened? |
 | --- | --- | --- |
-| morte → LeaveSession, 12s | cliente do morto | só mexendo no cliente |
-| carregar de volta, ~20s | carregamento | não |
-| **três toques de botão, ~2s** | **o jogador** | **é o que a automação elimina** |
-| pareamento + carregar, ~20s | rede e carregamento | não |
+| death → LeaveSession, 12s | the dead player's client | only by touching the client |
+| loading back, ~20s | loading | no |
+| **three button presses, ~2s** | **the player** | **this is what the automation removes** |
+| pairing + loading, ~20s | network and loading | no |
 
-Vale dizer isso claramente: de aproximadamente 55 segundos, o jogador responde
-por **dois**. Uma revanche automática não deixa o duelo mais rápido; ela tira a
-atenção do jogador do laço. Quem quiser cortar o resto teria que atacar a
-espera de 12s ou o próprio fim da sessão — fazer o fantasma renascer no mundo
-do host em vez de voltar para casa, que é como a arena funciona.
+Worth saying plainly: out of roughly 55 seconds, the player accounts for
+**two**. An automatic rematch does not make the duel faster; it takes the
+player's attention out of the loop. Anyone wanting to cut the rest would have
+to attack the 12s wait or the end of the session itself — make the phantom
+respawn in the host's world instead of going home, which is how the arena
+works.
 
-## O sinal positivo, para o caminho do orbe
+## The positive signal, for the orb path
 
-As medições acima terminam num fantasma visível na tela, que é a evidência
-fraca contra a qual este projeto vive avisando. O handshake completo ficou
-registrado em 12/09, num servidor recém reiniciado — o que importa, porque o
-censo só registra a **primeira** mensagem de cada tipo por cliente, e por isso
-essas linhas somem numa sessão longa:
+The measurements above end in a phantom visible on screen, which is the weak
+evidence this project keeps warning against. The full handshake was recorded
+on 12/09, on a freshly restarted server — which matters, because the census
+only records the **first** message of each type per client, and that is why
+these lines vanish in a long session:
 
     02:21:02  3:Chico   Break-in target request: target 1
-    02:21:02  servidor  Invading '1:Samuel' across areas.
+    02:21:02  server    Invading '1:Samuel' across areas.
     02:21:12  1:Samuel  First RequestNotifyJoinGuestPlayer
     02:21:14  3:Chico   First RequestNotifyJoinSession
 
-São as duas linhas que o CLAUDE.md chama de sinal de sucesso: dez segundos
-entre o pedido e o convidado dentro do mundo.
+These are the two lines CLAUDE.md calls the success signal: ten seconds
+between the request and the guest inside the world.
 
-Vale anotar o que quase estragou essa rodada. Por um tempo **nenhuma** sessão
-se formava, nem por orbe nem por placa, porque havia dois jogos abertos na
-mesma conta. Tudo antes do fim parecia certo — o servidor roteava o push, o
-alvo respondia `RequestSendMessageToPlayers` — e então um lado dizia
-"Summoning failed. Timed out." e o outro "Disconnected from multiplayer
-session." Fechar o cliente sobrando resolveu na hora.
+Worth noting what nearly ruined that round. For a while **no** session would
+form, neither by orb nor by sign, because there were two games open on the
+same account. Everything before the end looked right — the server routed the
+push, the target answered `RequestSendMessageToPlayers` — and then one side
+said "Summoning failed. Timed out." and the other "Disconnected from
+multiplayer session." Closing the extra client fixed it immediately.
 
-## Sair para o título é recusado durante uma sessão
+## Quitting to the title is refused during a session
 
-O item **Quit Game** aparece no menu de sistema e fica selecionável, mas apertar
-A não faz nada enquanto existe uma sessão PvP — nos dois lados, host e
-fantasma. Foi assim que `game leave` falhou por 180s sem dizer o motivo.
+The **Quit Game** entry shows in the system menu and stays selectable, but
+pressing A does nothing while a PvP session exists — on both sides, host and
+phantom. That is how `game leave` failed for 180s without saying why.
 
-Pelo que foi visto aqui, resta a morte, o temporizador e a desconexão. Os
-itens de saída (Separation Crystal, Homeward Bone) não foram testados.
+From what was seen here, that leaves death, the timer and disconnecting. The
+leave items (Separation Crystal, Homeward Bone) were not tested.
 
-## O push de summon é aceito — e mesmo assim a sessão não forma
+## The summon push is accepted — and the session still does not form
 
-Medido em 12/09 com o gatilho `debug_summon.req` e o par já tendo duelado uma
-vez (é o duelo anterior que deixa no servidor o id do host e o blob opaco que
-ele mandou).
+Measured 12/09 with the `debug_summon.req` trigger and the pair having
+already duelled once (it is the previous duel that leaves the host's id and
+the opaque blob it sent on the server).
 
-    02:22:16  1:Samuel  Summoning sign 1003              o duelo de verdade
-    02:25:27  3:Chico   Sign 1004 created: type 4        a placa de volta ao chão
-    02:25:43  servidor  Rematch: replayed the summon of sign 1004 by player 1
+    02:22:16  1:Samuel  Summoning sign 1003              the real duel
+    02:25:27  3:Chico   Sign 1004 created: type 4        the sign back on the ground
+    02:25:43  server    Rematch: replayed the summon of sign 1004 by player 1
     02:25:43  3:Chico   Sign 1004 removed by its owner
     02:25:5x  3:Chico   "Summoning canceled. Unable to join multiplayer session."
-              1:Samuel  nada. nenhum diálogo, nenhuma mensagem
+              1:Samuel  nothing. no dialog, no message
 
-As duas linhas do meio são a parte boa, e é um resultado novo: **o cliente que
-está com uma placa no chão age num push que ninguém pediu.** Ele retira a
-placa e tenta entrar, que é exatamente o que faz num summon legítimo. O push
-de invasão fabricado não produz nem isso — o invasor parado não está
-esperando nada.
+The two middle lines are the good part, and it is a new result: **a client
+with a sign on the ground acts on a push nobody asked for.** It takes the
+sign back and tries to join, which is exactly what it does on a legitimate
+summon. The fabricated invasion push does not even produce that — an invader
+standing still is not waiting for anything.
 
-A parte ruim é a última linha. O host nunca soube de coisa alguma. Quem abre a
-sessão é o cliente do host quando ele aperta o botão na placa; o servidor não
-consegue criar esse estado, e repetir o `player_struct` guardado não basta —
-ou ele é de uso único, ou falta o lado que escuta. O fantasma tenta conectar
-num host que não está esperando ninguém, e o jogo diz isso com todas as
-letras.
+The bad part is the last line. The host never knew a thing. Whoever opens the
+session is the host's client when it presses the button on the sign; the
+server cannot create that state, and replaying the stored `player_struct` is
+not enough — either it is single use, or the listening side is missing. The
+phantom tries to connect to a host that is not expecting anyone, and the game
+says so in as many words.
 
-**O que isso significa para a funcionalidade:** a revanche pela red sign
-também precisa de um patch no cliente, só que do outro lado. No caminho do
-orbe quem precisa agir é o invasor; no caminho da placa é o **host**, que
-teria que reemitir sozinho o summon da placa do mesmo par. O servidor faz a
-metade dele: lembra o par e sabe reenviar o push.
+**What this means for the feature:** the rematch by red sign also needs a
+client patch, only on the other side. On the orb path it is the invader who
+has to act; on the sign path it is the **host**, which would have to reissue
+the summon of the same pair's sign on its own. The server does its half: it
+remembers the pair and knows how to resend the push.
 
-Uma versão intermediária que não precisa de patch nenhum: o fantasma recoloca
-a placa (um toque), o host aperta A nela (um toque). Nada é consumido, e a
-placa reaparece no mesmo lugar, ao lado do host.
+An intermediate version that needs no patch at all: the phantom puts the sign
+back down (one press), the host presses A on it (one press). Nothing is
+consumed, and the sign reappears in the same place, next to the host.
 
-## Qual push o host obedece, e qual ele ignora
+## Which push the host obeys, and which it ignores
 
-Três pushes, o mesmo host parado no mesmo lugar, medidos em 12/09 no servidor
-local. O que muda entre eles é só quem recebe e o que o outro lado está
-fazendo:
+Three pushes, the same host standing in the same place, measured 12/09 on the
+local server. What changes between them is only who receives it and what the
+other side is doing:
 
-| push | para quem | o que acontece |
+| push | to whom | what happens |
 | --- | --- | --- |
-| `PushRequestBreakInTarget` | host ocioso | **o host reage em 1s**: manda `RequestSendMessageToPlayers`, e se o invasor estiver esperando a sessão forma |
-| `PushRequestVisit` | host ocioso | **nada**, nos quatro tipos (0 Blue Sentinels, 1 Bell Keepers, 2 Rat, 3) |
-| `PushRequestSummonSign` | fantasma com placa no chão | o fantasma retira a placa e tenta entrar, e falha porque ninguém abriu sessão |
+| `PushRequestBreakInTarget` | idle host | **the host reacts in 1s**: sends `RequestSendMessageToPlayers`, and if the invader is waiting the session forms |
+| `PushRequestVisit` | idle host | **nothing**, on all four types (0 Blue Sentinels, 1 Bell Keepers, 2 Rat, 3) |
+| `PushRequestSummonSign` | phantom with a sign on the ground | the phantom takes the sign back and tries to join, and fails because nobody opened a session |
 
-O controle rodou no meio disso, logo depois das quatro visitas ignoradas: uma
-invasão comum por orbe, `RequestSendMessageToPlayers` às 02:48:24,
-`RequestNotifyJoinGuestPlayer` às 02:48:34 e `RequestNotifyJoinSession` às
-02:48:36. A máquina formava sessão; a visita é que não faz nada.
+The control ran in the middle of that, right after the four ignored visits:
+an ordinary orb invasion, `RequestSendMessageToPlayers` at 02:48:24,
+`RequestNotifyJoinGuestPlayer` at 02:48:34 and `RequestNotifyJoinSession` at
+02:48:36. The machine was forming sessions; it is the visit that does
+nothing.
 
-O provável motivo da visita ser ignorada: ela é o mecanismo dos covenants, e o
-cliente do host checa se uma visita **daquele tipo** é legal onde ele está.
-Heide não é área de Bell Keeper nem de Rat, e o patch de zona força a área de
-atividade para 103110 de qualquer jeito. Não foi investigado além disso,
-porque o resultado já bastava para descartar o caminho.
+The likely reason the visit is ignored: it is the covenants' mechanism, and
+the host's client checks whether a visit **of that type** is legal where it
+is. Heide is neither Bell Keeper nor Rat territory, and the zone patch forces
+the activity area to 103110 anyway. It was not investigated further, because
+the result was already enough to rule the path out.
 
-**O que isso ensina sobre a revanche:** o servidor tem as duas metades
-separadas e elas nunca se encontram. O push de invasão abre a sessão no host;
-o push de summon faz o fantasma aceitar. Falta provar que servem um ao outro —
-é o próximo experimento, e é barato.
+**What this teaches about the rematch:** the server has the two halves apart
+and they never meet. The invasion push opens the session on the host; the
+summon push makes the phantom accept. What is left is to prove they serve
+each other — that is the next experiment, and it is cheap.
 
-## Nenhuma combinação de pushes fecha a sessão
+## No combination of pushes closes the session
 
-Depois de um duelo de red sign de verdade — com o blob do host guardado, o
-host humano e o fantasma recolocando a placa — o servidor tentou reconectar
-sozinho de três maneiras. Medido em 12/09, sempre com o par no mesmo lugar:
+After a real red sign duel — with the host's blob stored, the host human and
+the phantom putting the sign back down — the server tried to reconnect on its
+own in three ways. Measured 12/09, always with the pair in the same place:
 
-| tentativa | fantasma | host | resultado |
+| attempt | phantom | host | result |
 | --- | --- | --- | --- |
-| só o summon | retira a placa, tenta entrar | nada na tela | "Unable to join multiplayer session" |
-| só a visita | — | **inerte**, nos 4 tipos | nada acontece |
-| só a invasão | — | abre sessão: `RequestSendMessageToPlayers` em 1s, e a própria placa dele some ("Your summon sign has disappeared") | nada acontece |
-| invasão + summon, no mesmo tick | retira a placa, tenta entrar | abre sessão | falha |
-| invasão, 4s, summon | retira a placa, tenta entrar | abre sessão | falha |
+| summon only | takes the sign back, tries to join | nothing on screen | "Unable to join multiplayer session" |
+| visit only | — | **inert**, on all 4 types | nothing happens |
+| invasion only | — | opens a session: `RequestSendMessageToPlayers` in 1s, and its own sign disappears ("Your summon sign has disappeared") | nothing happens |
+| invasion + summon, on the same tick | takes the sign back, tries to join | opens a session | fails |
+| invasion, 4s, summon | takes the sign back, tries to join | opens a session | fails |
 
-As duas metades existem e **não se encontram**. A leitura mais simples é que
-elas não são a mesma sessão: o host abre uma sessão de *invasão* e o fantasma
-tenta entrar numa de *summon*. O jogo não tem push que diga a um cliente "você
-invocou fulano" — esse estado nasce quando o jogador encosta na placa, e só.
+Both halves exist and **do not meet**. The simplest reading is that they are
+not the same session: the host opens an *invasion* session and the phantom
+tries to join a *summon* one. The game has no push that tells a client "you
+summoned so-and-so" — that state is born when the player touches the sign,
+and only then.
 
-Um detalhe que veio de graça: o host **recusa um segundo push de invasão**
-enquanto o primeiro está pendente, com `RequestRejectBreakInTarget`, reason 1.
+A detail that came for free: the host **refuses a second invasion push**
+while the first is pending, with `RequestRejectBreakInTarget`, reason 1.
 
-### O blob não é intercambiável
+### The blob is not interchangeable
 
-O `player_struct` que o summon carrega tem que ser o que o host mandou **num
-summon**. Tentei emprestar o blob que o mesmo jogador tinha mandado ao criar
-uma placa sua: o fantasma ignorou o push por completo, nem retirou a placa.
-Com o blob genuíno, ele age todas as vezes. Então a revanche por placa só é
-possível para um par que já duelou uma vez — o que, para a funcionalidade
-pedida, é exatamente o caso.
+The `player_struct` the summon carries has to be the one the host sent **in a
+summon**. I tried lending it the blob the same player had sent when creating
+a sign of its own: the phantom ignored the push entirely, it did not even
+take the sign back. With the genuine blob it acts every time. So a rematch by
+sign is only possible for a pair that has already duelled once — which, for
+the requested feature, is exactly the case.
 
-### Um host hollow não vê placa nenhuma
+### A hollow host sees no sign at all
 
-Custou uma hora até aparecer. Com o personagem hollow, a placa vermelha do
-outro jogador simplesmente **não existe** no mundo dele: nenhum prompt, nada
-no chão, e o servidor mandando a placa na lista normalmente. Uma Human Effigy
-sem o personagem dar um passo e o prompt "Touch Summon Sign" aparece no mesmo
-ponto.
+It took an hour to show up. With the character hollow, the other player's red
+sign simply **does not exist** in its world: no prompt, nothing on the
+ground, and the server delivering the sign in the list normally. One Human
+Effigy without the character taking a step and the "Touch Summon Sign" prompt
+appears at the same spot.
 
-É o espelho do que já estava medido para o orbe, e junto formam a regra:
-**forma humana é exigida dos dois lados de um duelo por placa** — de quem
-invoca para ver a placa, e de quem coloca para usar o item.
+It mirrors what was already measured for the orb, and together they make the
+rule: **human form is required on both sides of a duel by sign** — of the one
+summoning, to see the sign, and of the one placing it, to use the item.
 
-## Onde o cliente manda cada mensagem de placa
+## Where the client sends each sign message
 
-Achado procurando os ids do protocolo como imediatos
-(`FindImmediate.java`, em `/home/suel/tools/scripts`). Todos caem na mesma
-vizinhança dos envios de invasão, o que reforça que ali é a camada de rede do
-jogo e não código de jogabilidade:
+Found by searching for the protocol ids as immediates (`FindImmediate.java`,
+in `/home/suel/tools/scripts`). All of them land in the same neighbourhood as
+the invasion sends, which reinforces that this is the game's network layer
+and not gameplay code:
 
-| função | imediato | mensagem |
+| function | immediate | message |
 | --- | --- | --- |
-| `FUN_1406a2610` | `MOV EDX,0x398` | `RequestSummonSign` — **a ação do host**, o botão A na placa |
+| `FUN_1406a2610` | `MOV EDX,0x398` | `RequestSummonSign` — **the host's action**, the A button on the sign |
 | `FUN_1406a24f0` | `MOV EDX,0x396` | `RequestRemoveSign` |
 | `FUN_1406a1170`, `FUN_1406a1de0` | `MOV EDX,0x394` | `RequestCreateSign` |
 | `FUN_1406a0910` | `MOV EDX,0x39b` | `PushRequestSummonSign` |
-| `FUN_1406a1840` | `SUB EBX,0x39b` | despacho por id |
+| `FUN_1406a1840` | `SUB EBX,0x39b` | dispatch by id |
 | `FUN_1406a6300` | `MOV EDX,0x3d2` | `RequestGetBreakInTargetList` |
 | `FUN_1406a6fb0` | `MOV EDX,0x3d3` | `RequestBreakInTarget` |
 
-`FUN_1406a2610` é o alvo se a revanche precisar de patch no cliente: é o envio
-que só acontece depois que o host encosta na placa.
+`FUN_1406a2610` is the target if the rematch needs a client patch: it is the
+send that only happens once the host touches the sign.
 
-## O caminho do cliente quando o host encosta na placa
+## The client's path when the host touches the sign
 
-Levantado em 12/09 com a varredura de breakpoints (ver
-[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)): 520 entradas
-armadas na faixa `0x140270000–0x1402a0000`, jogo parado quinze segundos para o
-que roda por quadro se desarmar, log apagado, e então o toque.
+Mapped on 12/09 with the breakpoint sweep (see
+[DS2_INVESTIGATION_TOOLS.md](DS2_INVESTIGATION_TOOLS.md)): 520 entries armed
+in the range `0x140270000–0x1402a0000`, the game left alone for fifteen
+seconds so that whatever runs per frame disarms itself, the log wiped, and
+then the touch.
 
-O confirme do diálogo "Summon this dark spirit?" leva a uma classe com nome
-de verdade, vinda do RTTI:
+Confirming the "Summon this dark spirit?" dialog leads to a class with a real
+name, from the RTTI:
 
-    FUN_1402a5970   construtor de NetSvrSummonSignSummonJob
-                    vftables em 0x1410d63a8 e 0x1410d6448
+    FUN_1402a5970   constructor of NetSvrSummonSignSummonJob
+                    vftables at 0x1410d63a8 and 0x1410d6448
 
-E, ao contrário de tudo o mais neste caminho, ela **tem grafo de chamadas
-estático**:
+And, unlike everything else on this path, it **does have a static call
+graph**:
 
     FUN_1402a14c0  ->  FUN_1402a41b0  ->  FUN_1402a2ca0  ->  FUN_1402a5970
 
-O topo é pequeno o bastante para caber aqui:
+The top is small enough to fit here:
 
 ```c
 void FUN_1402a14c0(undefined8 param_1, undefined4 *param_2)
@@ -295,59 +299,59 @@ void FUN_1402a14c0(undefined8 param_1, undefined4 *param_2)
 }
 ```
 
-`FUN_1402a41b0` pega o gerenciador de placas (`FUN_1402128d0`), resolve o
-**dword** que recebeu pelo slot virtual `+0x98` — ou seja, o argumento é um
-*handle de placa*, não a placa — e, passando as checagens, monta o job.
+`FUN_1402a41b0` takes the sign manager (`FUN_1402128d0`), resolves the
+**dword** it received through virtual slot `+0x98` — that is, the argument is
+a *sign handle*, not the sign — and, passing the checks, builds the job.
 
-**Isto é o ponto de entrada que a revanche precisa.** Os dois argumentos foram
-capturados em execução, com `bp 2a14c0 deref rdx 4`, em dois summons
-diferentes:
+**This is the entry point the rematch needs.** Both arguments were captured
+at runtime, with `bp 2a14c0 deref rdx 4`, on two different summons:
 
-    summon da placa 1000   rcx=0x7ffffe591000  [rdx]=25000080  -> handle 0x80000025
-    summon da placa 1003   rcx=0x7ffffe591000  [rdx]=45000080  -> handle 0x80000045
+    summon of sign 1000    rcx=0x7ffffe591000  [rdx]=25000080  -> handle 0x80000025
+    summon of sign 1003    rcx=0x7ffffe591000  [rdx]=45000080  -> handle 0x80000045
 
-Duas coisas ficam decididas:
+Two things are settled:
 
-- **`param_1` é o `NetSvrSummonSignManager`**, e o ponteiro foi o mesmo nos
-  dois summons — inclusive depois de fechar e reabrir o jogo. Um hook pode
-  guardá-lo com segurança dentro de uma sessão.
-- **O handle muda a cada placa.** 0x80000025 e 0x80000045 para placas
-  diferentes do mesmo jogador, no mesmo lugar. O bit alto é uma tag; o resto
-  parece índice mais geração. Então **repetir o handle guardado não serve**: o
-  hook tem que descobrir o handle da placa nova, enumerando pelo gerenciador
-  ou interceptando o ponto em que uma placa é registrada.
+- **`param_1` is the `NetSvrSummonSignManager`**, and the pointer was the
+  same on both summons — including after closing and reopening the game. A
+  hook can hold on to it safely within a session.
+- **The handle changes with every sign.** 0x80000025 and 0x80000045 for
+  different signs from the same player, in the same place. The high bit is a
+  tag; the rest looks like an index plus a generation. So **replaying the
+  stored handle does not work**: the hook has to find the new sign's handle,
+  by enumerating through the manager or by intercepting the point where a
+  sign is registered.
 
-Esse é o próximo bloqueio de verdade da revanche, e é um bloqueio pequeno:
-`NetSvrSummonSignInterface` tem um `GetSummonSignListJob`, e o gerenciador
-resolve handles pelo slot virtual `+0x98`.
+That is the rematch's next real blocker, and it is a small one:
+`NetSvrSummonSignInterface` has a `GetSummonSignListJob`, and the manager
+resolves handles through virtual slot `+0x98`.
 
-## A revanche funcionando, do lado do host
+## The rematch working, on the host's side
 
-12/09, 05:32–05:34, servidor local, com `DS2AutoRematch` ligado nos dois lados:
+12/09, 05:32–05:34, local server, with `DS2AutoRematch` on on both sides:
 
-    05:32:06  1:Samuel  Summoning sign 1000            o duelo normal, o jogador tocou a placa
+    05:32:06  1:Samuel  Summoning sign 1000            the normal duel, the player touched the sign
               hook      "o jogador invocou a placa 80000015"
-    05:33:03  3:Chico   morre por queda no mundo do host
+    05:33:03  3:Chico   dies by falling in the host's world
     05:33:2x  host      DS2_Rematch.req -> "revanche armada"
-    05:33:37  3:Chico   Sign 1001 created              o fantasma recoloca a placa
+    05:33:37  3:Chico   Sign 1001 created              the phantom puts the sign back down
     05:33:40  hook      "revanche: invocando a placa 80000025 que acabou de chegar"
-    05:33:40  1:Samuel  Summoning sign 1001            <- sem ninguem encostar em nada
-    05:33:46  3:Chico   Sign 1001 removed by its owner  o fantasma sendo puxado
-              tela      Chico de volta como fantasma vermelho no mundo do Samuel
+    05:33:40  1:Samuel  Summoning sign 1001            <- with nobody touching anything
+    05:33:46  3:Chico   Sign 1001 removed by its owner  the phantom being pulled in
+              screen    Chico back as a red phantom in Samuel's world
 
-O host não apertou nada. O detour no "adicionar placa" viu a placa nova
-chegar, leu o handle do parâmetro de saída (`0x80000025` — diferente do
-`0x80000015` do primeiro duelo, como esperado) e chamou o mesmo caminho que o
-botão A chama.
+The host pressed nothing. The detour on "add sign" saw the new sign arrive,
+read the handle from the out parameter (`0x80000025` — different from the
+first duel's `0x80000015`, as expected) and called the same path the A button
+calls.
 
-**É a metade que faltava.** O servidor sabe lembrar o par, e agora o cliente do
-host sabe recomeçar.
+**This is the missing half.** The server knows how to remember the pair, and
+now the host's client knows how to start over.
 
-### O sinal canônico, com o censo zerado
+### The canonical signal, with the census cleared
 
-A rodada acima aconteceu num servidor que já tinha gasto o "primeiro de cada
-tipo" nas mensagens de entrada, então ela não prova sozinha. Repetida às 05:39
-logo depois de um `reload`:
+The round above happened on a server that had already spent its "first of
+each type" on the join messages, so it does not prove anything on its own.
+Repeated at 05:39 right after a `reload`:
 
     05:39:13  3:Chico   Sign 1000 created
     05:39:37  hook      "revanche: invocando a placa 80000015 que acabou de chegar"
@@ -356,132 +360,156 @@ logo depois de um `reload`:
     05:39:47  1:Samuel  First RequestNotifyJoinGuestPlayer
     05:39:49  3:Chico   First RequestNotifyJoinSession
 
-As duas últimas linhas são o sinal que este projeto exige, e elas aparecem
-depois de um summon que **nenhum jogador pediu**. Vinte e quatro segundos entre
-a placa ir ao chão e a sessão formar, dos quais vinte são o intervalo do poll
-de placas do cliente — é o que dá para encurtar depois, se valer a pena.
+The last two lines are the signal this project demands, and they show up
+after a summon **no player asked for**. Twenty-four seconds between the sign
+going down and the session forming, twenty of which are the client's sign
+poll interval — that is what can be shortened later, if it is worth it.
 
-### O que ainda não é automático
+### What is still not automatic
 
-A revanche é armada por um arquivo de pedido (`DS2_Rematch.req`), não pela
-morte. O gatilho de verdade é o cliente perceber que a sessão terminou numa
-morte, e o caminho para isso já está mapeado em
-[DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md): o estado da sessão vai
-para 8 e o motivo `2` chega ao pedido de encerramento. Falta ligar uma coisa na
-outra.
+The rematch is armed by a request file (`DS2_Rematch.req`), not by the death.
+The real trigger is the client noticing that the session ended in a death,
+and the path to that is already mapped in
+[DS2_SESSION_END_CLIENT.md](DS2_SESSION_END_CLIENT.md): the session state goes
+to 8 and reason `2` reaches the end request. What is missing is wiring one to
+the other.
 
-E falta escolher quando **não** revanchear: o par saiu de perto, o jogador
-quer parar, ou a placa que chegou é de outra pessoa. Para dois jogadores no
-servidor a placa que chega é sempre do par; para mais, o hook precisa
-identificar o dono, que é o campo do item que ainda não foi lido.
+And there is still the question of when **not** to rematch: the pair moved
+away, the player wants to stop, or the sign that arrived belongs to somebody
+else. With two players on the server the sign that arrives is always the
+pair's; with more, the hook needs to identify the owner, which is the item
+field that has not been read yet.
 
-## O ciclo fechado, sem ninguém armar nada
+## The closed cycle, with nobody arming anything
 
-Última rodada, 12/09 às 06:04, com a build em que o próprio summon liga a
-revanche:
+Last round, 12/09 at 06:04, with the build where the summon itself turns the
+rematch on:
 
-    05:58:11  1:Samuel  Summoning sign 1003          o unico toque humano
+    05:58:11  1:Samuel  Summoning sign 1003          the only human touch
               hook      "o jogador invocou a placa 80000015; revanche ligada"
-    06:03:xx  sessao termina
-    06:04:05  3:Chico   Sign 1004 created            a placa volta ao chao
+    06:03:xx  the session ends
+    06:04:05  3:Chico   Sign 1004 created            the sign goes back on the ground
     06:04:58  hook      "revanche: invocando a placa 80000025 que acabou de chegar"
     06:04:58  1:Samuel  Summoning sign 1004
     06:05:04  3:Chico   Sign 1004 removed by its owner
     06:05:11  3:Chico   First RequestNotifyJoinSession
 
-O `JoinSession` da última linha vem de um cliente que tinha acabado de ser
-reiniciado, então o censo dele estava limpo e a linha é honesta.
+The `JoinSession` on the last line comes from a client that had just been
+restarted, so its census was clean and the line is honest.
 
-Entre o primeiro summon e esse, **ninguém apertou nada no host**.
+Between the first summon and this one, **nobody pressed anything on the
+host**.
 
-## Como ligar, e o que a funcionalidade é hoje
+## How to turn it on, and what the feature is today
 
-Duas peças, uma de cada lado, e as duas nascem desligadas:
+Two pieces, one on each side, and both are born off:
 
-| onde | flag | o que faz |
+| where | flag | what it does |
 | --- | --- | --- |
-| servidor | `DS2_AutoRematch` | lembra o último summon de cada dono de placa e sabe reenviar o push; sozinho **não** forma sessão |
-| cliente | `DS2AutoRematch` | o `DS2_RematchHook`: invocar uma vez liga a revanche **com o dono daquela placa**, e cada placa nova do mesmo jogador e do mesmo tipo é invocada sozinha |
+| server | `DS2_AutoRematch` | remembers each sign owner's last summon and knows how to resend the push; on its own it does **not** form a session |
+| client | `DS2AutoRematch` | the `DS2_RematchHook`: summoning once turns the rematch on **with that sign's owner**, and every new sign from the same player and the same type is summoned on its own |
 
-No harness: `ds2os-dev up --auto-rematch`, ou
-`ds2os-dev game prepare --auto-rematch` e relançar (a config é lida na
-injeção).
+In the harness: `ds2os-dev up --auto-rematch`, or
+`ds2os-dev game prepare --auto-rematch` and relaunch (the config is read at
+injection).
 
-O hook escreve em `DS2_Rematch.log`, ao lado da DLL. Escrever `0` em
-`DS2_Rematch.req` desliga; `alvo <id do jogador> <tipo>` arma com esse
-oponente; qualquer outra coisa liga com o oponente lembrado (e, sem nenhum,
-não invoca nada).
+The hook writes to `DS2_Rematch.log`, next to the DLL. Writing `0` to
+`DS2_Rematch.req` turns it off; `alvo <player id> <type>` arms it with that
+opponent; anything else turns it on with the remembered opponent (and, with
+none, summons nothing).
 
-**O que é hoje:** depois de um duelo por red sign, o fantasma que voltou
-recoloca a placa e o host o invoca sozinho, sem apertar nada. Vinte e quatro
-segundos entre a placa ir ao chão e a sessão formar, dos quais vinte são o
-intervalo do poll de placas do cliente.
+**What it is today:** after a duel by red sign, the phantom that came back
+puts the sign down and the host summons it on its own, with nothing pressed.
+Twenty-four seconds between the sign going down and the session forming,
+twenty of which are the client's sign poll interval.
 
-**Só o par.** Até 14/09 o hook invocava qualquer placa que chegasse: com três
-jogadores, a de um estranho — vermelha, branca, qualquer uma — entraria no
-mundo do host sem ninguém pedir (apontado na revisão do PR 6). Agora ele lembra,
-por alça, o dono e o tipo de toda placa que passa pelo `AddSign`
-(`FUN_140213160`), e o summon feito pelo jogador fixa esse par como oponente.
+**The pair only.** Until 14/09 the hook summoned any sign that arrived: with
+three players, a stranger's — red, white, any of them — would enter the
+host's world with nobody asking (raised in the review of PR 6). Now it
+remembers, by handle, the owner and the type of every sign that goes through
+`AddSign` (`FUN_140213160`), and the summon the player makes fixes that pair
+as the opponent.
 
-Os campos, medidos numa placa vermelha com um breakpoint em `+0x213234`, onde a
-entrada acabou de ser preenchida (`rdi`):
+The fields, measured on a red sign with a breakpoint at `+0x213234`, where
+the entry has just been filled in (`rdi`):
 
-| entrada | argumento do `AddSign` | valor medido |
+| entry | `AddSign` argument | measured value |
 | --- | --- | --- |
-| `+0x20` | 5º | 1006, o id da placa no servidor (muda a cada placa) |
-| `+0x24` | 6º | 3, o id do jogador Chico (fica) |
-| `+0x28` | 3º | 7, o tipo no cliente (a branca chega como 1; no servidor a vermelha é 4) |
-| `+0x38` | 7º | a steam id em hex, `0110000140d6d6d1` |
+| `+0x20` | 5th | 1006, the sign's id on the server (changes with every sign) |
+| `+0x24` | 6th | 3, Chico's player id (stays) |
+| `+0x28` | 3rd | 7, the type on the client (the white one arrives as 1; on the server the red one is 4) |
+| `+0x38` | 7th | the steam id in hex, `0110000140d6d6d1` |
 
-Medido em 14/09 com a DLL `04b5114f`, Samuel host e Chico humano, placas pelo
-cinto e pelo inventário, e cada duelo terminado com a morte do espírito:
+Measured 14/09 with DLL `04b5114f`, Samuel hosting and Chico human, signs
+from the belt and from the inventory, and each duel ended by the spirit's
+death:
 
-| passo | `DS2_Rematch.log` | servidor |
+| step | `DS2_Rematch.log` | server |
 | --- | --- | --- |
-| Samuel invoca a vermelha 1007 | `invocou a placa 80000025 (jogador 3, tipo 7); revanche ligada com ele` | `Summoning sign 1007` → `JoinGuestPlayer` → `JoinSession` |
-| Chico põe uma **branca** (1008) | `é do jogador 3 tipo 1, a revanche é com o jogador 3 tipo 7; ignorada` | a placa entregue, nenhum `Summoning` |
-| Chico põe a **vermelha** 1010 | `revanche: invocando a placa 80000045 do jogador 3` | `Summoning sign 1010` → `JoinGuestPlayer` → `JoinSession`, ninguém apertou nada |
-| `alvo 99 7`, e o Chico põe a vermelha 1011 | `é do jogador 3 tipo 7, a revanche é com o jogador 99 tipo 7; ignorada` | `sent 1` no poll do Samuel, nenhum `Summoning` |
+| Samuel summons red sign 1007 | `invocou a placa 80000025 (jogador 3, tipo 7); revanche ligada com ele` | `Summoning sign 1007` → `JoinGuestPlayer` → `JoinSession` |
+| Chico puts down a **white** one (1008) | `é do jogador 3 tipo 1, a revanche é com o jogador 3 tipo 7; ignorada` | the sign delivered, no `Summoning` |
+| Chico puts down the **red** 1010 | `revanche: invocando a placa 80000045 do jogador 3` | `Summoning sign 1010` → `JoinGuestPlayer` → `JoinSession`, nobody pressed anything |
+| `alvo 99 7`, and Chico puts down red 1011 | `é do jogador 3 tipo 7, a revanche é com o jogador 99 tipo 7; ignorada` | `sent 1` on Samuel's poll, no `Summoning` |
 
-O terceiro jogador de verdade continua sem teste nesta máquina; o `alvo` é o
-jeito honesto de mostrar a recusa por dono com duas contas.
+A real third player is still untested on this machine; `alvo` is the honest
+way to show the refusal by owner with two accounts.
 
-## O que isso deixa como projeto
+## What this leaves as a project
 
-Em ordem de valor:
+In order of value:
 
-1. **Usar o orbe sozinho** quando a sessão terminou em morte e o par ainda está
-   no ar (cliente). É a funcionalidade pedida, e agora ela é pequena: não
-   precisa de efígie, não precisa mexer na forma humana, só disparar o mesmo
-   caminho que os três toques disparam. Economiza dois segundos de relógio e
-   toda a atenção do jogador.
-2. **Não terminar a sessão na morte** (cliente). É o único caminho que corta
-   os ~50 segundos de verdade, e é muito mais fundo: o fantasma teria que
-   renascer no mundo do host em vez de voltar para o seu.
-3. **Lembrar o par no servidor**. Com dois jogadores a lista de alvos já tem um
-   candidato só; isso só passa a valer com três ou mais, que esta máquina não
-   consegue testar.
+1. **Using the orb on its own** when the session ended in a death and the
+   pair is still up (client). It is the requested feature, and it is small
+   now: no effigy needed, no need to touch human form, just fire the same
+   path the three presses fire. It saves two seconds on the clock and all of
+   the player's attention.
+2. **Not ending the session on death** (client). It is the only path that
+   really cuts the ~50 seconds, and it is much deeper: the phantom would have
+   to respawn in the host's world instead of going back to its own.
+3. **Remembering the pair on the server**. With two players the target list
+   already has only one candidate; this only starts to matter with three or
+   more, which this machine cannot test.
 
-O ponto de entrada para (1): os envios estão em `FUN_1406a6300`
-(`RequestGetBreakInTargetList`, 0x3d2) e `FUN_1406a6fb0` (`RequestBreakInTarget`,
-0x3d3), achados procurando os ids do protocolo como imediatos.
-`getCallingFunctions` não achou chamador para nenhum dos dois — o que num
-projeto aberto com `-noanalysis` não prova que não existam. Se o grafo de
-chamadas não levar ao botão X, o caminho é um breakpoint em execução
-(`DS2_Trace.req`) em `FUN_1406a6fb0`, que é o envio que só acontece **depois**
-do YES; o da lista de alvos pode sair antes, para o jogo decidir se mostra o
-diálogo.
+The entry point for (1): the sends are at `FUN_1406a6300`
+(`RequestGetBreakInTargetList`, 0x3d2) and `FUN_1406a6fb0`
+(`RequestBreakInTarget`, 0x3d3), found by searching for the protocol ids as
+immediates. `getCallingFunctions` found no caller for either — which in a
+project opened with `-noanalysis` does not prove there are none. If the call
+graph does not lead to the X button, the way in is a runtime breakpoint
+(`DS2_Trace.req`) on `FUN_1406a6fb0`, which is the send that only happens
+**after** the YES; the target list one may go out earlier, so the game can
+decide whether to show the dialog.
 
-## Ainda não medido
+## The rematch also serves co-op, and that was not expected
 
-- Se a Red Sign Soapstone pode ser usada hollow. O teste que parecia provar
-  que sim foi feito com o personagem humano sem que eu soubesse, então não
-  vale nada. O orbe é o único item medido.
-- Se o **host** que morre continua podendo ser invadido sem fazer nada. Ele
-  hollowa, mas ninguém precisa de forma humana para ser invadido.
-- Se a morte por queda e a morte por kill produzem a mesma cadeia: aqui a
-  queda não mostrou `RequestNotifyDeath`, mas o censo do servidor só registra a
-  **primeira** mensagem de cada tipo por cliente, então isso não é evidência.
-- A arena (`DS2_QuickMatchManager`, implementado no servidor) é o laço de
-  revanche do próprio jogo, em mapas fixos e com registro por partida. Nunca
-  foi exercitada neste fork.
+Measured 12/09, without touching anything: the guest placed a **white sign**
+(`Sign 1002 created: type 1`, against the red one's `type 4`) and the host's
+`DS2_RematchHook` summoned it on its own —
+`revanche: invocando a placa 80000031 que acabou de chegar` — followed by
+`Summoning sign 1002` on the server and by `RequestNotifyJoinGuestPlayer`
+with `RequestNotifyJoinSession`.
+
+The hook does not look at the sign's type: it reacts to any sign that enters
+the client's registry. For co-op that closes half the loop for free — the
+guest puts the sign down and the host pulls it in with nothing pressed,
+including after a death. The half that is missing is the sign putting itself
+back down on the guest's side.
+
+Also worth noting what this implies about hollowing: the **white** sign goes
+down with the character hollow (that is how the measurement was made), while
+the red one, on the same character and at the same spot, does not. The two
+items do not have the same rule.
+
+## Not measured yet
+
+- Whether the Red Sign Soapstone can be used hollow. The test that seemed to
+  prove it could was done with the character human without my knowing, so it
+  is worth nothing. The orb is the only item measured.
+- Whether a **host** that dies can still be invaded without doing anything.
+  It hollows, but nobody needs human form to be invaded.
+- Whether death by falling and death by kill produce the same chain: here the
+  fall showed no `RequestNotifyDeath`, but the server's census only records
+  the **first** message of each type per client, so that is not evidence.
+- The arena (`DS2_QuickMatchManager`, implemented on the server) is the
+  game's own rematch loop, on fixed maps and with per-match registration. It
+  has never been exercised in this fork.

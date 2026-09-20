@@ -28,6 +28,8 @@ pub struct Prepared {
     pub launch_options: String,
     pub injector_config: PathBuf,
     pub copied: Vec<String>,
+    /// Hook logs above 8 MB moved to `.1`, or left because the game is open.
+    pub rotated: Vec<crate::hygiene::Rotated>,
     pub timer_seconds: f64,
     pub timer_patch: bool,
 }
@@ -49,6 +51,7 @@ pub fn prepare(
     force_zone: bool,
     remove_fog: bool,
     auto_rematch: bool,
+    seamless: bool,
 ) -> Result<Prepared, String> {
     let game_dir = install.game_dir.clone();
     let server_paths = environment
@@ -59,6 +62,9 @@ pub fn prepare(
         .injector_source
         .clone()
         .ok_or("não achei Injector.dll; rode `ds2os-dev doctor`")?;
+
+    let running = compat_data(environment, install.account).map(|p| !instance_pids(&p).is_empty()).unwrap_or(false);
+    let rotated = crate::hygiene::rotate_logs(&game_dir, crate::hygiene::ROTATE_ABOVE, running);
 
     let mut copied = Vec::new();
     for name in BINARIES {
@@ -90,6 +96,10 @@ pub fn prepare(
         DS2ForceMultiPlayZone: force_zone,
         DS2RemovePhantomFog: remove_fog,
         DS2AutoRematch: auto_rematch,
+        DS2SeamlessCoop: seamless,
+        DS2PartyGuest: false,
+        DS2PartyAccept: String::new(),
+        DS2PartyPassword: String::new(),
         DS2ForcedZoneId: 103110,
     };
     let injector_config = config
@@ -110,6 +120,7 @@ pub fn prepare(
         game_dir,
         injector_config,
         copied,
+        rotated,
         timer_seconds,
         timer_patch,
     })
@@ -418,26 +429,82 @@ fn trim_slash(path: &str) -> String {
     path.trim_end_matches('/').to_owned()
 }
 
-/// Stops one instance and does not return until its prefix is free.
-pub fn stop_instance(environment: &Environment, account: u8) -> Result<usize, String> {
-    let prefix = compat_data(environment, account)?;
+/// What a stop does when the instance is in a live session.
+///
+/// Killing a client mid-session is an illegal disconnect, and the game counts
+/// them in the save until the character can do nothing multiplayer at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopGuard {
+    /// Refuse with `session_live`; the default for every command.
+    Refuse,
+    /// `--force`: stop anyway, and say so in events.
+    Force,
+    /// A scenario's cleanup with a baseline: the save is restored afterwards,
+    /// so the strike is thrown away with it. Recorded as `cleanup_kill_with_session`.
+    Cleanup,
+}
 
-    let mut pids = instance_pids(&prefix);
+/// The decision, from what the channel said. A channel that does not answer
+/// does not block: that is a game starting, hung, or on a DLL without the hook,
+/// and a stop that refuses exactly when the game is unresponsive is useless.
+/// Returns the event phase to record, if any.
+pub fn stop_verdict(account: u8, live: &Result<bool, String>, guard: StopGuard) -> Result<Option<&'static str>, String> {
+    match (live, guard) {
+        (Ok(false), _) => Ok(None),
+        (Ok(true), StopGuard::Refuse) => Err(format!(
+            "session_live: a conta {account} está numa sessão, e fechar o jogo agora custa um strike no save; \
+termine com `ds2os-dev session end` ou passe --force")),
+        (Ok(true), StopGuard::Force) => Ok(Some("forced_with_session")),
+        (Ok(true), StopGuard::Cleanup) => Ok(Some("cleanup_kill_with_session")),
+        (Err(_), _) => Ok(Some("session_check_unknown")),
+    }
+}
+
+fn running_pids(environment: &Environment, account: u8) -> Result<Vec<u32>, String> {
+    let mut pids = instance_pids(&compat_data(environment, account)?);
     if let Some(pid) = proc::running(&paths::instance_pid(account), "Injector.exe") {
         pids.push(pid);
     }
-    if pids.is_empty() {
-        return Ok(0);
-    }
+    Ok(pids)
+}
 
-    let stopped = pids.len();
-    for pid in &pids {
-        proc::stop(*pid);
+/// Asks every running instance in `accounts` about its session before any of
+/// them is touched, so `--instance both` never closes one and then refuses the other.
+fn guard_stops(environment: &Environment, accounts: &[u8], guard: StopGuard) -> Result<(), String> {
+    for &account in accounts {
+        if running_pids(environment, account)?.is_empty() { continue; }
+        let Some(install) = environment.installs.iter().find(|i| i.account == account) else { continue };
+        let live = crate::session::live(install, std::time::Duration::from_secs(3));
+        let verdict = stop_verdict(account, &live, guard);
+        let phase = match &verdict { Ok(phase) => *phase, Err(_) => Some("refused_session_live") };
+        if let Some(phase) = phase {
+            let kind = if phase == "cleanup_kill_with_session" { phase } else { "stop" };
+            crate::output::event(kind, serde_json::json!({"instance": account, "phase": phase,
+                "live": live.as_ref().ok(), "error": live.as_ref().err()}));
+        }
+        verdict?;
     }
-    if !proc::wait_gone(&pids, std::time::Duration::from_secs(30)) {
-        return Err(format!(
-            "a instância {account} não morreu; um processo dela ainda segura o prefixo"
-        ));
+    Ok(())
+}
+
+/// Stops each instance and does not return until its prefix is free. Refuses
+/// all of them, before stopping any, when one is in a live session (see `StopGuard`).
+pub fn stop_instances(environment: &Environment, accounts: &[u8], guard: StopGuard) -> Result<Vec<(u8, usize)>, String> {
+    guard_stops(environment, accounts, guard)?;
+    let mut stopped = Vec::new();
+    for &account in accounts {
+        let pids = running_pids(environment, account)?;
+        if !pids.is_empty() {
+            for pid in &pids {
+                proc::stop(*pid);
+            }
+            if !proc::wait_gone(&pids, std::time::Duration::from_secs(30)) {
+                return Err(format!(
+                    "a instância {account} não morreu; um processo dela ainda segura o prefixo"
+                ));
+            }
+        }
+        stopped.push((account, pids.len()));
     }
     Ok(stopped)
 }
@@ -470,13 +537,6 @@ pub fn instances_status(environment: &Environment) -> InstancesStatus {
     }
 }
 
-pub fn stop_second() -> bool {
-    match proc::running(&paths::instance_pid(2), "Injector.exe") {
-        Some(pid) => proc::stop(pid),
-        None => true,
-    }
-}
-
 /// Log the injector writes inside the game directory.
 pub fn injector_log(environment: &Environment) -> Option<PathBuf> {
     Some(environment.game_dir.as_ref()?.join("DS2OS_Injector.log"))
@@ -490,4 +550,48 @@ pub fn timer_log(environment: &Environment) -> Option<PathBuf> {
 
 pub fn exists(path: &Path) -> bool {
     path.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_live_session_refuses_unless_forced_or_cleaned_up() {
+        let live = Ok(true);
+        let error = stop_verdict(2, &live, StopGuard::Refuse).unwrap_err();
+        assert!(error.starts_with("session_live:"), "{error}");
+        assert_eq!(stop_verdict(2, &live, StopGuard::Force), Ok(Some("forced_with_session")));
+        assert_eq!(stop_verdict(2, &live, StopGuard::Cleanup), Ok(Some("cleanup_kill_with_session")));
+    }
+
+    #[test]
+    fn no_session_stops_quietly_and_an_unanswered_channel_does_not_block() {
+        assert_eq!(stop_verdict(1, &Ok(false), StopGuard::Refuse), Ok(None));
+        let silent = Err("request_not_consumed: nada leu DS2_Channel.req".to_owned());
+        assert_eq!(stop_verdict(1, &silent, StopGuard::Refuse), Ok(Some("session_check_unknown")));
+    }
+}
+
+/// `--party`: instance 2 keeps its white sign down, instance 1 summons the
+/// signs of instance 2's configured Steam ID. Written over the config `prepare`
+/// just wrote, so every other flag stays as given.
+pub fn prepare_party(environment: &Environment, password: &str, host: u8) -> Result<Vec<serde_json::Value>, String> {
+    let settings = crate::settings::HarnessConfig::load();
+    let guest = if host == 1 { 2 } else { 1 };
+    let guest_id = settings.steam_ids.get(&guest).cloned()
+        .ok_or_else(|| format!("identity_missing: `ds2os-dev game identity --instance {guest} <SteamID64>` antes de --party"))?;
+    let mut applied = Vec::new();
+    for install in &environment.installs {
+        let path = install.game_dir.join(ds2os_core::config::INJECTOR_CONFIG_FILE);
+        let mut config: ds2os_core::config::InjectorConfig = serde_json::from_slice(
+            &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?).map_err(|e| format!("{}: {e}", path.display()))?;
+        config.DS2PartyGuest = install.account == guest;
+        config.DS2PartyAccept = if install.account == host { guest_id.clone() } else { String::new() };
+        config.DS2PartyPassword = password.to_owned();
+        config.write_to(&install.game_dir).map_err(|e| format!("{}: {e}", path.display()))?;
+        applied.push(serde_json::json!({"instance": install.account, "guest": config.DS2PartyGuest, "accept": config.DS2PartyAccept,
+            "password": !config.DS2PartyPassword.is_empty()}));
+    }
+    Ok(applied)
 }

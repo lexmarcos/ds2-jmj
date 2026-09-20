@@ -1,0 +1,200 @@
+/*
+ * Dark Souls 3 - Open Server
+ * Copyright (C) 2021 Tim Leonard
+ *
+ * This program is free software; licensed under the MIT license.
+ * You should have received a copy of the license along with this program.
+ * If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+#pragma once
+
+#include "Injector/Hooks/Hook.h"
+
+#include <cstdint>
+
+// A channel of the mod's own between the machines of a session, and the one
+// thing it carries today: the bonfire the host respawns at.
+//
+// A guest in the host's world has only its own respawn record (`*(ctx+0x70)`:
+// +0x164 map, +0x168 type, +0x16c id), which holds the last bonfire of its own
+// world, and the game writes none for a guest: lighting (`FUN_1401caf50`) and
+// resting (`FUN_1401cb950`) record the bonfire only for the local player, and
+// only when the context's slot +0x58 says it is not in someone else's world.
+// The host's record exists on the host's machine alone.
+//
+// The session between the players is Steam P2P, and the game uses one channel
+// of it: every `SteamNetworking()` call in the binary passes channel 0
+// (`FUN_140a75800` asks and `FUN_140a73de0` reads with 0, `FUN_140a7a410` and
+// `FUN_140a76d90` send with 0). A packet on another channel travels over the
+// same P2P session and waits on the other machine, untouched by the game, for
+// whoever reads that channel. No server, no new connection.
+//
+// `FUN_140a75800` is slot +0x108 of `DLNRD::SteamSessionLight` (vftable
+// `0x1411b1058`), the session's poll, run by the session manager's thread. The
+// members are the vector at +0x68..+0x70, each a `SteamSessionMemberLight` with
+// its CSteamID at +0xc8; the game looks the sender of a packet up there. Which
+// of them is the host the game decides itself when it adds a member
+// (`FUN_140a72740`): +0xad is set when the member is the lobby's owner, and the
+// debug log calls it "Host". The detour lets the poll run, then reads this
+// channel and, on the host, speaks.
+//
+// The host, when it is also the owner of the world it stands in (role 0),
+// announces the map, type and id of its record to every other member every two
+// seconds, and at once when they change. A guest keeps the last announcement
+// that came from the host of its session. Role 0 alone is not enough: a guest
+// on its way in still owns its own world for a few seconds, and announced its
+// own bonfire five times before arriving (14/09). The network thread never
+// reads the game's world: the game's thread publishes the local role and record
+// once a frame (DS2_DeathInterceptHook), and the death hook asks for the host's
+// bonfire when a guest dies.
+//
+// `DS2_Channel.req`: `status` writes what the channel has seen to
+// `DS2_Channel.log`.
+class DS2_CoopChannelHook : public Hook
+{
+public:
+    virtual bool Install(Injector& injector) override;
+    virtual void Uninstall() override;
+    virtual const char* GetName() override;
+};
+
+namespace DS2_CoopChannel
+{
+    struct Bonfire
+    {
+        uint32_t Map = 0;
+        int32_t Type = 0;
+        uint32_t Id = 0;
+        uint64_t From = 0;      // the host's SteamID64
+        uint64_t AgeMs = 0;
+    };
+
+    // From the game's thread: who the local player is, and what its respawn
+    // record holds. Role 0xff when there is no local player.
+    void PublishLocal(uint8_t Role, uint32_t Map, int32_t Type, uint32_t Id);
+
+    // The bonfire the host of this session last announced: false unless it
+    // came in the last 30 s from someone who is the host of a session now.
+    bool HostBonfire(Bonfire& Out);
+
+    // Things the host tells its guests once, at the moment they happen. The
+    // host queues one from the game's thread; the next poll sends it to every
+    // other member, with the host's respawn record, if the host owns the world
+    // and has guests (otherwise it is dropped). A guest takes each received
+    // event once.
+    enum class HostEvent : uint8_t
+    {
+        RestStarted = 0,   // the host sat at a bonfire
+        WorldReset = 1,    // the rest reset the host's world (FUN_14017fd70)
+        TravelVote = 2,     // a vote to travel; Map/Type the bonfire, Id the vote (top bit: a guest proposed it)
+        TravelLeave = 3,    // everyone agreed: leave the session so the host can travel
+        TravelCanceled = 4, // Id the reason, Map/Type the bonfire
+        TravelGo = 5,       // everyone agreed: go to this bonfire, Map/Id, Type the vote
+        // Everybody is standing on the destination: drop the loading screen.
+        // Id the vote, Type 0 when someone failed or the wait ran out.
+        //
+        // This is what makes a group travel look like one event instead of
+        // two. The machines do **not** load at the same time - both loading at
+        // once closed both games on 15/09 - so they arrive seconds apart, and
+        // without this the second player watched the first pop in. Now each
+        // one waits behind its own loading screen after arriving, and every
+        // curtain comes down on this one message.
+        TravelRelease = 6,
+        // The destination does not fit beside the map everyone stands in:
+        // leave it for a bonfire of the session's map and wait there, behind
+        // the curtain, so it can be taken down before the destination loads.
+        // The map another player stands in is never let go (15/09: that killed
+        // the guest in the CharacterManager), so the guests have to leave it.
+        TravelPark = 7,
+    };
+    constexpr uint8_t kHostEventCount = 8;
+
+    // Other members of a session this machine hosts, seen in the last few
+    // seconds. 0 when it hosts nothing.
+    size_t GuestCount();
+    // With Map/Id nonzero they replace the host's record in the event; Type
+    // is passed through (0 by default).
+    void SendHostEvent(HostEvent Event, uint32_t Map = 0, uint32_t Id = 0, int32_t Type = 0);
+    bool TakeHostEvent(HostEvent Event, Bonfire& Out);
+
+    // A guest's answer to the host's vote, sent to the host of its session by
+    // the next poll. The host counts the answers it received for one vote.
+    void SendGuestAnswer(uint32_t Vote, bool Yes);
+    void GuestAnswers(uint32_t Vote, size_t& Yes, size_t& No);
+
+    // Things a guest tells the host of its session, sent by the next poll. The
+    // host takes each received one once; Out.From is the guest.
+    enum class GuestEvent : uint8_t
+    {
+        RestStarted = 0,     // the guest sat at a bonfire in the host's world; Map/Id the bonfire
+        TravelPropose = 1,   // the guest picked a bonfire to travel to; Map/Id the bonfire
+        TravelArrived = 2,   // this guest is standing on the destination; Id the vote
+        TravelFailed = 3,    // this guest could not get there; Id the vote
+        SnapshotPlease = 4,  // this guest reloaded its map and wants the host's world again; Map the map it stands in
+        // This guest cannot reach the destination the way the host did and is
+        // about to warp: the host takes its copy of this guest out before the
+        // warp destroys it, and puts it back once the guest reports arrival.
+        // Map the destination, Id the vote.
+        WarpNotice = 5,
+    };
+    constexpr uint8_t kGuestEventCount = 6;
+    void SendGuestEvent(GuestEvent Event, uint32_t Map, uint32_t Id);
+    bool TakeGuestEvent(GuestEvent Event, Bonfire& Out);
+
+    // The bonfires the host of the session has lit, as a bitmap over the
+    // bonfire table's own order (the same table on every machine, so the
+    // index is the name): the host publishes it from the game's thread and
+    // the poll sends it with the announcement; a guest reads the last one.
+    // Up to 96 bonfires, which is what the table holds (77 in 1.03).
+    constexpr uint8_t kMaxLitBonfires = 96;
+    void PublishLit(uint8_t Count, const uint32_t Bits[3]);
+    bool HostLit(uint8_t& Count, uint32_t Bits[3], uint64_t& AgeMs);
+
+    // One map's event flags, as the host has them.
+    //
+    // A map owns three flag categories - `(area * 10 + block) * 100` plus 0, 1
+    // and 2 - of 25 bytes each, and they do not live in the map: they live in
+    // a three-map arena inside the EventFlagBuffer, and a guest's copy of that
+    // arena is filled only by the world snapshot of the entry warp. A map the
+    // group travels to afterwards was not in that snapshot, so the guest reads
+    // it as all zeroes: measured 19/09 at Heide, the host had `131000022` and
+    // `131000086` and the guest had nothing, not even his own save's bits.
+    // Every door, lever, illusory wall and shortcut that is a map flag was
+    // shut for him. See docs/DS2_WORLD_STATE.md.
+    //
+    // So the host publishes the three blocks of each map it has loaded, the
+    // poll sends the ones that changed, and the guest writes them in as the
+    // map registers. Changes after that already travel on the game's own
+    // `0x20` packet.
+    constexpr size_t kMapFlagBytes = 75;
+    void PublishMapFlags(uint32_t Map, const uint8_t Bytes[kMapFlagBytes]);
+    bool HostMapFlags(uint32_t Map, uint8_t Bytes[kMapFlagBytes], uint64_t& AgeMs);
+
+    // One map's object state, as the host has it.
+    //
+    // The objects with a state machine - doors, levers, elevators, the ones
+    // `MapObjStateActComponent` drives - keep their state outside the event
+    // flags, and the only thing that ever hands it to a guest is the world
+    // snapshot of the entry warp. A map the group travels to afterwards was
+    // not in that snapshot. Measured 19/09 after a leg to Brume Tower, with
+    // the map flags already carried and byte for byte equal: of all 399
+    // state-act objects on the two machines exactly one disagreed, at
+    // (-167.7, -5.2, 436.3), state 20 on the host and 10 on the guest.
+    //
+    // So the host publishes, per map, the state of every entity that has one,
+    // and the guest applies it with the game's own `FUN_1401f30e0` as the map
+    // finishes building - which runs the real `SetState`, so the object moves
+    // instead of a byte changing under it. A map holds 120 to 205 of these in
+    // practice. The entity walk finds far more than that - Shulva passed 256
+    // and Brume Tower passed 512, each cap in turn truncating the list and
+    // leaving the very object this was written for outside it. kMapObjMax is
+    // the cap now, and a map over it says so in DS2_Backread.log rather than
+    // going quiet. See docs/DS2_WORLD_STATE.md.
+    constexpr size_t kMapObjMax = 2048;
+    void PublishMapObjects(uint32_t Map, const uint16_t* Index, const uint8_t* State, size_t Count);
+    size_t HostMapObjects(uint32_t Map, uint16_t* Index, uint8_t* State, size_t Room, uint64_t& AgeMs);
+
+    // This machine's SteamID64, 0 until the first poll.
+    uint64_t SelfSteamId();
+}

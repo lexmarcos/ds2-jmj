@@ -232,6 +232,13 @@ bool InjectLibrary(HANDLE process, const std::wstring& dll_path) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  // No console window. This is a console-subsystem program, so Windows (and
+  // Wine) hand it one and it sits on top of the game for the whole session.
+  // Every line already goes to DS2OS_Injector.log beside this exe, so the
+  // window only ever showed what the file already has. Detaching keeps the
+  // `wprintf` calls harmless - they simply go nowhere.
+  FreeConsole();
+
   const std::wstring here = ModuleDirectory();
   g_log_path = here + L"\\DS2OS_Injector.log";
 

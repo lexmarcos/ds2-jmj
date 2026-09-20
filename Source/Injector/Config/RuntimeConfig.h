@@ -74,6 +74,26 @@ public:
     // pairs with is off too.
     bool DS2AutoRematch = false;
 
+    // Writes a line for every warp the game asks for, and offers the lever
+    // that turns a forced return home into a bonfire respawn. The lever itself
+    // starts off - see DS2_SeamlessCoopHook. Off by default: it detours the one
+    // call every warp in the game goes through.
+    bool DS2SeamlessCoop = false;
+
+    // Entering without the ritual (M3), with DS2SeamlessCoop. A guest keeps its
+    // own white sign on the ground while it stands in its own world, placing it
+    // again when it is gone; a host summons, by itself, the white signs of the
+    // Steam IDs listed in DS2PartyAccept (decimal, comma separated).
+    bool DS2PartyGuest = false;
+    std::string DS2PartyAccept = "";
+    // The party's password. Both players set the same one: it travels as the
+    // sign's and the sign poll's name_engraved_ring (bit 31 set), and the
+    // server only matches a party sign with a party poll of the same code, so
+    // nobody else sees the sign and the host sees nobody else's. With a
+    // password, a player that is not DS2PartyGuest summons the white signs
+    // that reach it.
+    std::string DS2PartyPassword = "";
+
     // Zone substituted when the game reports none. 103110 is Heide's Tower of
     // Flame, measured as a zone that permits summoning.
     int DS2ForcedZoneId = 103110;

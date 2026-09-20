@@ -38,6 +38,12 @@ pub fn injector_config() -> InjectorConfig {
         // After a duel, the host summons the same opponent's next sign of the
         // same type by itself. Only that pair: a stranger's sign is ignored.
         DS2AutoRematch: true,
+        // The seamless co-op hooks are still measured one case at a time in
+        // the harness; a player's loader does not turn them on yet.
+        DS2SeamlessCoop: false,
+        DS2PartyGuest: false,
+        DS2PartyAccept: String::new(),
+        DS2PartyPassword: String::new(),
 
         DS2ProbeArea: false,
         DS2WatchAreaReads: false,

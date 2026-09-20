@@ -23,6 +23,11 @@ pub struct HarnessConfig {
     /// right one" are different questions. With a name written down, the
     /// harness can answer the second from the server's own log.
     pub characters: std::collections::BTreeMap<u8, String>,
+    /// Explicit account binding. Never infer the active account from login history.
+    pub steam_ids: std::collections::BTreeMap<u8, String>,
+    /// The death hook's mode and bill, applied by `game enter` on every
+    /// arrival: the hook starts each launch in observe with everything on.
+    pub death_profile: Option<crate::death::Profile>,
 }
 
 impl HarnessConfig {
