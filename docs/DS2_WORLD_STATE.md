@@ -511,6 +511,13 @@ excluded his own player slot. The prompt has not been photographed — the
 camera would not frame it unattended — but nothing excludes the phantom any
 more.
 
+**Played by hand, 20/09, and it goes all the way through.** In the host's
+world the guest talked to the Emerald Herald, spent souls and took Vigor from
+4 to 5. Back in his own world afterwards, **the level was still there**. So
+the patch does not merely put the prompt back: the whole conversation runs,
+the level-up commits, and it reaches the guest's own save — which is what M7
+asks of anything done together.
+
 **What this is not.** These are the guest's own local copies. With the two
 players in different maps the host had a different set loaded entirely, so
 making them solid gives each player their own NPC; it does not share one

@@ -614,7 +614,12 @@ unloading gets the release the warp would have given it.
    white phantom may use this action". Every bonfire has it set (which is why
    a guest can rest); the lever has it clear. `DS2_PhantomActionHook` sets it
    for every map-object action with one immediate at `+0x453b47`, and the
-   phantom now reads `A: Pull`. Pulled by hand with the patch in, the lever
+   phantom now reads `A: Pull`. The same bit, from the fixed mask
+   `FUN_140453b80` writes for the guides the event scripts create, is what
+   kept a phantom from **talking to an NPC**; widened at `+0x453b87`. Played
+   by hand on 20/09: in the host's world the guest talked to the Emerald
+   Herald and took Vigor from 4 to 5, and the level was still there back in
+   his own world. Pulled by hand with the patch in, the lever
    went from state 10 to **30 on both machines**, and the trace caught the
    flag `105400` being set through the emevd dispatcher on each and crossing
    on the game's own `0x20`. What is still open is a mechanism with no flag
