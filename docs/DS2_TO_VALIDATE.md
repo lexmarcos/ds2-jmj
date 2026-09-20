@@ -45,7 +45,12 @@ plausibly where phantom limits, session length and matchmaking ranges
 live. If those turn out to be per-zone, the whole game is silently
 running on Heide's rules. Nobody has read that record.
 
-### Group travel with the session's map held (18/09)
+### Group travel with the session's map held (18/09, 19/09)
+
+A long manual session on 19/09, played by the project's owner rather than
+scripted, travelled the group over many bonfires with nothing going wrong:
+no crash, no session drop, no character left stuck. That is the first
+end-to-end evidence from a real play session rather than a campaign runner.
 
 The 32 consecutive legs of the first run used the Tower of Prayer (Shrine of
 Amana) and Ironhearth Hall where Brume Tower and Threshold Bridge were meant

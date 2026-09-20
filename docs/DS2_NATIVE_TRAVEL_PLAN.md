@@ -1411,3 +1411,9 @@ screen and with `goto`).
 | --- | --- | --- | --- |
 | 48ecc94 | 16 | 15 | one leg's guest hit the full TargetManager, trapped |
 | e5b1adc | 20 | 20 | the same route, no fault, no "NO ROOM" |
+
+**19/09, played by hand.** After the fixes of §16 and §17, a long session played
+by the project's owner travelled the group across many bonfires with nothing
+going wrong: no crash on either machine, no session drop, and no character left
+stuck at an arrival. The scripted campaigns had reached 20 of 20 legs on the
+same build (e5b1adc); this is the same road with a person at the controls.
