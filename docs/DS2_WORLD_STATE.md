@@ -5,7 +5,17 @@ opened by the host appear open to whoever joined, and that this does **not**
 carry into the guest's world. Before building anything, the question is what
 the game already does. This file is what was measured on 15/09.
 
-## Status: paused on 15/09 — how to resume
+## Status: taken up again on 19/09
+
+The pause below stood from 15/09 to 19/09. What ended it was not the manual
+test but the bench itself: once bonfire travel worked, reading the flags of
+two characters who had travelled twelve maps together found the game's own
+bookkeeping broken by the travel — see [the map flag arena](#the-map-flag-arena-and-what-travel-did-to-it--1909).
+That is measured, not played, and it had to be fixed before any measurement of
+a real mechanism could be believed: on that bench the host was standing in a
+map where **every** flag write was dropped.
+
+### The pause of 15/09 — how it was meant to resume
 
 **Why it stopped.** Everything that can be measured without playing has been
 measured. What is left needs a mechanism neither character has triggered, and
@@ -109,6 +119,71 @@ each, the map). Samuel and Chico had exactly the same bits (34 in `10`, 18 in
 `FUN_1404744b0` empties the table (a map change) and writes into `mgr + 0x118`
 whether the client is in a session as a non-host.
 
+## The map flag arena, and what travel did to it — 19/09
+
+A map's bytes do not belong to the map. Each loaded map owns three categories
+— `(area * 10 + block) * 100` plus 0, 1 and 2, so Heide (`0a1f0000`) is
+`13100`, `13101` and `13102`, Brume (`32240000`) `53600`–`53602` — and their
+bytes live in an arena inside the `EventFlagBuffer` (`*(mgr + 0x18)`), which
+the manager's nodes point straight into.
+
+`FUN_1401855f0(buf, copy, map)` hands out the slot, and the two copies are not
+shaped alike:
+
+| copy | `X00` | `X01` and `X02` | the map ids |
+| --- | --- | --- | --- |
+| 0, his own world | `+0x9cc + index * 25`, **42 slots**, one per map owner index | `+0xde6` and `+0xe31`, **3 slots** | `+0xe7c` |
+| 1, someone else's world | `+0x184c`, **3 slots** | `+0x1897` and `+0x18e2`, **3 slots** | `+0x1930` |
+
+So a guest in a session has room for **three maps**, all three categories.
+
+`FUN_1404745c0(mgr, map)` claims a slot (`FUN_140186050`, which evicts when
+the three are taken) and hangs the three nodes off the table
+(`FUN_140474db0`). It runs from the owner's build, `FUN_1403ca8d0` case 1,
+through `FUN_14044fbb0`.
+
+**Nothing gives the slot back.** The owner's teardown does notify the
+EventManager — `FUN_1403cb1a0` case 1 → `FUN_14044fb60` — but the flag half of
+that call, `FUN_1404746a0`, is a bare `ret`. The only real release is
+`FUN_14044f7a0` → `FUN_1404746b0`, which drops the three nodes and frees the
+slot (`FUN_140186480`), and in the unmodded game only the warp
+(`FUN_1401c2080`) calls it. That is enough there: a warp is the only way the
+set of loaded maps ever changes.
+
+Travelling between bonfires changes it **without a warp**. A trace of one leg
+to Heide (`bp 44fbb0`, `bp 44f7a0`, `bp 4745c0`, `bp 4746b0`, `bp 186050`,
+`bp 186480` on both installations) caught it exactly:
+
+- the **guest** hit `44fbb0` → `4745c0` → `186050` (copy 1) and **never** hit
+  a release;
+- the **host** released one map, from `+0x1c209a` — the warp, and only for the
+  map the warp leaves — then registered Heide.
+
+What that had made of the bench, after twelve maps travelled:
+
+- the guest's table held **36 nodes for 12 maps over 9 slots**. `10401`,
+  `13101` and `53601` all pointed at `buf + 0x1897`: Majula, Heide and Brume
+  were reading and writing the same 25 bytes. Two reads of `ds2os-dev flags`
+  minutes apart disagreed about the same category, which is what aliasing
+  looks like from outside;
+- the host's arena held `0a0a0000`, `0a110000` and `0a130000` while the maps
+  actually loaded were `0a040000`, `0a110000` and `0a1b0000` — and the host
+  was **standing in `0a1b0000`, which had no category at all**. There,
+  `FUN_1404750b0` finds no node, returns 0, and `FUN_140474a60` drops the
+  write and never sends the `0x20` packet. A lever pulled in a travelled-to
+  map was lost on the host himself.
+
+Fixed on 19/09 in `DS2_BackreadHook`: an owner that reaches state 0 queues its
+map, and the next streamer update calls `FUN_14044f7a0` for it — the release
+the warp would have given it.
+
+**What that leaves open.** The slot `FUN_140186480` frees is also zeroed, and
+a guest's copy 1 is only ever filled by the snapshot at the entry warp. So a
+map the guest loads **after** joining has no host bytes to read: it starts at
+zero, not at whatever the host has. Sending the host's three blocks for a map
+over the co-op channel before the guest loads it is [what is still
+unknown](#what-is-still-unknown)'s first item and the next piece of M4.
+
 ## What was measured
 
 With both in Heide, `up --seamless --party`, a trace on `25ce10` and `25cec0`
@@ -208,6 +283,13 @@ host's doors and levers into his own save, which is what the design asks for.
 
 ## What is still unknown
 
+- **A map the guest loads after joining reads zeroed flags.** Copy 1 of the
+  arena is filled only by the snapshot at the entry warp, and holds three
+  maps; travelling brings in maps that were not in it. Measured on the bench
+  of 19/09 only as far as the aliasing above — the check that settles it is to
+  travel to a map with flags set on the host and compare the two categories
+  byte for byte. The fix, if it reads zero, is the host's three 25-byte blocks
+  over the co-op channel before the guest loads the map.
 - **Whether doors, levers, elevators and illusory walls are map flags.**
   `MapObjStateActComponent` (vftable `0x1410c6d78`) may keep per-object state
   outside the `EventFlagManager`. No real mechanism has been triggered yet.

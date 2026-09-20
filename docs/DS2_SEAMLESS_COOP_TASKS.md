@@ -548,7 +548,7 @@ Take out of the join everything that is ceremony today:
 
 ---
 
-## M4 — authoritative world state — **paused on 15/09** (a manual test is missing; resume through [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md), "Status: paused")
+## M4 — authoritative world state — **taken up again on 19/09** (see [DS2_WORLD_STATE.md](DS2_WORLD_STATE.md))
 
 Doors, levers, elevators, shortcuts, illusory walls and Pharros mechanisms
 opened by the host show up open for whoever joined. The closest neighbouring
@@ -570,8 +570,23 @@ the flags it carries `EventValueManager`, `EventBonfireManager`,
 `MapStateActManager` (map object state) and `EnemyGeneratorDeadCounter`
 (despawn). `ds2os-dev flags` reads and compares the two accounts' flags.
 
+**Measured 19/09** — and this one is travel's doing, not the game's. A map's
+three flag categories live in a small arena that only a **warp** ever gives
+back (`FUN_14044f7a0`; the teardown's own notification, `FUN_1404746a0`, is a
+bare `ret`). Bonfire travel changes the set of loaded maps without a warp, so
+after twelve maps the guest's table held 36 nodes over 9 slots — Majula, Heide
+and Brume writing the same 25 bytes — and the host was standing in a map with
+no category at all, where `FUN_1404750b0` drops every flag write and nothing
+goes out on the `0x20`. Fixed in `DS2_BackreadHook`: a map that finishes
+unloading gets the release the warp would have given it.
+
 **Missing:**
 
+0. **The guest's flags for a map loaded after joining.** Copy 1 of the arena
+   is filled only by the snapshot at the entry warp and holds three maps, so a
+   map reached by travelling starts at zero instead of at the host's state.
+   Check first, then send the host's three 25-byte blocks over the co-op
+   channel before the guest loads the map.
 1. **Operate a real mechanism** and see whether its state is a flag: a lever or
    door that one of the two has not opened yet, pulled by the host before and
    during the session, with `25cec0`/`25ce10` in the trace and the
