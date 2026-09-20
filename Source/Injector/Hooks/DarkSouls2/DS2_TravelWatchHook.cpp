@@ -173,6 +173,27 @@ namespace
     constexpr uint8_t kPostPhysicsPrologue[] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x49, 0x08 };
     constexpr size_t kEmbedded = 0x50;          // an embedded object: its vftable sits here
 
+    // MapModelComponent itself, and the two fields that closed the game with
+    // the 000b0010 family in them: the guest on +0xc8, the host on +0xd8, of
+    // this exact class. The vftable test is the whole licence to look: +0xc8
+    // is a two-bit flag byte on the sibling class, and NoteIfCorrupt above
+    // records what watching it without the test cost on 16/09.
+    //
+    // The family is always the same shape - the high half of a live pointer
+    // overwritten, the low half still right (000b0010e8364540 where
+    // 00007fffe8364540 belonged) - so "is this still an address" catches every
+    // recorded case and cannot fire on a legitimate pointer.
+    //
+    // And the pre-draw's own `test %rcx,%rcx ; je` says a null +0xc8 is fine,
+    // so writing the field to 0 turns the crash into a skipped frame. This is
+    // action on a measurement, not on a guess: the class is confirmed, the
+    // field is provably a pointer on it, and the value is provably not one.
+    constexpr size_t kMapModelVftable = 0x10eb558;
+    constexpr size_t kModelNavField = 0xc8;
+    constexpr size_t kModelOtherField = 0xd8;
+    constexpr size_t kModelDumpFrom = 0xb0;
+    constexpr size_t kModelDumpTo = 0xf0;
+
     // FUN_1401cbf20(owner): walks the list at owner+0x18, calling slot 0 of
     // each node and following node[1] and node[2]. It died on a freed node on
     // 15/09 (+0x1cbf40). A lookup that faults answers "not found" instead of
@@ -1176,6 +1197,84 @@ namespace
         }
     }
 
+    bool Poke(uintptr_t At, const void* From, size_t Length)
+    {
+        __try
+        {
+            memcpy((void*)At, From, Length);
+            return true;
+        }
+        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        {
+            return false;
+        }
+    }
+
+    // A canonical user-space address here is either inside the module or a
+    // Wine heap/stack address, whose bits 32..47 are 0x7fff. Nothing else is
+    // a pointer, and every value of the 000b0010 family fails this.
+    bool LooksLikeAddress(uintptr_t Value)
+    {
+        const uintptr_t High = Value >> 32;
+        return High == 0x7fff || (Value >= s_base && Value < s_base + kModuleSpan);
+    }
+
+    std::atomic<uint32_t> s_model_caught{ 0 };
+
+    // Returns true when a field was found impossible and put back to 0, in
+    // which case this frame's update for this component runs guarded.
+    bool GuardModelFields(uintptr_t Owner)
+    {
+        uintptr_t Vftable = 0;
+        if (!Peek(Owner, &Vftable, sizeof(Vftable)) || Vftable != s_base + kMapModelVftable)
+        {
+            return false;
+        }
+        bool Fixed = false;
+        for (const size_t At : { kModelNavField, kModelOtherField })
+        {
+            uintptr_t Value = 0;
+            if (!Peek(Owner + At, &Value, sizeof(Value)) || Value == 0 || LooksLikeAddress(Value))
+            {
+                continue;
+            }
+            // The whole window around it, so whoever reads this log can see
+            // which neighbours moved with it and work back to the writer.
+            std::string Dump;
+            for (size_t Off = kModelDumpFrom; Off < kModelDumpTo; Off += 8)
+            {
+                uintptr_t Word = 0;
+                Dump += StringFormat(" +%02zx=%016llx", Off,
+                    Peek(Owner + Off, &Word, sizeof(Word)) ? (unsigned long long)Word : 0ull);
+            }
+            if (s_model_caught.fetch_add(1) < 40)
+            {
+                Append(StringFormat("%s  t%lu  MAPMODEL CORROMPIDO %p campo +%02zx vale %016llx; zerado;%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), (void*)Owner, At,
+                    (unsigned long long)Value, Dump.c_str()));
+            }
+            const uintptr_t Zero = 0;
+            Fixed = Poke(Owner + At, &Zero, sizeof(Zero)) || Fixed;
+        }
+        return Fixed;
+    }
+
+    // Kept free of anything with a destructor: MSVC refuses __try in a
+    // function that needs object unwinding (C2712), and mingw's syntax check
+    // does not catch that.
+    bool GuardedUpdate(Update_p Update, uintptr_t Owner, void* Argument)
+    {
+        __try
+        {
+            Update((void*)Owner, Argument);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     bool OwnerAlive(uintptr_t Owner)
     {
         uintptr_t Vftable = 0;
@@ -1268,7 +1367,21 @@ namespace
                     continue;
                 }
                 const Update_p Update = (Update_p)(*(void***)Owner)[kUpdateSlot / sizeof(void*)];
-                Update((void*)Owner, Argument);
+                if (GuardModelFields(Owner))
+                {
+                    // Only +0xc8 is known to be null-checked by its reader.
+                    // The frame a field is put back costs this one component
+                    // its update if the other reader is not, which is a great
+                    // deal better than the process.
+                    if (!GuardedUpdate(Update, Owner, Argument))
+                    {
+                        Note(StringFormat("MAPMODEL %p: a atualizacao falhou depois de zerar o campo; quadro perdido", (void*)Owner));
+                    }
+                }
+                else
+                {
+                    Update((void*)Owner, Argument);
+                }
                 // The game re-reads the node's own next here, which is how a
                 // handler that removes the node after it gets away with it;
                 // the one captured before the call is the fallback.
