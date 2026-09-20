@@ -278,6 +278,7 @@ namespace
         bool Forced = false;
         uint32_t Mask[4] = {};
     };
+    ULONGLONG s_victim_logged = 0;
     std::mutex s_keep_mutex;
     Kept s_kept[kMaxKept];
     std::atomic<uint32_t> s_released_map{ 0 };
@@ -2681,6 +2682,8 @@ void DS2_Backread::DropKeeps(bool IncludingOtherPlayers)
         if (!IncludingOtherPlayers && Entry.RemoteUntil > GetTickCount64())
         {
             Entry.Until = Entry.RemoteUntil;
+            Append(StringFormat("%s  holds dropped, but [%d] stays: the other player is standing on it\n",
+                Clock().c_str(), Entry.Index));
             continue;
         }
         Entry.Until = 0;
@@ -2785,6 +2788,15 @@ uint32_t DS2_Backread::Heaviest(uint32_t NotA, uint32_t NotB, uint32_t NotC, int
         // predicate.
         if (IsKeptNow(At, true))
         {
+            // Throttled: this runs from the owner gate, every frame it is
+            // blown. One line a second is enough to prove the rule fired.
+            const ULONGLONG Now = GetTickCount64();
+            if (Now - s_victim_logged >= 1000)
+            {
+                s_victim_logged = Now;
+                Append(StringFormat("%s  budget: not %08x [%d]; the other player is standing on it\n",
+                    Clock().c_str(), Map, At));
+            }
             continue;
         }
         const uint32_t Cost = DS2_Backread::TargetCost(Map);
