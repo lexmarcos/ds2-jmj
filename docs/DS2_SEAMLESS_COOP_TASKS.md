@@ -607,6 +607,15 @@ unloading gets the release the warp would have given it.
    publish-and-seed the flags now use.
 3. **A mechanism operated by the guest** in the host's world: the map flag goes
    through the filter; the object still has to be checked.
+   **Half done 19/09.** The guest got no prompt at all — at a lever in Heide
+   the host read `A: Pull` and the phantom 0.6 m away read nothing. It is the
+   unmodded game's rule and it is authored per object: the prompt's 24-bit
+   role mask comes from the object's own row, and `row[0x1a]` bit 0 means "a
+   white phantom may use this action". Every bonfire has it set (which is why
+   a guest can rest); the lever has it clear. `DS2_PhantomActionHook` sets it
+   for every map-object action with one immediate at `+0x453b47`, and the
+   phantom now reads `A: Pull`. **What the phantom then changes reaching the
+   host is still untested.**
 
 ---
 

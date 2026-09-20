@@ -255,11 +255,67 @@ The one thing that differs is what the two characters are: the role byte at
 `*(*(ctx+0xd0)+0xb0) + 0x3c` reads **0 on the host** and **1 on the phantom**,
 read live on both.
 
-So the refusal is in the interaction, not in the world: something in the
-action-prompt path asks who the local player is. Whether that is the game's
-own rule — DS1 and DS2 both keep a summoned phantom away from doors, levers
-and pickups — or something this mod broke is the next thing to establish, and
-it decides whether M4's third item is a patch or a design decision.
+So the refusal is in the interaction, not in the world. It is the **unmodded
+game's own rule**, and it is authored per object.
+
+### Where it lives
+
+The prompt is an `EventKeyGuideCtrl` (vftable `0x1410ef228`), one per offered
+action, kept by an `EventKeyGuideManager` (`0x1410ef268`). Its fields:
+`+0x8c` action kind, `+0x90` the entity, `+0xa0` a 64-bit "these player slots
+may not see me" mask, `+0xa9` bit 0 shown / bit 1 disabled, and
+`+0xaa..+0xac` a 24-bit role mask.
+
+`FUN_140453ce0` decides every frame whether to offer it, and refuses when the
+local player's bit is set in `+0xa0`. That bit is set by `FUN_140454310` the
+moment a character walks into the volume, if `FUN_140453760(chr, ctrl+0xaa)`
+says no. Inside that, the role byte `*(*(chr+0xb0)+0x3c)` picks a bit of the
+mask; **role 1, the white phantom, needs bit 1**.
+
+And the mask is **data**. For every object with a state machine — levers,
+doors and bonfires alike — `FUN_140453b30` builds it from the object's own
+row (`FUN_1403ba6a0`, i.e. `*(*(*(entity+0xb8)+0x20)+0xe0)`):
+
+```
+mask[0] = (row[0x1a] << 1) | 1
+mask[1] = (row[0x1b] << 1) | (row[0x1a] >> 7)
+mask[2] = ((row[0x1c] & 0xf) << 1) | (row[0x1b] >> 7) | (mask[2] & 0xe0)
+```
+
+so **`row[0x1a]` bit 0 is literally "a white phantom may use this action"**.
+
+Read live on both machines, which settles it:
+
+| object | `row[0x1a]` | phantom |
+| --- | --- | --- |
+| the bonfires `122a`, `7ba2`, `7ba7`, `7bac` | `0xff` | allowed — which is why a guest can rest |
+| the lever | `0x00` | refused |
+
+and on the lever's own guide, before the patch: kind **41** (so not the
+separate code gate on kinds 13 and 14, which tears a prompt down for anyone in
+someone else's world), mask `01 fc 0f`, `+0xa0` = 1 on the guest (its own slot
+excluded) and 0x100 on the host (the phantom's slot excluded, its own clear).
+The lever's row reads `1a=00 1b=fe 1c=07`, and `FUN_140453b30` on that row
+builds exactly `01 fc 0f` — so the mask is this object's data and nothing
+else.
+
+### The patch
+
+`DS2_PhantomActionHook`: one immediate, `or al,0x1` -> `or al,0x3` at
+`+0x453b47`, which sets mask bit 1 for every map-object action. By the switch
+in `FUN_140453760` that admits roles 1 and 3, the white phantoms, and nothing
+else. Measured after installing it, at the same lever: mask `03 fc 0f` on
+both, `+0xa0` = 0 on both, `+0xa9` bit 0 set on the guest — and **`A: Pull`
+on the phantom's screen**.
+
+**The other half is not measured.** Whether pulling it then reaches the host
+is untested: scripted `pad` presses did not operate the lever for either
+character on 19/09, so the run proves the prompt and nothing about
+propagation. A mechanism whose result is a map flag should travel by itself
+(a guest may write map flags, `FUN_14025cdb0`, and the change goes out on the
+game's `0x20`); per-object state has nothing carrying it, as
+[the Brume object](#and-with-the-flags-equal-one-object-was-not) already
+showed.
 
 **What it does not cover yet.** The seeding is a byte write, so the flag
 listeners (`FUN_140184ff0`) do not run for it; it works because it lands
