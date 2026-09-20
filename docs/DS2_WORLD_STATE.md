@@ -240,6 +240,27 @@ game's own way to apply it is `FUN_1401f30e0`, `(index, state)` pairs through
 slot `+0x50` of the `StateActCtrl`, on the `MapStateActManager` at
 `*(ctx+0x38)+0x1f8`.
 
+## The phantom gets no prompt at all — 19/09, by hand
+
+At a lever in Majula, underground near `(-16, -15.7, 96)`, the host reads
+`A: Pull` and the white phantom standing beside him reads nothing. Both
+screens were captured side by side.
+
+It is **not** the object's state and **not** a flag. A census of every
+`MapObjStateActComponent` within 20 m of the two characters returned the same
+seven objects with the same state and the same `+0x1f = 0` on both machines,
+and the lever's map, Majula, had its three flag categories carried and equal.
+
+The one thing that differs is what the two characters are: the role byte at
+`*(*(ctx+0xd0)+0xb0) + 0x3c` reads **0 on the host** and **1 on the phantom**,
+read live on both.
+
+So the refusal is in the interaction, not in the world: something in the
+action-prompt path asks who the local player is. Whether that is the game's
+own rule — DS1 and DS2 both keep a summoned phantom away from doors, levers
+and pickups — or something this mod broke is the next thing to establish, and
+it decides whether M4's third item is a patch or a design decision.
+
 **What it does not cover yet.** The seeding is a byte write, so the flag
 listeners (`FUN_140184ff0`) do not run for it; it works because it lands
 before the map builds its objects. If the host's packet ever arrives after
