@@ -614,8 +614,11 @@ unloading gets the release the warp would have given it.
    white phantom may use this action". Every bonfire has it set (which is why
    a guest can rest); the lever has it clear. `DS2_PhantomActionHook` sets it
    for every map-object action with one immediate at `+0x453b47`, and the
-   phantom now reads `A: Pull`. **What the phantom then changes reaching the
-   host is still untested.**
+   phantom now reads `A: Pull`. Pulled by hand with the patch in, the lever
+   went from state 10 to **30 on both machines**, and the trace caught the
+   flag `105400` being set through the emevd dispatcher on each and crossing
+   on the game's own `0x20`. What is still open is a mechanism with no flag
+   behind it, which is the same hole as item 2.
 
 ---
 

@@ -308,14 +308,31 @@ else. Measured after installing it, at the same lever: mask `03 fc 0f` on
 both, `+0xa0` = 0 on both, `+0xa9` bit 0 set on the guest — and **`A: Pull`
 on the phantom's screen**.
 
-**The other half is not measured.** Whether pulling it then reaches the host
-is untested: scripted `pad` presses did not operate the lever for either
-character on 19/09, so the run proves the prompt and nothing about
-propagation. A mechanism whose result is a map flag should travel by itself
-(a guest may write map flags, `FUN_14025cdb0`, and the change goes out on the
-game's `0x20`); per-object state has nothing carrying it, as
-[the Brume object](#and-with-the-flags-equal-one-object-was-not) already
-showed.
+**And the other half held, played by hand.** The lever was pulled at the
+bench on 19/09 with the patch in, and afterwards the two worlds agree:
+
+```
+inst 1 lever state 30   (was 10)
+inst 2 lever state 30   (was 10)
+```
+
+With `bp 474a60`, `bp 25cec0` and `bp 25ce10` armed on both, the trace shows
+the whole chain for flag `105400`:
+
+| machine | hit | from |
+| --- | --- | --- |
+| host | `+0x474a60` then `+0x25cec0` | the emevd dispatcher `FUN_140461f20` (`+0x46216e`), then the `0x20` **send** |
+| guest | `+0x474a60`, and `+0x25ce10` | the same dispatcher locally, and the `0x20` **receive** |
+
+The guest never hit `25cec0`, which is right: `105400` is a global, and the
+filter `FUN_14025cdb0` refuses a non-host those — it set it locally and the
+host's packet carried the authoritative copy.
+
+**What this does not settle.** One lever, and the trace cannot say which
+character's press started it, because both machines ran the event script.
+Whether a mechanism whose result is only per-object state — with no flag
+behind it — survives the same test is still open; the Brume object above says
+nothing carries that.
 
 **What it does not cover yet.** The seeding is a byte write, so the flag
 listeners (`FUN_140184ff0`) do not run for it; it works because it lands
