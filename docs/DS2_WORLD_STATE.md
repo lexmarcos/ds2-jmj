@@ -504,8 +504,12 @@ with both players in Majula: the four guides of action kind 9 carry exactly
 that mask on both machines, and the one the guest stood in had **his own
 player slot** set in the exclusion mask at `+0xa0` while the host's copy had
 the phantom's slot set instead. `DS2_PhantomActionHook` widens that immediate
-too, at `+0x453b87`. **Not yet confirmed on screen** — the bench stopped
-forming sessions before the prompt could be read.
+too, at `+0x453b87`. Measured again with the patch in, both players at
+Majula's Far Fire: all four kind-9 guides read **`03 fc 0f` on both machines**
+and **`+0xa0` is zero on every one of them**, where before the guest's copy
+excluded his own player slot. The prompt has not been photographed — the
+camera would not frame it unattended — but nothing excludes the phantom any
+more.
 
 **What this is not.** These are the guest's own local copies. With the two
 players in different maps the host had a different set loaded entirely, so
