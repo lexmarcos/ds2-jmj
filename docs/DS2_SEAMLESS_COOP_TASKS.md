@@ -1904,10 +1904,21 @@ or unproven, for whoever picks this up.
    driven, one lost edge used to be final, so it now sweeps the sign
    collection itself every five seconds. A sign still in the collection is a
    summon that did not happen; a sign that was taken is gone from it, so a
-   live session produces no sweep and no summon. Confirmed on the first boot
-   with the fix: one `invocando a placa 80000001`, no second handle, and
-   `p2pSessionVerified: true` with no intervention. What follows is the
-   measurement that found it. Measured repeatedly on 20/09: the server's poll says
+   live session produces no sweep and no summon. The sweep reads the
+   `SummonSignSetCtrl` the tick hands it, never a stored pointer, because a
+   world reload rebuilds that object; the same handle twice backs off from a
+   minute, doubling, because a sign nobody is standing behind fails into a
+   dialog and a dialog eats the first button of any menu walk; and the quiet
+   window is longer than the join grace, so a slow join is not re-summoned
+   mid-join.
+
+   Confirmed on the first boot with the fix: one `invocando a placa
+   80000001`, and `p2pSessionVerified: true` with no intervention, followed by
+   two clean travel legs. **The duplicate guard itself was not exercised** —
+   no `ignorada; a invocacao ... ainda esta em curso` line appeared, which
+   means the second `AddSign` never came on that boot, not that it was
+   dropped. The positive signal here is the session forming, not the duplicate
+   being refused. What follows is the measurement that found the defect. Measured repeatedly on 20/09: the server's poll says
    `1 signs cached, sent 1`, and the host's log shows
 
    ```

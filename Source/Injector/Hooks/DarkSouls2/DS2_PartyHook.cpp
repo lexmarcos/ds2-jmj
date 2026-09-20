@@ -146,10 +146,10 @@ namespace
     // minute, which is the point for players and the opposite of what a test
     // tearing down wants.
     std::atomic<bool> s_paused{ false };
-    // The SummonSignSetCtrl the game last filed a sign into, and a request to
-    // look again at what it already holds: a sign that arrived while paused is
-    // not delivered twice, so "retoma" has to find it in the cache.
-    std::atomic<void*> s_sign_set{ nullptr };
+    // A request to look again at what the collection already holds: a sign
+    // that arrived while paused is not delivered twice, so "retoma" has to
+    // find it in the cache. The look itself happens on the game's thread, off
+    // the SummonSignSetCtrl the tick hands us, never off a stored pointer.
     std::atomic<bool> s_rescan{ false };
     std::atomic<bool> s_running{ false };
     std::thread s_thread;
@@ -195,9 +195,25 @@ namespace
     // the rest of the boot.
     //
     // So a summon claims a window, and nothing else is summoned inside it.
-    constexpr ULONGLONG kSummonQuietMs = 20000;
+    // The window is longer than kJoinGraceMs below on purpose: a join that
+    // takes twenty five seconds still has its sign in the collection, and
+    // re-summoning it there would be the original poison by another road.
+    constexpr ULONGLONG kSummonQuietMs = 40000;
     ULONGLONG s_summoned_at = 0;
     uint64_t s_summoned_owner = 0;
+
+    // The same handle, over and over, is a sign nobody is standing behind -
+    // the case CLAUDE.md describes, where a killed guest's sign sits in the
+    // collection until the server times the connection out. Summoning it
+    // fails and puts up a dialog, and a dialog eats the first button of any
+    // menu walk, so retrying every five seconds would trade a silent failure
+    // for a loud one. A *different* handle is the guest placing a new sign,
+    // which is exactly the recovery the sweep exists for, and is free.
+    constexpr ULONGLONG kBackoffFirstMs = 60000;
+    constexpr ULONGLONG kBackoffMaxMs = 600000;
+    uint32_t s_last_handle = 0;
+    ULONGLONG s_last_handle_at = 0;
+    ULONGLONG s_last_backoff = kBackoffFirstMs;
 
     // ... and because the host side is edge driven - it only ever acted when
     // the game handed it a sign - a missed edge used to be final. The host now
@@ -381,7 +397,7 @@ namespace
         }
     }
 
-    void RescanSigns(bool Loud);
+    void RescanSigns(void* Self, bool Loud);
 
     // Runs on the game's thread, every frame.
     void TickHook(void* Self)
@@ -390,9 +406,14 @@ namespace
         DS2_ProgressCarry_Tick();
         DS2_BonfireInSession_Tick();
 
+        // Both sweeps use the Self this very call was made on. The pointer
+        // AddSign files away is cached across a world reload, and a reload
+        // rebuilds the SummonSignSetCtrl; a sweep running every five seconds
+        // off that pointer would eventually read a reused allocation and hand
+        // s_summon a handle out of somebody else's memory.
         if (s_rescan.exchange(false) && !s_paused.load())
         {
-            RescanSigns(true);
+            RescanSigns(Self, true);
         }
         // The host's own sweep, so a missed sign is not final.
         if (!s_guest && !s_paused.load() && (!s_accept.empty() || s_party_code != 0))
@@ -401,7 +422,7 @@ namespace
             if (Now >= s_host_next_scan)
             {
                 s_host_next_scan = Now + kHostScanMs;
-                RescanSigns(false);
+                RescanSigns(Self, false);
             }
         }
         const bool Orders = s_pending_place.load() != kNothing || s_pending_status.load();
@@ -456,7 +477,10 @@ namespace
     }
 
     // Whether this player summons a white sign of this owner, and does it.
-    void ConsiderSign(void* Self, uint32_t Handle, uint8_t Type, uint32_t PlayerId, const char* Why)
+    // Why is the suffix for the log line; Quiet is non-null when the call came
+    // from the host's own periodic sweep, whose refusals are not worth a line.
+    void ConsiderSign(void* Self, uint32_t Handle, uint8_t Type, uint32_t PlayerId, const char* Why,
+        const char* Quiet = nullptr)
     {
         // A host is whoever accepts: a Steam ID list, or a password on a player
         // that is not the guest (the server then only delivers party signs).
@@ -494,13 +518,37 @@ namespace
         const ULONGLONG Now = GetTickCount64();
         if (s_summoned_at != 0 && Now - s_summoned_at < kSummonQuietMs)
         {
-            Append(StringFormat("%s  host: placa %08x ignorada; a invocacao de %llu ainda esta em curso ha %llu ms\n",
-                Clock().c_str(), Handle, (unsigned long long)s_summoned_owner,
-                (unsigned long long)(Now - s_summoned_at)));
+            // The duplicate that motivated this guard arrives sixteen
+            // milliseconds behind the first and is worth a line; the sweep's
+            // own repeats, every five seconds, are not.
+            if (Quiet == nullptr)
+            {
+                Append(StringFormat("%s  host: placa %08x ignorada; a invocacao de %llu ainda esta em curso ha %llu ms\n",
+                    Clock().c_str(), Handle, (unsigned long long)s_summoned_owner,
+                    (unsigned long long)(Now - s_summoned_at)));
+            }
             return;
         }
-        Append(StringFormat("%s  host: invocando a placa %08x do parceiro %llu (jogador %u)%s\n",
-            Clock().c_str(), Handle, (unsigned long long)Owner, PlayerId, Why));
+        if (Handle == s_last_handle && Now - s_last_handle_at < s_last_backoff)
+        {
+            return;
+        }
+
+        std::string Note;
+        if (Handle == s_last_handle)
+        {
+            s_last_backoff = s_last_backoff * 2 < kBackoffMaxMs ? s_last_backoff * 2 : kBackoffMaxMs;
+            Note = StringFormat(" [a mesma placa de novo; a proxima tentativa so daqui a %llu s]",
+                (unsigned long long)(s_last_backoff / 1000));
+        }
+        else
+        {
+            s_last_handle = Handle;
+            s_last_backoff = kBackoffFirstMs;
+        }
+        Append(StringFormat("%s  host: invocando a placa %08x do parceiro %llu (jogador %u)%s%s\n",
+            Clock().c_str(), Handle, (unsigned long long)Owner, PlayerId, Why, Note.c_str()));
+        s_last_handle_at = Now;
         s_summoned_at = Now;
         s_summoned_owner = Owner;
         uint32_t Copy = Handle;
@@ -511,7 +559,6 @@ namespace
         uint32_t P5, uint32_t P6, void* P7, void* P8, uint8_t P9, uint32_t P10, void* P11)
     {
         uint32_t* Result = s_original_add_sign(Self, OutHandle, Type, P4, P5, P6, P7, P8, P9, P10, P11);
-        s_sign_set.store(Self);
         if (OutHandle != nullptr)
         {
             ConsiderSign(Self, *OutHandle, Type, P6, "");
@@ -522,9 +569,8 @@ namespace
     // The collection AddSign files into, walked through its own interface:
     // slot 0x18 is the count, slot 0x10 the i-th entry (FUN_14020e6f0 does the
     // same). An entry is live when +0x14 is negative.
-    void RescanSigns(bool Loud)
+    void RescanSigns(void* Self, bool Loud)
     {
-        void* Self = s_sign_set.load();
         uintptr_t Collection = 0, Vftable = 0, CountFn = 0, AtFn = 0;
         if (Self == nullptr || !ReadPointer((uintptr_t)Self - 8, Collection) || Collection == 0 ||
             !ReadPointer(Collection, Vftable) || !ReadPointer(Vftable + 0x18, CountFn) || !ReadPointer(Vftable + 0x10, AtFn))
@@ -556,7 +602,8 @@ namespace
             if (Live < 0 && ((uint32_t)Handle & 0xc0000000u) == 0x80000000u)
             {
                 ConsiderSign(Self, (uint32_t)Handle, Bytes[0x28], PlayerId,
-                    Loud ? " (revisao ao retomar)" : " (revisao do host)");
+                    Loud ? " (revisao ao retomar)" : " (revisao do host)",
+                    Loud ? nullptr : "");
             }
         }
     }

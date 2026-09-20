@@ -162,9 +162,16 @@ So the gate that defers the enemy table — "nothing is still dying from the
 last map" — is open the entire time, in both directions. **Risk 1 is not
 hypothetical in the bad direction**: what the plan feared was the count
 staying non-zero and starving the destination's table forever, and that does
-not happen on our travel. The caveat is honest: 1 Hz cannot rule out a
-transient shorter than a second inside the load, and the load itself is about
-two seconds. What it does rule out is a count that gets stuck.
+not happen on our travel.
+
+Two caveats, both honest. 1 Hz cannot rule out a transient shorter than a
+second inside the load, and the load itself is about two seconds; what it does
+rule out is a count that gets stuck. And **neither leg tore down the session's
+map**: Majula stayed loaded in both directions, and only Shulva was built and
+released. So this clears the gate for a *destination's* teardown, which is
+what today's travel does — it does not clear it for the teardown the plan
+actually proposes, which is releasing Majula while everybody is away. That one
+is still unmeasured, because nothing does it yet.
 
 **The network enemy record array is built once, for the session's map, and
 travel never rebinds it.** The `NetEnemyManager` at `*(0x141616cf8 + 0x28)`
@@ -178,8 +185,10 @@ legs:
 | `+0x18` bound map | `0a040000`, never changed | `0a040000`, never changed |
 
 `0a040000` is Majula, the map the session began in — not the map either
-player was standing in. The records are Majula's 56 enemies, and they stayed
-bound to Majula while both characters spent three minutes in Shulva.
+player was standing in **[read]**. That the 56 records are Majula's enemies is
+**[inferred]**: what was read is a count and a map id, not the records
+themselves. What is certain is that the count did not move and the binding did
+not follow, while both characters spent three minutes in Shulva.
 
 That answers "what resets `sync+0x08`", from the list of what none of the ten
 could establish, with a negative: **a travel leg does not**. It also says the
