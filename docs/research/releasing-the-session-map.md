@@ -123,9 +123,8 @@ On the machine that releases, **with the map still loaded**:
 All of the above is static. These are cheap and turn reading into evidence:
 
 - **The live shape of the field**, with the probes in
-  [session-map-rebind](session-map-rebind.md): on a host the join controller
-  reads 0; on a guest it is non-null and its `+0x19c` stays at the summon map
-  while `NetPlayerWatcher+0xc` follows him.
+  [session-map-rebind](session-map-rebind.md). — **measured 20/09, it reads
+  exactly as the static reading said.** See below.
 - **`mgr+0x3c6` across one of our travels.** — **measured 20/09, it never
   leaves 0.** See below.
 - **`sync+0x08` and `sync+0x18`** on both machines through a leg. — **measured
@@ -202,3 +201,25 @@ The two instances reported byte-identical addresses for this object
 giving the same game the same heap layout from the same allocation sequence,
 not a shared mapping; the vftable check is what makes each reading its own
 process's.
+
+**The join controller's field is where it was read to be, and it is
+guest-only.** With the session verified, the host's `joinCtrl` read `0` and
+the guest's read `0x7ffffe5bf5e0`, state 7, with `+0x19c = 0a040000` — Majula,
+the map the session began in. Chico then travelled to Shulva and back: his
+local map went to `32240000` and returned, the controller pointer never
+changed, the state never left 7, and **`+0x19c` never moved off `0a040000`**
+at any point. So the staleness the plan describes is real, live, and does no
+harm on its own — today's travel walks the guest into another map with his
+join controller still naming Majula, and nothing dereferences it. It becomes a
+problem only when somebody tries to free Majula, which is what step 7 exists
+for.
+
+One thing this does **not** establish, and the plan should not lean on it:
+`+0x19c` and `+0x1a0` read the **same value** in every sample, because Chico
+was summoned in Majula and Majula is also where he came from. Nothing here
+distinguishes "the session's map" from "the way home"; the two fields are
+identified by the static reading alone. Until a guest is summoned from a
+different map than the host's, step 7's "**four bytes, never eight**" is a
+rule to obey, not one this bench can check it obeyed. Making them differ is
+one staging: walk the guest to a bonfire in another map, place the sign there,
+summon from Majula.
