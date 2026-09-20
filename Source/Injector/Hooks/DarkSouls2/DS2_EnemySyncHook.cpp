@@ -53,8 +53,24 @@ namespace
     constexpr size_t kSyncCount = 0x0c;
     constexpr size_t kSyncBoundMap = 0x18;
 
+    // What the release's second argument actually is, settled by the log on
+    // 20/09: not a map id but a pointer. FUN_1403bb3d0, the slot lookup the
+    // release opens with, is three instructions -
+    //
+    //     mov 0x8(%rcx),%rax    ; -> the backread owner
+    //     mov 0xc(%rax),%eax    ; -> its area slot
+    //     ret
+    //
+    // - and `+0x08` / `+0x0c` of that owner are exactly DS2_BackreadHook's own
+    // kOwnerMap and kOwnerIndexField. So the map id is two reads away, and the
+    // `cmp $0x29; ja` the release then does is mirrored on the same index.
+    constexpr size_t kAreaOwnerField = 0x08;
+    constexpr size_t kOwnerMap = 0x08;
+    constexpr size_t kOwnerIndex = 0x0c;
+    constexpr uint32_t kMaxSlot = 0x29;
+
     using Simple_p = void(*)(void* Manager);
-    using MapRelease_p = void*(*)(void* ChrManager, uint64_t Map);
+    using MapRelease_p = void*(*)(void* ChrManager, void* Area);
 
     Simple_p s_unbind = nullptr;
     Simple_p s_arm = nullptr;
@@ -123,32 +139,34 @@ namespace
 
     // Runs on the game's thread, at the entry of the per-map character
     // release. This is the last moment the records are still whole.
-    void* MapReleaseHook(void* ChrManager, uint64_t Map)
+    void* MapReleaseHook(void* ChrManager, void* Area)
     {
         const uint32_t Bound = DS2_EnemySync::BoundMap();
-        const uint32_t Asked = (uint32_t)Map;
+        uintptr_t Owner = 0;
+        uint32_t Asked = 0, Slot = 0xffffffff;
+        if (Area != nullptr && Read((uintptr_t)Area + kAreaOwnerField, &Owner, sizeof(Owner)) && Owner != 0)
+        {
+            Read(Owner + kOwnerMap, &Asked, sizeof(Asked));
+            Read(Owner + kOwnerIndex, &Slot, sizeof(Slot));
+        }
 
-        // The first few are written down whatever they say, because what the
-        // second argument actually carries decides everything below: a full
-        // map id (0a040000) compares with the bound map directly, an area id
-        // (0a) never would, and the log is how that is settled rather than
-        // assumed.
         if (s_seen.fetch_add(1) < 20)
         {
-            Append(StringFormat("%s  soltando personagens do mapa: argumento %016llx, ligado %08x, estado %u, %u registros\n",
-                Clock().c_str(), (unsigned long long)Map, Bound,
+            Append(StringFormat("%s  soltando personagens do mapa %08x (slot %u), ligado %08x, estado %u, %u registros\n",
+                Clock().c_str(), Asked, Slot, Bound,
                 DS2_EnemySync::State(), DS2_EnemySync::Count()));
         }
 
-        // Exact equality only. If the argument turns out to be something else,
-        // this never fires and the log above says so, which is a great deal
-        // better than unbinding the wrong session's table on a guess.
-        if (Bound != 0 && Asked == Bound)
+        // The release's own early-out, mirrored: a slot past 0x29 is not an
+        // area and the game does nothing with it, so neither do we.
+        if (Bound != 0 && Asked == Bound && Slot <= kMaxSlot)
         {
-            DS2_EnemySync::Unbind("o mapa dos registros esta sendo derrubado");
-            s_unbound.fetch_add(1);
+            if (DS2_EnemySync::Unbind("o mapa dos registros esta sendo derrubado"))
+            {
+                s_unbound.fetch_add(1);
+            }
         }
-        return s_original_release(ChrManager, Map);
+        return s_original_release(ChrManager, Area);
     }
 
     bool Matches(uintptr_t At, const uint8_t* Expected, size_t Length)
