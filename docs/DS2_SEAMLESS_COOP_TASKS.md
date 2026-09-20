@@ -2044,19 +2044,49 @@ or unproven, for whoever picks this up.
    him back to his own bonfire, alive, in Majula.
 
    This is the 15/09 hazard returning by another road — "the guest landed at
-   Heide's bonfire with no ground under it and fell to its death" — and it is
-   two defects, not one:
+   Heide's bonfire with no ground under it and fell to its death".
 
-   - **the cause**: whatever sets the host's record on arrival did not run, or
-     did not stick, after leg five. `SetRecord` is called from the travel's
-     own arrival path, so a leg that arrives without passing there leaves the
-     record where it was;
-   - **the missing net**: `fogueira_do_host` uses the announced bonfire with
-     no check that its map is loaded here, and no check that the spawn point
-     has ground under it. A bonfire in a map this machine does not have is
-     never a safe respawn, and the guest is exactly who cannot tell.
+   **The first causal story written here was wrong, and the way it was wrong
+   is worth more than the story.** It said the host's record "stopped
+   following the travel after leg five". Re-running the same eight legs while
+   reading the record after each one reproduced the symptom exactly — legs six
+   and seven left it at `0a100000/411e` — and then the hook's own log said
+   why:
 
-   `fogueira_do_host` is **off on account 2 until the net exists**.
+   ```
+   17:58:48  pedido: votacao para a fogueira 299f do mapa 0a0a0000
+   17:58:54  host: o convidado ... descansou na fogueira 411e; reinicio o mundo
+   17:59:38  pedido: votacao para a fogueira 8f2f do mapa 32240000
+   17:59:38  host: votacao 11 para o mapa 32240000 recusada: 1127 alvos e so
+             cabem 840 ao lado do mapa da sessao 0a100000
+   ```
+
+   **Those legs never happened.** One vote was refused by `DestinationCanFit`
+   and the other never became a vote at all — the blind `press a` landed on a
+   "rest at bonfire" prompt. The record was correct the whole time; it named
+   the map the host was actually in. There is no `SetRecord` defect.
+
+   What the campaign really did is worse and simpler: counting the arrival
+   lines afterwards, the **host logged eight legs and the guest five**. The
+   party split three times, and a guest left behind in a map the host has left
+   is exactly the state where a shared-bonfire respawn is lethal.
+
+   **And the method was the fault.** The campaign script pressed the button,
+   waited, and counted the leg done if both processes were alive and the
+   session still verified. Neither is arrival. Every campaign result on this
+   page is only as good as its arrival evidence: `campA`'s four legs are real
+   (four `viagem para a fogueira` lines on **both** machines), `campB`'s eight
+   are not (eight on the host, five on the guest). A leg counts only when both
+   machines log arrival at the destination that was asked for — the rule §0
+   already states, applied to the harness instead of the game.
+
+   **The net is still the right fix, and it is in.** Whatever leaves the host
+   naming a bonfire of a map the guest is not in, `fogueira_do_host` used that
+   bonfire with no check that there was ground under it. It is not enough that
+   the map is still loaded: a guest carries only the parts around the host.
+   The death hook now refuses an announced bonfire that is not of the map this
+   character is standing in, and falls back to the guest's own record, which
+   is a worse place to be and a safe one. `fogueira_do_host` is back **on**.
 
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
