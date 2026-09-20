@@ -214,12 +214,28 @@ join controller still naming Majula, and nothing dereferences it. It becomes a
 problem only when somebody tries to free Majula, which is what step 7 exists
 for.
 
-One thing this does **not** establish, and the plan should not lean on it:
-`+0x19c` and `+0x1a0` read the **same value** in every sample, because Chico
-was summoned in Majula and Majula is also where he came from. Nothing here
-distinguishes "the session's map" from "the way home"; the two fields are
-identified by the static reading alone. Until a guest is summoned from a
-different map than the host's, step 7's "**four bytes, never eight**" is a
-rule to obey, not one this bench can check it obeyed. Making them differ is
-one staging: walk the guest to a bonfire in another map, place the sign there,
-summon from Majula.
+**The two fields are now told apart by reading, not by comment.** In the
+samples above `+0x19c` and `+0x1a0` both read `0a040000`, because Chico was
+summoned in Majula and Majula is also where he came from, so nothing
+distinguished "the session's map" from "the way home". The staging that
+separates them is one session end away: travel the pair to Shulva, end the
+session there — the host stays, the guest dies home to his own bonfire record
+— and let the party hook summon again across the two maps. Done 20/09, with
+Samuel in Shulva and Chico in Majula:
+
+| field | value | what it is |
+| --- | --- | --- |
+| `joinCtrl+0x19c` | `32240000` | Shulva, the **host's** map, where the summon happened |
+| `joinCtrl+0x1a0` | `0a040000` | Majula, where the **guest** was standing |
+
+So `+0x19c` is the session's map and `+0x1a0` is the way home, exactly as the
+static reading named them **[read]**. Step 7's "**four bytes, never eight**"
+is now a rule this bench can check was obeyed: after the write, `+0x19c` must
+name the destination and `+0x1a0` must still name wherever the guest came
+from. Eight bytes would send him home to the map being freed.
+
+**And the record array follows the map the session began in, by count as well
+as by id.** The same session, begun in Shulva instead of Majula, reads
+`+0x0c = 207` and `+0x18 = 32240000` on both machines, where the Majula
+session read `56` and `0a040000`. The count tracks the map, which settles the
+`[inferred]` above: the records really are that map's enemies **[read]**.
