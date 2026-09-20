@@ -279,6 +279,7 @@ namespace
         uint32_t Mask[4] = {};
     };
     ULONGLONG s_victim_logged = 0;
+    std::atomic<bool> s_sync_map_held{ false };
     std::mutex s_keep_mutex;
     Kept s_kept[kMaxKept];
     std::atomic<uint32_t> s_released_map{ 0 };
@@ -431,6 +432,8 @@ namespace
 
     // Step one of a release: take back every part bit this hook turned on and
     // start the clock. True the first time, so the caller says it once.
+    uint32_t EnemySyncBoundMap();
+
     bool BeginLetGo(uintptr_t Owner, uint32_t Map, const char* Why)
     {
         // The game's own rule, kept: in vanilla the fog that rises when a
@@ -452,6 +455,17 @@ namespace
             }
             return false;
         }
+
+        if (Map != 0 && Map == EnemySyncBoundMap())
+        {
+            if (!s_sync_map_held.exchange(true))
+            {
+                Append(StringFormat("%s  mapa %08x %s, mas o sync de inimigos ainda esta ligado nele; mantido\n",
+                    Clock().c_str(), Map, Why));
+            }
+            return false;
+        }
+        s_sync_map_held.store(false);
 
         int32_t Index = -1;
         if (!ReadBytes(Owner + kOwnerIndexField, &Index, sizeof(Index)) || Index < 0 || Index > 0x3f)
@@ -564,6 +578,47 @@ namespace
                 WriteBytes(Owner + At, Mask, sizeof(Mask));
             }
         }
+    }
+
+    // The enemy sync's record table, NetSvrManager-side: *(0x141616cf8+0x28),
+    // believed only with its vftable (read on both instances, 20/09). Its
+    // +0x08 is the state (0 unbound, 1 host, 2 guest), +0x0c the record count
+    // and +0x18 the map its records belong to.
+    //
+    // Measured 20/09 with a live session: the bound map is the session's map,
+    // its 149 records are 0xa0 apart in one per-map array, and each in-use
+    // slot holds a raw pointer into that array. The array is freed by the map
+    // path; the pointers are nulled only by a session-state transition, and
+    // there is no call from one to the other. Releasing the bound map with
+    // the sync still bound therefore leaves up to 255 records writing into
+    // freed memory - the mechanism docs/research/risk-4-six-readings.md ends
+    // on.
+    //
+    // Today that cannot happen, because the bound map IS the session's map
+    // and the refusal above keeps it. This is the second lock on the same
+    // door, and it exists because the two are different sources: the one
+    // above is the bonfire hook's notion, which a session ending clears,
+    // while the sync stays bound until its own transition runs. That window
+    // is the whole reason to ask the sync itself.
+    constexpr size_t kNetSvrGlobal = 0x1616cf8;
+    constexpr size_t kNetEnemyField = 0x28;
+    constexpr size_t kNetEnemyVftable = 0x10fb580;
+    constexpr size_t kSyncState = 0x08;
+    constexpr size_t kSyncBoundMap = 0x18;
+
+    uint32_t EnemySyncBoundMap()
+    {
+        uintptr_t Global = 0, Sync = 0, Vftable = 0;
+        uint32_t State = 0, Map = 0;
+        if (!ReadBytes(s_base + kNetSvrGlobal, &Global, sizeof(Global)) || Global == 0 ||
+            !ReadBytes(Global + kNetEnemyField, &Sync, sizeof(Sync)) || Sync == 0 ||
+            !ReadBytes(Sync, &Vftable, sizeof(Vftable)) || Vftable != s_base + kNetEnemyVftable ||
+            !ReadBytes(Sync + kSyncState, &State, sizeof(State)) || State == 0 ||
+            !ReadBytes(Sync + kSyncBoundMap, &Map, sizeof(Map)))
+        {
+            return 0;
+        }
+        return Map;
     }
 
     // Is this map index held right now, and is the other player standing on

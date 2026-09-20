@@ -196,6 +196,45 @@ nothing proved less than it seemed: a node left behind by either path is
 pointer at `component+0x8` and, for bucket `0xb`, of the target/code pair at
 `+0x90`/`+0x98`.
 
+## Measured on 20/09: the mine is real, and today's restriction stands on it
+
+The no-crash test the reading asked for, run with a verified session **[read]**:
+
+```
+inst 1: estado 1 conta 149 mapa 0a100000 tabela 7ffffe47c610
+    slot   0 uso  3  record+0x10 = 00007fffe849ac30
+    slot   1 uso  3  record+0x10 = 00007fffe849acd0    <- 0xa0 apart
+inst 2: estado 2 conta 149 mapa 0a100000 tabela 7ffffe47c610
+```
+
+The structure is exactly as read: one per-map array of 0xa0-byte records, a
+raw pointer per in-use slot, 149 of them, host in state 1 and guest in state 2
+on the same bound map. So a release of that map with the sync still bound
+would leave 149 pointers writing into freed memory. The mechanism is not
+theoretical.
+
+**And it cannot fire today, for one reason only.** The same samples give
+`joinCtrl+0x19c` = `0a100000` and `sync+0x18` = `0a100000`: **the bound map is
+the session's map**, and `BeginLetGo` refuses to release that one. Both players
+were standing in `0a040000` at the time, and `0a100000` sat at `estado 5
+forçado 1`, held. Travelling out of it did not release it.
+
+So risk 4's strongest surviving candidate is a landmine that **M8 item 6b is
+the act of stepping off**. That is worth knowing before writing 6b, and it
+turns 6b's step 2 from a precaution into the thing that keeps the game alive.
+
+One correction to an earlier note in this repo: the sync does **not** never
+rebind. It rebinds when a session forms, to that session's map. The two legs
+measured earlier did not rebind because no new session formed during them. The
+invariant is **bound map == session map**, not "bound map never changes".
+
+**A second lock, now in.** `IsSessionMap` and `sync+0x18` are two different
+sources for "the map that must not go", and a session ending clears the first
+while the sync stays bound until its own state transition runs. `BeginLetGo`
+now also refuses a map the enemy sync is bound to, asked of the sync itself
+and believed only with its vftable. Today it can only ever agree with the
+refusal above; the day it does not is the day it earns its keep.
+
 ## What to do, in order
 
 1. **Make our `__try` leave a legal state.** The handler around
