@@ -126,10 +126,11 @@ All of the above is static. These are cheap and turn reading into evidence:
   [session-map-rebind](session-map-rebind.md): on a host the join controller
   reads 0; on a guest it is non-null and its `+0x19c` stays at the summon map
   while `NetPlayerWatcher+0xc` follows him.
-- **`mgr+0x3c6` across one of our travels.** If it does not return to 0, risk
-  1 is not hypothetical and the whole plan needs a different trigger.
-- **`sync+0x08` and `sync+0x18`** on both machines through a leg, to see when
-  the record array is actually built and for which map.
+- **`mgr+0x3c6` across one of our travels.** — **measured 20/09, it never
+  leaves 0.** See below.
+- **`sync+0x08` and `sync+0x18`** on both machines through a leg. — **measured
+  20/09: the array is built for the session's map and travel never rebinds
+  it.** See below.
 - **On the next `MapModelComponent` fault**, read `*(this+0xd0)` and
   `*(this+0xd4)` too. If only one word is ever wrong, the network-record
   writer is out.
@@ -143,3 +144,52 @@ All of the above is static. These are cheap and turn reading into evidence:
 - Whether the enemy-table sweep runs during a loading screen — which decides
   whether peak target occupancy can exceed the budget's steady-state sum.
 - Which multiplay type co-op is, in the gate table at `0x14157c3b0`.
+
+## What was measured on 20/09
+
+Two legs with a verified session (`p2pSessionVerified: true`), Samuel hosting
+in Majula and Chico summoned by the party hook: Majula → Shulva
+(`0a040000` → `32240000`, bonfire `8f2f`) and back to Majula (`122a`). Both
+players arrived on both legs, the session survived both, and the anchors were
+re-resolved afterwards and were the **same objects**, so nothing below is a
+stale pointer reading zero.
+
+**`mgr+0x3c6` never leaves 0.** `mgr` is `*(*0x1416148f0 + 0x40)`; the count
+of generator list 7 read 0 on host and guest at rest, through the whole
+outbound leg (85 paired samples at 0.5 Hz) and through the whole return leg
+(120 samples at 1 Hz on the host, which also never saw a different value).
+So the gate that defers the enemy table — "nothing is still dying from the
+last map" — is open the entire time, in both directions. **Risk 1 is not
+hypothetical in the bad direction**: what the plan feared was the count
+staying non-zero and starving the destination's table forever, and that does
+not happen on our travel. The caveat is honest: 1 Hz cannot rule out a
+transient shorter than a second inside the load, and the load itself is about
+two seconds. What it does rule out is a count that gets stuck.
+
+**The network enemy record array is built once, for the session's map, and
+travel never rebinds it.** The `NetEnemyManager` at `*(0x141616cf8 + 0x28)`
+was confirmed by its vftable, `0x1410fb580`, on both instances. Through both
+legs:
+
+| field | host | guest |
+| --- | --- | --- |
+| `+0x08` state | `1`, never changed | `2`, never changed |
+| `+0x0c` count | `56`, never changed | `56`, never changed |
+| `+0x18` bound map | `0a040000`, never changed | `0a040000`, never changed |
+
+`0a040000` is Majula, the map the session began in — not the map either
+player was standing in. The records are Majula's 56 enemies, and they stayed
+bound to Majula while both characters spent three minutes in Shulva.
+
+That answers "what resets `sync+0x08`", from the list of what none of the ten
+could establish, with a negative: **a travel leg does not**. It also says the
+destination map is, for the network enemy layer, not a place either player is
+in: there is no record array for it and nothing builds one. Whatever releasing
+the session's map does to this object, it will not be *losing* a binding the
+destination was using, because the destination never had one.
+
+The two instances reported byte-identical addresses for this object
+(`0x7ffffe47c360`, with `+0x10` and `+0x38` matching too). That is Wine
+giving the same game the same heap layout from the same allocation sequence,
+not a shared mapping; the vftable check is what makes each reading its own
+process's.
