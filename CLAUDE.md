@@ -466,6 +466,16 @@ from `testb`/`je`. A virtual method shows no callers: find its address in
 `.rdata`, subtract the class vftable to get the slot, then search for
 `call [reg+<slot>]`.
 
+**Parallel Ghidra agents need their own project and their own class names.**
+A project takes an exclusive lock, so two headless runs on the same one fail
+with `Unable to lock project!`; copy it (`cp -r /home/suel/tools/proj
+/home/suel/tools/proj1`, 431 MB) and give each agent its own. That is not
+enough on its own: Ghidra **caches compiled scripts by class name**, so two
+agents whose scripts are both called `Scan.java` silently get each other's
+compiled class, and a scan returns the other agent's output under your name.
+It happened on 20/09. Give each agent a private script directory *and* a
+unique class prefix.
+
 ### objdump, for bytes
 
 ```
