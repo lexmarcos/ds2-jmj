@@ -863,6 +863,7 @@ namespace
     constexpr ULONGLONG kObjectsEveryMs = 1000;
     ULONGLONG s_objects_at = 0;
     bool s_objects_seeded[64] = {};
+    bool s_objects_full[64] = {};
 
     struct StatePair
     {
@@ -953,6 +954,12 @@ namespace
                 const size_t Have = ReadMapStates(Owners[i], Index, State, DS2_CoopChannel::kMapObjMax);
                 if (Have > 0)
                 {
+                    if (Have == DS2_CoopChannel::kMapObjMax && !s_objects_full[At])
+                    {
+                        s_objects_full[At] = true;
+                        Append(StringFormat("%s  objects: map %08x has more than %zu with a state machine; the rest is not carried\n",
+                            Clock().c_str(), Map, (size_t)DS2_CoopChannel::kMapObjMax));
+                    }
                     DS2_CoopChannel::PublishMapObjects(Map, Index, State, Have);
                 }
                 continue;
@@ -1215,6 +1222,7 @@ namespace
             // that tore the map down, and the release walks the EventManager.
             s_flags_seeded[Index] = false;
             s_objects_seeded[Index] = false;
+            s_objects_full[Index] = false;
             if (Before != 0xff && Before != 0 && Map != 0)
             {
                 QueueMapEventRelease(Map);
