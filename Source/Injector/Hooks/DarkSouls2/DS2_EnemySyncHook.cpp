@@ -7,6 +7,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_EnemySyncHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_BackreadHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -64,6 +65,16 @@ namespace
     // - and `+0x08` / `+0x0c` of that owner are exactly DS2_BackreadHook's own
     // kOwnerMap and kOwnerIndexField. So the map id is two reads away, and the
     // `cmp $0x29; ja` the release then does is mirrored on the same index.
+    // The enemy generator manager and its table array: mgr = *(ctx + 0x40),
+    // the per-area tables at mgr+0x20, the "still dying" count at +0x3c6 and
+    // the four-slot create queue at +0x332.
+    constexpr size_t kGameGlobal = 0x16148f0;
+    constexpr size_t kGeneratorManager = 0x40;
+    constexpr size_t kTableArray = 0x20;
+    constexpr size_t kTableMapId = 0x24;
+    constexpr size_t kDyingCount = 0x3c6;
+    constexpr size_t kCreateQueue = 0x332;
+
     constexpr size_t kAreaOwnerField = 0x08;
     constexpr size_t kOwnerMap = 0x08;
     constexpr size_t kOwnerIndex = 0x0c;
@@ -130,6 +141,18 @@ namespace
         return (void*)Sync;
     }
 
+    uintptr_t GeneratorManager()
+    {
+        uintptr_t Context = 0, Manager = 0;
+        if (s_base == 0 ||
+            !Read(s_base + kGameGlobal, &Context, sizeof(Context)) || Context == 0 ||
+            !Read(Context + kGeneratorManager, &Manager, sizeof(Manager)))
+        {
+            return 0;
+        }
+        return Manager;
+    }
+
     uint32_t Field(size_t At)
     {
         void* Sync = Manager();
@@ -152,9 +175,18 @@ namespace
 
         if (s_seen.fetch_add(1) < 20)
         {
-            Append(StringFormat("%s  soltando personagens do mapa %08x (slot %u), ligado %08x, estado %u, %u registros\n",
+            // The readiness test rides along here rather than in machinery of
+            // its own: this is a map that certainly had a built table a moment
+            // ago, so it is the cheapest place to see the predicate answer on
+            // real data, with the gate and the queue beside it.
+            uint8_t Queue[4] = {};
+            DS2_EnemySync::CreateQueue(Queue);
+            Append(StringFormat("%s  soltando personagens do mapa %08x (slot %u), ligado %08x, estado %u, %u registros; tabela %s, lista7 %u, fila %u/%u/%u/%u\n",
                 Clock().c_str(), Asked, Slot, Bound,
-                DS2_EnemySync::State(), DS2_EnemySync::Count()));
+                DS2_EnemySync::State(), DS2_EnemySync::Count(),
+                DS2_EnemySync::TableReady(Asked) ? "pronta" : "nao",
+                DS2_EnemySync::DyingCount(),
+                Queue[0], Queue[1], Queue[2], Queue[3]));
         }
 
         // The release's own early-out, mirrored: a slot past 0x29 is not an
@@ -251,6 +283,49 @@ namespace DS2_EnemySync
 #else
         (void)Why;
         return false;
+#endif
+    }
+
+    bool TableReady(uint32_t Map)
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        const int32_t Index = DS2_Backread::IndexOf(Map);
+        const uintptr_t Manager = GeneratorManager();
+        uintptr_t Table = 0;
+        int32_t Built = 0;
+        if (Map == 0 || Index < 0 || (uint32_t)Index > kMaxSlot || Manager == 0 ||
+            !Read(Manager + kTableArray + (uintptr_t)Index * 8, &Table, sizeof(Table)) || Table == 0 ||
+            !Read(Table + kTableMapId, &Built, sizeof(Built)))
+        {
+            return false;
+        }
+        return (uint32_t)Built == Map;
+#else
+        (void)Map;
+        return false;
+#endif
+    }
+
+    uint32_t DyingCount()
+    {
+#if defined(_WIN32) && defined(_M_X64)
+        const uintptr_t Manager = GeneratorManager();
+        uint16_t Count = 0;
+        return Manager != 0 && Read(Manager + kDyingCount, &Count, sizeof(Count)) ? Count : 0;
+#else
+        return 0;
+#endif
+    }
+
+    void CreateQueue(uint8_t Out[4])
+    {
+        memset(Out, 0xff, 4);
+#if defined(_WIN32) && defined(_M_X64)
+        const uintptr_t Manager = GeneratorManager();
+        if (Manager != 0)
+        {
+            Read(Manager + kCreateQueue, Out, 4);
+        }
 #endif
     }
 

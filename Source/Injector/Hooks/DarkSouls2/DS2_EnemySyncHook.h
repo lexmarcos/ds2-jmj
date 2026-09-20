@@ -76,4 +76,35 @@ namespace DS2_EnemySync
 
     /// The guest's gate byte at `+0x198`.
     bool OpenGuestGate();
+
+    /// Step 8 of M8 6b: has this map's enemy generator table been **built**,
+    /// not merely allocated?
+    ///
+    ///     table = *(mgr + 0x20 + index*8),  mgr = *(*0x1416148f0 + 0x40)
+    ///     ready = table != 0 && *(int32_t*)(table + 0x24) == mapId
+    ///
+    /// `+0x24` is the only field that separates the two: the ctor writes
+    /// `0xffffffff`, the build writes the real map id as its first act, and
+    /// the free writes `0xffffffff` back. **Do not test the block count** — a
+    /// map with no generators legitimately gets a valid table with none.
+    ///
+    /// The index is the backread owner's own `+0x0c`, which the game's lookup
+    /// reaches through an Arxan trampoline that cannot be read statically.
+    /// That the two are the same index space is measured, not assumed:
+    /// on 20/09 every loaded map on both instances resolved through
+    /// `DS2_Backread::IndexOf` to a table whose `+0x24` was its own map id.
+    ///
+    /// Measured the same day: the table is ready with the owner still at
+    /// **state 4**, so state 5 is a late trigger, not an early one. Poll this
+    /// with a hard timeout and treat the timeout as failure — there is no
+    /// retry anywhere in that path.
+    bool TableReady(uint32_t Map);
+
+    /// The count of generator list 7, `mgr+0x3c6`: "something is still dying
+    /// from the last map change". The create queue only drains while it is 0.
+    uint32_t DyingCount();
+
+    /// The four-slot create queue at `mgr+0x332`; 0xff is an empty slot. A
+    /// fifth request while all four are taken is dropped with no retry.
+    void CreateQueue(uint8_t Out[4]);
 }
