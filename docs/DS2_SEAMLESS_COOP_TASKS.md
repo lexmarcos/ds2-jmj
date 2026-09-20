@@ -1923,7 +1923,8 @@ or unproven, for whoever picks this up.
    The cheaper thing first is the **order**: the plan's finding 1 says vanilla
    is notify → wait → release and the mod does the reverse, which is a smaller
    change than 6b, improves the release path already in use every leg, and is
-   the best candidate to explain risk 4 before 6b is written.
+   the best candidate to explain risk 4 before 6b is written. — **done 20/09**
+   (`912cb8d0`, `d9871eb0`), see below.
 6c. **The party hook fired two summons 16 ms apart, and the second poisoned
    the first.** — **fixed on 20/09** (`ab9cee17`). A summon now claims a
    twenty second window and nothing else is summoned inside it, so the
@@ -1984,6 +1985,45 @@ or unproven, for whoever picks this up.
 
    This made the bench unusable for most of 20/09 and blocked the M8 6b
    measurements.
+6d. **The budget could take the ground out from under the other player, and
+   the rule against it was written down but not enforced.** — **fixed 20/09.**
+   `TravelPark`'s own comment has said since 15/09 that the map another player
+   stands in is never let go, and that letting it go killed the guest in the
+   CharacterManager. `Heaviest()`, which picks the victim when a leg needs
+   room, ruled out the session's map, the destination, the parking and the
+   local player's — and nothing else. The other player's map was invisible to
+   that choice. `DropKeeps()` then made it worse by ending *every* hold,
+   including the one his copy renews each frame it is seen standing there.
+
+   Both are now closed, and the second is what supplies the "wait" in notify →
+   wait → release: not a timer, but the hold lapsing a few seconds after his
+   copy stops being seen on that map, which is the machine's own evidence that
+   he left. A reload still drops everything, because its indices stop meaning
+   anything. The two places that released before speaking now speak first,
+   though both sends queue for the next poll, so the swap is the right shape
+   and nothing more — the hold is what protects him.
+
+   **Measured on a four-leg campaign**, Majula the session map, Samuel and
+   Chico: `0a170000` → `0a130000` → `14150000` → `0a1f0000`. The third leg is
+   the one that matters. `14150000` costs **1400** against **776** in use
+   (Majula 312 plus `0a130000`), over the 1898 limit, so the leg went tight
+   and the budget went looking for a victim. The only candidate was
+   `0a130000` — the map Chico was standing on:
+
+   ```
+   16:58:26.931  holds dropped, but [7] stays: the other player is standing on it   (host)
+   16:58:26.948  holds dropped, but [7] stays: the other player is standing on it   (guest)
+   16:58:29.965  budget: not 0a130000 [7]; the other player is standing on it
+   16:58:3x      budget: still 776 targets in use + 1400; nothing else may be taken down   (x232)
+   ```
+
+   Before this change that map went down under him. Now the leg waited: Chico
+   left it himself, the hold lapsed, the map was released and he arrived at
+   **16:58:45**, nineteen seconds behind the host. All four legs arrived on
+   both machines, `p2pSessionVerified: true` after every one, and **zero
+   deaths in either `DS2_Death.log`**. The bill is those nineteen seconds; it
+   used to be the guest.
+
 7. **A guest's copy is judged to have left a map by distance** (40 m from the
    parking bonfire). A copy that does not get there keeps the map, and the
    travel waits the full 30 s.
