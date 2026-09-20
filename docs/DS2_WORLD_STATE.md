@@ -460,3 +460,54 @@ host's doors and levers into his own save, which is what the design asks for.
   everyone" (a boss killed in the session stays dead in the guest's world) is
   exactly what the game does **not** do: the guest's world comes back as it
   was. That is work for a later milestone, not M4.
+
+## The NPCs a guest sees as white ghosts — 20/09
+
+At a lever in Majula the guest saw the world's NPCs as translucent white
+shapes, visible but insubstantial. It is not a sync failure and nothing is
+missing: with both characters standing in Majula the two machines held the
+**same ten characters**, at the same positions and with the same HP, and the
+NPCs read role 0 on the guest as well.
+
+The guest's client draws them that way on purpose. `FUN_1403560a0`, the
+character factory, asks `FUN_140513440` — networked **and** in someone else's
+world — and adds one to the character's kind when it is true, but only for the
+"NPC" class: 7 becomes 8 and 10 becomes 11. Ordinary enemies are kind 14 and
+are never bumped, which is exactly the symptom — enemies fine, talkable NPCs
+ghosted. The kind lands at `chr+0x54`, and a five-byte-stride table at
+`0x1410bfff0` gives each kind a `+2` byte meaning "simulated here": 1 for the
+host's kinds, 0 for the guest's. The game's own word for the state is in the
+binary: on the same test it picks a `GhostChrMorphemeTimeActEventHandler`.
+
+`FUN_140312dd0`, the character's Initialize, then branches on that byte twice:
+
+| site | what it forces |
+| --- | --- |
+| `+0x31337c` | the phantom draw type, `*(*(chr+0xb0)+0x48) = 15`, where the host's path takes it from `NpcParam+0x20` |
+| `+0x3141cd` | the collision filter drops bit 1, which is what you walk through |
+
+Read live on the same NPC, the Emerald Herald by the Far Fire: draw type **0
+on the host and 15 on the guest**, with `+0x38` zero on both so `+0x48` is
+what `FUN_14016f6d0` hands the draw object each frame.
+
+Fixed by `DS2_GhostNpcHook`: one byte at each site, turning the branch that
+selects the guest-only path into an unconditional jump onto the target the
+host's kinds already fall through to. The kind is left alone on purpose, so
+the guest still does not simulate the NPC. Measured afterwards: **every NPC on
+the guest reads draw type 0**, and the Herald is solid and coloured on his
+screen.
+
+**Talking is the same bit as the lever, from the other builder.** The guides
+the event scripts create have no object row, so `FUN_140453b80` writes a fixed
+mask `01 fc 0f`, whose `mask[0] = 0x01` refuses every phantom role. Measured
+with both players in Majula: the four guides of action kind 9 carry exactly
+that mask on both machines, and the one the guest stood in had **his own
+player slot** set in the exclusion mask at `+0xa0` while the host's copy had
+the phantom's slot set instead. `DS2_PhantomActionHook` widens that immediate
+too, at `+0x453b87`. **Not yet confirmed on screen** — the bench stopped
+forming sessions before the prompt could be read.
+
+**What this is not.** These are the guest's own local copies. With the two
+players in different maps the host had a different set loaded entirely, so
+making them solid gives each player their own NPC; it does not share one
+between them, and nothing about them is synchronised.
