@@ -1998,6 +1998,28 @@ namespace
             {
                 Host = StringFormat("; papel %u, nenhum anuncio do host", Role);
             }
+            else if (Said.Map != 0 && Said.Map != DS2_Backread::MapAt(MapIndexUnder(Chr)))
+            {
+                // The announcement can name a bonfire of a map nobody is in
+                // any more, and it is not enough that the map is still
+                // loaded: a guest carries only the parts around the host, so
+                // a bonfire elsewhere has its spawn point in the table and no
+                // ground under it.
+                //
+                // Measured 20/09 on a live player. An eight-leg campaign left
+                // the host in Majula with his record still naming leg five's
+                // bonfire, 0a100000/411e. Its spawn is (-86.607, -1.041,
+                // 602.290); the guest arrived at (-86.61, -17.82, 602.29),
+                // 16.8 m below it, fell, died, and respawned there again.
+                // Four deaths before a human noticed.
+                //
+                // Standing in the same map as the announced bonfire is the
+                // cheap, local answer to "is there ground there": it is where
+                // the parts are in. Anywhere else, the guest's own record is
+                // a worse place to be and a safe one.
+                Host = StringFormat("; papel %u, a fogueira do host (mapa %08x id %08x) nao e do mapa em que estou; recusada",
+                    Role, Said.Map, Said.Id);
+            }
             else if (FindBonfireSpawn(Said.Map, Said.Id, Next.Target))
             {
                 Next.Where = "fogueira do host";
@@ -2019,8 +2041,11 @@ namespace
             // A guest whose host announced a bonfire that is not loaded waits
             // for that bonfire's map; everyone else tries its own record first.
             DS2_CoopChannel::Bonfire Said;
+            // The same refusal, so `outro_mapa` does not load the stale map
+            // and put the guest back on the bonfire that has no ground.
             const bool FromHost = Role != kWorldOwnerRole && Enabled(FeatureHostBonfire) &&
-                DS2_CoopChannel::HostBonfire(Said) && Said.Map != 0;
+                DS2_CoopChannel::HostBonfire(Said) && Said.Map != 0 &&
+                Said.Map == DS2_Backread::MapAt(MapIndexUnder(Chr));
             const bool LoadHost = FromHost && Enabled(FeatureOtherMap);
 
             if (!LoadHost && HaveRecord && FindBonfireSpawn(Map, Id, Next.Target))

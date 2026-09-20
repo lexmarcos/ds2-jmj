@@ -189,8 +189,16 @@ namespace
     // action on a measurement, not on a guess: the class is confirmed, the
     // field is provably a pointer on it, and the value is provably not one.
     constexpr size_t kMapModelVftable = 0x10eb558;
-    constexpr size_t kModelNavField = 0xc8;
-    constexpr size_t kModelOtherField = 0xd8;
+    constexpr size_t kModelNavField = 0xc8;          // NaviGraphLocationComponent
+    constexpr size_t kModelPointCloudField = 0xd0;   // MapModelPointCloudReceiveCtrl
+    constexpr size_t kModelOtherField = 0xd8;        // MapModelRumbleCtrl
+    // The release's own dereference of +0xc8, and the unregister it calls.
+    constexpr size_t kFreeReadsNavField = 0x3f63ff;
+    constexpr size_t kUnregisterFrom = 0x40cea0;
+    constexpr size_t kUnregisterTo = 0x40d000;
+    // The only two concrete classes the +0xc8 sub-object is ever built as.
+    constexpr size_t kNaviPartsVftable = 0x10c71c8;
+    constexpr size_t kNaviObjVftable = 0x10ea6a8;
     constexpr size_t kModelDumpFrom = 0xb0;
     constexpr size_t kModelDumpTo = 0xf0;
 
@@ -335,7 +343,9 @@ namespace
     bool GuardedModelUpdate(ModelUpdate_p Fn, void* Component, float* Delta);
     bool GuardedModelTick(ModelTick_p Fn, void* Component, float* Delta);
     bool GuardedPostPhysics(PostPhysics_p Fn, void* Component, void* Argument);
-    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag);
+    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag, uintptr_t& Where);
+    bool Poke(uintptr_t At, const void* From, size_t Length);
+    std::string DescribeFreeFault(uintptr_t Where);
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok);
     bool GuardedUnregister(Unregister_p Fn, void* Registry, void* Node, char Free);
     bool GuardedTaskWork(TaskWork_p Fn, void* Owner, void* Argument, void* Info);
@@ -589,13 +599,35 @@ namespace
             Note(StringFormat("MapModelComponent %p solto (entidade %p, mapa %08x, tipo %u, +0xc8 %p, id %u, flag %d, heap %p)",
                 Component, (void*)Entity, Map, (unsigned)Kind, (void*)Registered, Id, (int)Flag, (void*)Allocator));
         }
-        if (!GuardedFree(s_original_component, Component, Flag))
+        uintptr_t Where = 0;
+        if (!GuardedFree(s_original_component, Component, Flag, Where))
         {
             const uint64_t Count = s_caught.fetch_add(1);
+            // Swallowing the fault is not enough, and used to be actively
+            // worse: FUN_1403f6300 nulls each sub-component pointer **after**
+            // the call that frees it, with no finally, so a fault leaves them
+            // dangling - and +0x40 still set, which is exactly the condition
+            // that makes the pre-draw read +0xc8 at all. A release that
+            // completes nulls +0x40, the pre-draw takes its early exit, and
+            // the field is never touched. So the leak came back every frame
+            // as a crash instead of staying a leak.
+            //
+            // Putting the three back to 0 restores the only other legal value
+            // they can hold. Every reader of all three null-checks, and the
+            // builder allocates a fresh one when it finds 0. The cost is that
+            // a fault on the first of them leaks the two that were still
+            // alive: 0x198 bytes on a path that fires a handful of times a
+            // boot, against a closed game.
+            const uintptr_t Zero = 0;
+            for (const size_t At : { kModelNavField, kModelPointCloudField, kModelOtherField })
+            {
+                Poke((uintptr_t)Component + At, &Zero, sizeof(Zero));
+            }
             if (Count < 40)
             {
-                Append(StringFormat("%s  t%lu  FALHA APARADA soltando o MapModelComponent %p; deixo vazar em vez de fechar o jogo%s\n",
-                    Clock().c_str(), GetCurrentThreadId(), Component, Stack().c_str()));
+                Append(StringFormat("%s  t%lu  FALHA APARADA soltando o MapModelComponent %p em %p (%s); +c8/+d0/+d8 zerados, deixo vazar em vez de fechar o jogo%s\n",
+                    Clock().c_str(), GetCurrentThreadId(), Component, (void*)Where,
+                    DescribeFreeFault(Where).c_str(), Stack().c_str()));
             }
         }
     }
@@ -684,17 +716,50 @@ namespace
         }
     }
 
-    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag)
+    // Where it faulted is the whole diagnosis, and only the address separates
+    // the two cases. FUN_1403f6300 dereferences +0xc8 itself at +0x3f63ff, the
+    // same instruction shape as the pre-draw crash:
+    //
+    //   at +0x3f63ff            the pointer was already dead when the release
+    //                           was entered; the leak is a symptom and the
+    //                           writer is outside this class;
+    //   inside +0x40cea0 or     the object was alive and the unregister or
+    //   deeper                  free path broke.
+    int FreeFilter(EXCEPTION_POINTERS* Info, uintptr_t& Where)
+    {
+        Where = (uintptr_t)Info->ExceptionRecord->ExceptionAddress;
+        return Info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+            ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    bool GuardedFree(ComponentFree_p Fn, void* Component, char Flag, uintptr_t& Where)
     {
         __try
         {
             Fn(Component, Flag);
             return true;
         }
-        __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+        __except (FreeFilter(GetExceptionInformation(), Where))
         {
             return false;
         }
+    }
+
+    std::string DescribeFreeFault(uintptr_t Where)
+    {
+        if (Where == s_base + kFreeReadsNavField)
+        {
+            return "o proprio +0xc8: ja estava morto ao entrar, o escritor esta fora desta classe";
+        }
+        if (Where >= s_base + kUnregisterFrom && Where < s_base + kUnregisterTo)
+        {
+            return "dentro do desregistro: o objeto estava vivo e o caminho de soltar quebrou";
+        }
+        if (Where >= s_base && Where < s_base + kModuleSpan)
+        {
+            return StringFormat("modulo +%llx", (unsigned long long)(Where - s_base));
+        }
+        return "fora do modulo";
     }
 
     void* GuardedLookup(ListLookup_p Fn, void* Owner, bool* Ok)
@@ -1234,9 +1299,54 @@ namespace
         for (const size_t At : { kModelNavField, kModelOtherField })
         {
             uintptr_t Value = 0;
-            if (!Peek(Owner + At, &Value, sizeof(Value)) || Value == 0 || LooksLikeAddress(Value))
+            if (!Peek(Owner + At, &Value, sizeof(Value)) || Value == 0)
             {
                 continue;
+            }
+            const char* Why = "nao e endereco";
+            if (LooksLikeAddress(Value))
+            {
+                // A dangling pointer is a perfectly canonical address, so the
+                // test above cannot see one. For +0xc8 there is a second
+                // question worth asking: the sub-object is only ever built as
+                // one of two classes, so its own vftable says whether it is
+                // still there. A freed block has the allocator's free-list
+                // words where that vftable was, and those are not module
+                // addresses.
+                //
+                // Only +0xc8. +0xd0 and +0xd8 are other classes whose
+                // vftables nobody has read, and guessing at them would be the
+                // mistake NoteIfCorrupt above is a monument to.
+                if (At != kModelNavField)
+                {
+                    continue;
+                }
+                uintptr_t Vft = 0;
+                if (!Peek(Value, &Vft, sizeof(Vft)))
+                {
+                    Why = "nao da para ler a vftable";
+                }
+                else if (Vft == s_base + kNaviPartsVftable || Vft == s_base + kNaviObjVftable)
+                {
+                    continue;   // one of the two it is allowed to be
+                }
+                else if (Vft >= s_base && Vft < s_base + kModuleSpan)
+                {
+                    // Some class nobody enumerated. Say so and leave it be:
+                    // nulling a live component would break its navigation
+                    // silently, which is worse than a line in a log.
+                    if (s_model_caught.fetch_add(1) < 40)
+                    {
+                        Append(StringFormat("%s  t%lu  MAPMODEL %p +%02zx aponta para vftable +%llx, que nao e nenhuma das duas conhecidas; deixado\n",
+                            Clock().c_str(), GetCurrentThreadId(), (void*)Owner, At,
+                            (unsigned long long)(Vft - s_base)));
+                    }
+                    continue;
+                }
+                else
+                {
+                    Why = "vftable fora do modulo: bloco solto";
+                }
             }
             // The whole window around it, so whoever reads this log can see
             // which neighbours moved with it and work back to the writer.
@@ -1249,9 +1359,9 @@ namespace
             }
             if (s_model_caught.fetch_add(1) < 40)
             {
-                Append(StringFormat("%s  t%lu  MAPMODEL CORROMPIDO %p campo +%02zx vale %016llx; zerado;%s\n",
+                Append(StringFormat("%s  t%lu  MAPMODEL CORROMPIDO %p campo +%02zx vale %016llx (%s); zerado;%s\n",
                     Clock().c_str(), GetCurrentThreadId(), (void*)Owner, At,
-                    (unsigned long long)Value, Dump.c_str()));
+                    (unsigned long long)Value, Why, Dump.c_str()));
             }
             const uintptr_t Zero = 0;
             Fixed = Poke(Owner + At, &Zero, sizeof(Zero)) || Fixed;
