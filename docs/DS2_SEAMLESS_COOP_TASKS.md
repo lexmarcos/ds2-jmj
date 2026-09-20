@@ -1829,6 +1829,17 @@ or unproven, for whoever picks this up.
 
 **The budget (see DS2_NATIVE_TRAVEL_PLAN.md §15-§17)**
 
+3b. ~~**The streamer's own neighbour loads were not budgeted.**~~ Fixed on
+   19/09, after both games died of it. At Threshold Bridge with Forest of
+   Fallen Giants as the session's map (940 targets against Majula's 312), the
+   streamer asked for `0a110000` (875) on top of 1406 in use and both hit the
+   game's `out of memory` trap at `+0x1bee1c4`. The same leg had passed three
+   times that afternoon over Majula, at 771 in use — which is why the failure
+   depends on where the session started and looks random. `GateOwnerLoad` now
+   clears the wanted byte of a map that would not fit and lets it in when
+   there is room; after 3 s it takes the heaviest map nobody needs down. **The
+   character can now reach a boundary whose map is held outside**, and what
+   that looks like — a wall, a fall — has not been seen yet.
 4. **The per-map target costs are measured on this save.** Another character,
    another world state or another DLC install can change them; a map never seen
    is assumed to cost 1400. The 150-entry margin is a guess.
