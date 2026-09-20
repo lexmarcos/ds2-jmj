@@ -1897,6 +1897,33 @@ or unproven, for whoever picks this up.
    piece that would give those legs back is releasing the session's map while
    everybody is travelling — the game's join bindings assume it never
    unloads, so it needs the same care the rest of §17 took.
+
+   Ten Ghidra readings and a plan in
+   [docs/research/releasing-the-session-map.md](research/releasing-the-session-map.md),
+   whose four measurements are now three done and one that cannot be
+   scheduled:
+
+   - the join controller's live shape — **done 20/09**. Host reads 0; the
+     guest holds a live controller in state 7 whose `+0x19c` names the map
+     the session began in and never moves, even with the guest standing in
+     another one. `+0x19c` is the session's map and `+0x1a0` is the way home,
+     separated by reading, with a session staged across two maps.
+   - `mgr+0x3c6` across a leg — **done 20/09**, it never leaves 0, so the
+     gate that defers the enemy table cannot get stuck.
+   - `sync+0x08` / `+0x18` — **done 20/09**. The record array is built for
+     the map the session began in and travel never rebinds it; the
+     destination never gets one at all.
+   - the `MapModelComponent` fault's `+0xd0` / `+0xd4` — **cannot be
+     scheduled**; it needs the fault to happen again.
+
+   That last one is why this is not started yet. Risk 4 is an unexplained
+   crash in exactly the subsystem 6b rewrites, and it hit both machines 17 ms
+   apart. Building nine steps of map-teardown code on top of it makes every
+   crash during the work ambiguous, which is the trap §0 already paid for.
+   The cheaper thing first is the **order**: the plan's finding 1 says vanilla
+   is notify → wait → release and the mod does the reverse, which is a smaller
+   change than 6b, improves the release path already in use every leg, and is
+   the best candidate to explain risk 4 before 6b is written.
 6c. **The party hook fired two summons 16 ms apart, and the second poisoned
    the first.** — **fixed on 20/09** (`ab9cee17`). A summon now claims a
    twenty second window and nothing else is summoned inside it, so the
