@@ -350,3 +350,138 @@ void hook(void* mgr, void* holder)
 - `FUN_1405205d0`'s semantics beyond "takes the same mutex".
 - The scan matches the C idiom for a lock plus the names `Mutex`/`Critical`/
   `Lock`; an inlined spin-lock or one behind an Arxan thunk would not show.
+
+---
+
+# Where the guest's "session map" actually lives — 20/09
+
+The field the whole problem turns on has a name and an address.
+
+> **It is `NetSummonJoinMultiplayCtrl + 0x19c`**, reached as
+> `*( *( *0x141616cf8 + 0x18 ) + 0x40 ) + 0x19c` **[read]**.
+> The invader variant is `NetDuelJoinMultiplayCtrl + 0x194`.
+
+`sync+0x18` is only a **cache** of it: every `FUN_140517880` refills it from
+there, and that is why writing `sync+0x18` by hand never stuck **[read]**.
+
+## The netroot, named
+
+`netroot = *0x141616cf8`, built by `FUN_140513be0` **[read]**:
+
+| slot | class / size | what |
+| --- | --- | --- |
+| `[0]` `+0x00` | 0x2d0 | session state: `+0xa4` state, `+0xb4` member count |
+| `[3]` `+0x18` | 0x100 | **the multiplay/session manager** |
+| `[4]` `+0x20` | 0x2500 | the local net-player block, `+0x174` own member id |
+| `[5]` `+0x28` | **`NetEnemyManager`** 0x1a0 | the "object sync" — RTTI confirms the game's own name |
+| `[6]` `+0x30` | 0xf0 | an event sink |
+
+## The host is already fine; the staleness is guest-only
+
+`FUN_140517bf0`, the host's bind, never calls `FUN_1402c6de0` at all — it
+reads the **locally loaded** map straight from the streamer **[read]**:
+
+```
+140517c13: call 0x1403bcd90      ; *(*(ctx+0x38)+8)+0x20, the current part
+140517c28: call 0x1403ba320      ; *(*(part+0x28)+8), its map id
+140517c2f: mov %edx,0x18(%r14)   ; sync+0x18 = the LOCAL map
+```
+
+The guest's bind, `FUN_140517880`, goes through `FUN_1402c6de0`, which returns
+the join controller's `+0x19c` whenever `netroot[3]+0x40` is non-null **[read]**
+— and that slot is non-null **exactly for a guest**: the two join controllers
+are created under `param_1[8] == 0 && param_1[9] == param_1[10]`, while the
+host instead pushes a `NetSummonAcceptMultiplayCtrl` into the vector at
+`+0x48..+0x50` **[read]**. So join controller and accept vector are mutually
+exclusive.
+
+The fallback when `+0x40` is null is `NetPlayerWatcher + 0xc`
+(`*(netroot[4]+0x5b8)+0xc`), which **does** follow the locally loaded map,
+every frame, on host and guest alike (`FUN_140250dc0`, which even fires an
+event when it changes) **[read]**. The guest's own map tracking is perfectly
+up to date — it is simply not what the bind consults.
+
+## Every writer of `+0x19c`, image-wide
+
+An image-wide scan for stores with displacement `0x19c` found **three**
+**[read]**:
+
+| where | value | when |
+| --- | --- | --- |
+| `0x1402c16de` (ctor) | `mov qword [rsi+0x19c], -1` — **8 bytes**, covers `+0x19c` *and* `+0x1a0` | construction |
+| `0x1402c18cc` (ctor tail) | `NetPlayerWatcher+0xc`, the guest's own map at that instant | construction |
+| `0x1402c2bb2`, in `FUN_1402c2a80` (vft slot `+0x28`) | word 0 of the incoming summon packet | once |
+
+`FUN_1402c2a80` is gated on `+0xf8 == 2`. In a live session `+0xf8` is **4**,
+and re-delivering that packet in any other state takes the `else` branch and
+sets `+0xf8 = 0xb` with reason 1 — **it aborts the session** **[read]**.
+
+So: **the only writers are construction and the summon warp. There is no
+in-session update path, supported or otherwise, short of a hook.** The other
+way to a fresh value is a fresh controller, and creating one means a new
+summon; destroying one *is* ending the session **[read]**.
+
+## What a hook would write, and the trap next door
+
+A **4-byte** store at `+0x19c` (or `+0x194` for the duel class — check
+`*(void**)(ctrl)` against `NetSummonJoinMultiplayCtrl::vftable`
+`s_base + 0x10d7bd8` or `NetDuelJoinMultiplayCtrl::vftable`
+`s_base + 0x10d7678`), on the **guest**, after its own map load.
+
+> **Never widen it to eight bytes.** `+0x1a0` is the **return-home map id**,
+> and `+0x1a4/+0x1a8/+0x1ac/+0x1b0` the position and angle to come back to.
+> The constructor's single 8-byte `-1` covers both; `FUN_1402c2a80` fills the
+> home record from `NetPlayerWatcher+0xc` **[read]**. An 8-byte write destroys
+> the way home.
+
+## The consequence to weigh before writing it
+
+`+0x19c` is not only "which map's enemies the sync binds to". It is the key
+under which **all** host→guest world state is filed. `FUN_1402c2fa0` — the
+snapshot handler that runs while `+0xf8 == 4` — reads it **seven times**
+**[read]**: the enemy status import, the event flags (`FUN_140474590`), the
+event values (`FUN_14047a350`), `FUN_140452fb0`, and the map object state
+(`FUN_1401f3000` / `FUN_1401f30e0`).
+
+Other readers, all through `FUN_1402c6de0` **[read]**: `FUN_1401f6fd0` (the
+`'N'` packet), `FUN_140416610/770/820` (per-map network enemy state),
+`FUN_14018a500` and `FUN_14018a840` (the `'E'` packet), and three **gates**
+that are simply `sessionMap == this map` — `FUN_140419b60`,
+`FUN_140183e10`, and `FUN_140195cd0`, whose caller returns immediately when
+it is false, so a whole per-map object tick hangs off it.
+
+So writing `+0x19c` is right **if and only if** the guest is meant to be
+considered co-located with the host on the new map — which is exactly what a
+group travel is. Writing only `sync+0x18` is strictly worse: overwritten on
+the next rebuild, and it desynchronises the `sessionMap ==` gates
+**[inferred]**.
+
+Hooking the getter `FUN_1402c1db0` instead would move every `FUN_1402c6de0`
+consumer but leave `FUN_1402c2fa0` on the raw field — probably the opposite of
+what is wanted **[inferred]**.
+
+## Probes, to see all of this live without any patch
+
+```
+chain jc    1616cf8 18,40      8   # the join controller: 0 on a host, non-null on a guest
+chain vft   1616cf8 18,40,0    8   # its class
+chain smap  1616cf8 18,40,19c  4   # THE SESSION MAP
+chain home  1616cf8 18,40,1a0  4   # the return-home map — do not clobber
+chain state 1616cf8 18,40,f8   4   # 2 joining, 3 warping, 4 in session, 0xb abort
+chain pw    1616cf8 20,5b8,c   4   # NetPlayerWatcher: the locally loaded map
+chain nem   1616cf8 28,18      4   # NetEnemyManager's cached map
+```
+
+On a host `jc` reads 0 and `nem` tracks `pw`; on a guest `jc` is non-null and
+`smap` stays at the summon map while `pw` follows the guest.
+
+## What this reading could not establish
+
+- `FUN_1403bcec0`'s body — behind FromSoft's control-flow obfuscation. That
+  `FUN_140419a70` passes the map id through to it was read from both callers'
+  assembly, not decompiled.
+- Whether packet word 0 is literally the host's current map: **[read]** that
+  it is the warp destination, the rest is inference.
+- The `+0xf8` state names; the numbers are read, the labels are the reader's.
+- Non-virtual readers of `+0x19c` outside the class's own method span. The
+  **store** scan was image-wide and complete; the **read** scan was scoped.
