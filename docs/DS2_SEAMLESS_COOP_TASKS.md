@@ -653,7 +653,10 @@ Start with a boss, which is a single flag and easy to check, before any quest.
 
 ---
 
-## M8 — bonfire and travel — **done on 15/09, with two players**
+## M8 — bonfire and travel — **done on 15/09, hardened through 19/09**
+
+What is still missing is listed at the end of this section, "What is still open
+ in M8 (19/09)".
 
 **Done 15/09**: `DS2_BonfireInSessionHook` (with `--seamless`). The world's
 owner rests at the bonfire with phantoms in the world, and the session stays.
@@ -1785,6 +1788,70 @@ and closes the guest's rebuild gate (`+0x198`) as that map's release begins.
 - **Missing:** evicting the neighbour map the game streams in near Heide's first
   bonfire before forcing the destination, so a leg never needs four maps
   (docs/research/streaming-budget.md).
+
+### What is still open in M8 (19/09)
+
+Group travel works, including between the heavy DLC maps, and a long session
+played by hand on 19/09 went through without a crash, a session drop or a
+character left stuck. What is written down here is what is known to be missing
+or unproven, for whoever picks this up.
+
+**Cost and looks**
+
+1. **A travel that has to make room takes about 15 s behind the black screen.**
+   Most of it is fixed waiting: 3 s before the map left is chosen, 6 s with the
+   player off it (so the map's objects stop their effects), 2 s after it is
+   down. Those three came from single measurements; each could be replaced by a
+   real condition (effects gone, release complete) instead of a clock.
+2. **The loading screen is only black.** The fade is drawn over the front end
+   (flag 1 of `FUN_14039a510`), so the area's art and name appear only on
+   arrival. Putting the fade under the front end (`ctx+0x1168`) is untried.
+3. **The travel's arrival uses the game's relocation lookup but not its
+   facing or ground snap** (`FUN_1401cb1b0` yaw, `FUN_14041e3e0`). A character
+   once ended up inside a wooden frame at Undead Refuge (reported 19/09); it
+   did not happen again after the lookup was added, and the cause was never
+   proven.
+
+**The budget (see DS2_NATIVE_TRAVEL_PLAN.md §15-§17)**
+
+4. **The per-map target costs are measured on this save.** Another character,
+   another world state or another DLC install can change them; a map never seen
+   is assumed to cost 1400. The 150-entry margin is a guess.
+5. **The chameleon limit of three maps is read and logged but not enforced.**
+   Only the TargetManager decides whether a destination fits.
+6. **"NO ROOM, loading anyway".** When room cannot be made in 30 s the
+   destination is loaded regardless, which is what killed the host and the
+   guest before. It has not fired since the fixes of §17, but the path is
+   still there and its ending is a crash. It needs a decision: wait longer,
+   take another map down, or refuse the leg.
+7. **A guest's copy is judged to have left a map by distance** (40 m from the
+   parking bonfire). A copy that does not get there keeps the map, and the
+   travel waits the full 30 s.
+
+**Effects, lighting and lists the game does not clean**
+
+8. **Only a DLC map's teardown kills effects** (the ids of its own sfx bank,
+   plus the handle-unlink detour). Whether a base-game map's teardown ever
+   leaves an effect running has not been measured.
+9. **The lighting sweep runs only while a map is being taken down.** Map
+   objects and parts also cache lighting entries (`FUN_1401c4aa0`,
+   `FUN_1403f4f60`, `FUN_1403f54a0`); they die with their map, so they are
+   believed safe, and that is not proven.
+10. **The sign-area purge was found by its symptom.** The game's purge for a
+    released map is a bare `ret`, and nothing says that list is the only one
+    the game leaves behind; no audit of the other per-map registries was done.
+
+**Not tested**
+
+11. **Shulva (`0x32230000`) and the other DLC maps** have never been travelled
+    to; only Brume Tower and Frozen Eleum Loyce.
+12. **A session begun somewhere other than Majula.** The session's map is held
+    for the whole session and is where everyone waits while room is made.
+13. **Three or more players**, which this machine cannot do.
+14. **The "duty fulfilled" guard** (a phantom sent home when an area's boss is
+    dead) fired once on 18/09 and has not been exercised since.
+15. **A boss killed during a session**, which is what M6 needs and what would
+    exercise 14 for real.
 
 ## M9 — spectator and party wipe
 
