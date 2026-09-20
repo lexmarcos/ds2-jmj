@@ -328,6 +328,49 @@ The guest never hit `25cec0`, which is right: `105400` is a global, and the
 filter `FUN_14025cdb0` refuses a non-host those — it set it locally and the
 host's packet carried the authoritative copy.
 
+## Carrying the object state — 20/09
+
+The gap above is closed the same way the flags were. The host reads, once a
+second, the state of every entity of each loaded map that has a `StateActCtrl`
+(`*(comp+0x48)`, vftable checked before the byte at `+0x1c` is believed), by
+the same walk the game's own import uses:
+
+```
+entry  = *(*(owner+0x160) + 0x10)[index]
+entity = FUN_1403c1600(entry)
+comp   = FUN_1401ca790(entity+0xb8, entity)
+ctrl   = *(comp+0x48)
+state  = *(uint8*)(ctrl+0x1c)
+```
+
+The co-op channel carries it in chunks of 128 (`kKindMapObjState`, 402 bytes),
+and the guest applies it with the game's own `FUN_1401f30e0` once per map
+registration, so the real `SetState` runs and the object moves instead of a
+byte changing under it. Only the entries the guest disagrees with are passed,
+so a hundred settled objects are left alone.
+
+**The signature that decompiles wrong.** `FUN_1401f30e0(_, map, pairs, count)`:
+`rcx` is dead, `rdx` is the map id, and a pair is `{uint32 index; float
+state}` - the `SetState` slot takes the state in **`xmm1` as a float**, which
+the decompiler shows as an integer field.
+
+Measured working, in the guest's own log:
+
+```
+objects: map 0a040000 took 20 of the host's 246 states (1717 ms old)
+objects: map 32240000 took 33 of the host's 512 states (1982 ms old)
+```
+
+**And a cap that was wrong twice.** The entity walk finds far more objects
+than a heap scan of `MapObjStateActComponent` does - that scan counted 194 in
+Majula and 205 in Brume, and the walk passes 256 in Shulva and 512 in Brume.
+Both of the first two caps truncated the list silently, and the object this
+was written for, at `(-167.7, -5.2, 436.3)`, fell outside each one and stayed
+at 10 against the host's 20. The cap is 2048 now and a map over it says so in
+`DS2_Backread.log`. **That build is installed but its measurement is still
+owed**: the bench stopped forming sessions before the census could be run
+again.
+
 **What this does not settle.** One lever, and the trace cannot say which
 character's press started it, because both machines ran the event script.
 Whether a mechanism whose result is only per-object state — with no flag
