@@ -1,172 +1,100 @@
-![Dark Souls 3 - Open Server](./Resources/banner.png?raw=true)
+# Dark Souls II reverse engineering notes — private server, seamless co-op, and a lot of Ghidra
 
-![GitHub license](https://img.shields.io/github/license/TLeonardUK/ds3os)
-![GitHub release](https://img.shields.io/github/release/TLeonardUK/ds3os)
-![GitHub downloads](https://img.shields.io/github/downloads/TLeonardUK/ds3os/total)
-[![Discord](https://img.shields.io/discord/937318023495303188?label=Discord)](https://discord.gg/pBmquc9Jkj)
+A personal research repository where I pulled apart **Dark Souls II: Scholar of the First Sin** (`DarkSoulsII.exe`, version 1.03 / Calibrations 2.02, Steam appid 335300) to find out how the game actually works, and whether things the game never allowed could be made to work anyway.
 
-# What is this project?
-An open source implementation of the game servers for dark souls 2 (SOTFS) and 3. 
+The three questions that drove it:
 
-This project exists to provide an alternative to playing online with mods without the risk of being banned, or just for people who want to play privately and not deal with cheaters/invasions/etc.
+- **Invading and summoning in Majula** and the other "safe" areas, where Dark Souls II refuses every multiplayer item — solved, and the reference is [DS2_MAJULA_MULTIPLAYER.md](docs/DS2_MAJULA_MULTIPLAYER.md).
+- **Travelling between bonfires without breaking a co-op session**, so two players cross the game together instead of being thrown back to their own worlds — built, measured, and written up under seamless co-op below.
+- **Learning the binary itself**: RTTI, vftables, the net subsystem, the map streamer, Havok bodies, the Arxan-obfuscated prologues, and how to read live memory from Linux while the game runs under Proton.
 
-If you have any trouble join the discord for tech-support: https://discord.gg/pBmquc9Jkj
+Everything here is **decompilation and reverse engineering notes**, done with **Ghidra**, `objdump`, a **Detours**-based DLL injector, and a two-account test harness. Every offset is hardcoded against one game version and moves the day the game is patched. Nothing in this repository helps with piracy, and the private server authenticates Steam tickets exactly as upstream does.
 
-# Can I use it with a pirated game?
-No, the server authenticates steam tickets. Please do not ask about piracy, steam emulators or the like, we have no interest in supporting them. 
+## This exists because of other people's work
 
-FROM SOFTWARE deserves your support too for the excellent work they do, please buy their games if you can.
+This repo is a fork of **[TLeonardUK/ds3os](https://github.com/TLeonardUK/ds3os)** — the open source Dark Souls 3 / Dark Souls 2 server emulator — taught to run Dark Souls II SOTFS against a private server. None of what follows would have been reachable without it.
 
-# Where can I download it?
-Downloads are available on the github releases page - https://github.com/TLeonardUK/ds3os/releases
+ds3os itself credits these, and so do I:
 
-# How do I use it?
-Once built you should have a folder called Bin, there are 2 subfolders of relevance. Loader and Server. 
+- [garyttierney/ds3-open-re](https://github.com/garyttierney/ds3-open-re)
+- [Jellybaby34/DkS3-Server-Emulator-Rust-Edition](https://github.com/Jellybaby34/DkS3-Server-Emulator-Rust-Edition)
+- [AmirBohd/ModEngine2](https://github.com/AmirBohd/ModEngine2)
 
-When running the loader you will get the option to create a server or join an existing server.
+And the wider **soulsmodding** community, whose [Paramdex / DSMapStudio](https://github.com/soulsmods/Paramdex) param definitions were an independent check on more than one reverse-engineered field name.
 
-If you want to create a dedicated server yourself you should run Server.exe in the Server folder, this will start the actual custom server running on your computer. 
+## Documentation
 
-The first time the server runs it will emit the file Saved\default\config.json which contains various matchmaking parameters that you can adjust (and apply by restarting the server) to customise the server.
+All of it is public and meant to be read. Each file says what was **measured** versus what was **inferred**, and several record where an earlier conclusion turned out to be wrong.
 
-Servers can also be password protected if required by setting as password in Saved\default\config.json, a password will need to be entered when attempting to launch the game with a protected server.
+### The game's multiplayer, PvP and sessions
 
-**NOTE**: The **steam** client (no login needed) must be installed when you run the **Server.exe**. Otherwise, **Server.exe** will fail to initialize.
+| Document | What it is |
+| --- | --- |
+| [DS2_MAJULA_MULTIPLAYER.md](docs/DS2_MAJULA_MULTIPLAYER.md) | How multiplayer was unlocked in Majula and the other closed areas. The reference for what the injector patches and why. |
+| [DS2_AREA_RESTRICTION.md](docs/DS2_AREA_RESTRICTION.md) | Why a summon sign works in Heide and not in Majula: the area restriction on multiplayer items, ruled in and out step by step. |
+| [DS2_STICKY_SIGNS.md](docs/DS2_STICKY_SIGNS.md) | The road to that result — the failed attempts and dead ends, kept so nobody walks them again. |
+| [DS2_CLIENT_NETSVR_API.md](docs/DS2_CLIENT_NETSVR_API.md) | `DarkSoulsII.exe` carries full RTTI for the multiplayer subsystem. The binary documents itself, and this is the name list. |
+| [DS2_PVP_CODEMAP.md](docs/DS2_PVP_CODEMAP.md) | Map of the project areas behind summon signs, invasions, sessions and the phantom timer. |
+| [DS2_SESSION_END_CLIENT.md](docs/DS2_SESSION_END_CLIENT.md) | The client-side path between "the phantom died" and `RequestNotifyLeaveSession`, mapped with runtime breakpoints. |
+| [DS2_PVP_LEAVE_SESSIONS.md](docs/DS2_PVP_LEAVE_SESSIONS.md) | Every way a PvP session ends, and the difference between a kill-based leave and the timer. |
+| [DS2_LEAVE_SESSION_BY_KILL.md](docs/DS2_LEAVE_SESSION_BY_KILL.md) | How the game reports a session ending after a player kill, measured on the wire. |
+| [DS2_PHANTOM_TIMER_PATCH.md](docs/DS2_PHANTOM_TIMER_PATCH.md) | The client-side countdown that ends PvP sessions, found at `R14 + 0xCFC`, and the patch that removes it. |
+| [DS2_REMATCH_AFTER_DEATH.md](docs/DS2_REMATCH_AFTER_DEATH.md) | What happens between a PvP death and the same pair's next invasion, and how much of the way back can be skipped. |
+| [DS2_SOUL_MEMORY_MATCHMAKING.md](docs/DS2_SOUL_MEMORY_MATCHMAKING.md) | How Soul Memory gates matchmaking, and what opens it up on a private server. |
+| [DS2_FOG_GATES.md](docs/DS2_FOG_GATES.md) | The area-transition fog walls as the game sees them — and the game never calls them fog. |
 
-# What currently works?
-Most of the games core functionality works now, with some degree of variance to the retail game. We're currently looking to closer match retail server behaviour and make some general improvements to the running of unoffical servers.
+### Seamless co-op
 
-:bangbang: Dark Souls 2 support is still experimental and under development, there is a high probability of things not behaving correctly.
+| Document | What it is |
+| --- | --- |
+| [DS2_SEAMLESS_COOP_DESIGN.md](docs/DS2_SEAMLESS_COOP_DESIGN.md) | The brief: the host owns the world, each player keeps their own save, and everything that follows from that. |
+| [DS2_SEAMLESS_COOP.md](docs/DS2_SEAMLESS_COOP.md) | What was measured of the client — the warp, the death path, and what the game already solves for free. |
+| [DS2_SEAMLESS_COOP_TASKS.md](docs/DS2_SEAMLESS_COOP_TASKS.md) | The work list in dependency order, milestone by milestone, edited as each one closed. The best single entry point. |
+| [DS2_WORLD_STATE.md](docs/DS2_WORLD_STATE.md) | Event flags and per-object state: making a lever the host pulled read as pulled for the guest, without leaking into the guest's own world. |
+| [DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md](docs/DS2_SEAMLESS_TRAVEL_ARCHITECTURE.md) | The architecture options for travelling together, and the recommendation that came out of them. |
+| [DS2_PRESENCE_REBUILD_PLAN.md](docs/DS2_PRESENCE_REBUILD_PLAN.md) | Rebuilding the players' presence on every trip — and the correction it forced on the architecture document above. |
+| [DS2_PRESENCE_ASTRA_REVIEW.md](docs/DS2_PRESENCE_ASTRA_REVIEW.md) | An outside model's read-only review of that plan, kept as the third opinion in the chain. |
+| [DS2_NATIVE_TRAVEL_PLAN.md](docs/DS2_NATIVE_TRAVEL_PLAN.md) | Travel by the game's own loading path, after three distinct families of crash killed the earlier approach. |
 
-| Feature | Dark Souls 3 | Dark Souls 2 SOTFS |
-| --- | --- | --- |
-| Stable enough for use | :heavy_check_mark: | Experimental |
-| Network transport | :heavy_check_mark: | :heavy_check_mark:  |
-| Announcement messages | :heavy_check_mark:  | :heavy_check_mark:  |
-| Profile management | :heavy_check_mark:  | :heavy_check_mark:  |
-| Blood messages | :heavy_check_mark: | :heavy_check_mark:  |
-| Bloodstains | :heavy_check_mark: | :heavy_check_mark:  |
-| Ghosts | :heavy_check_mark: | :heavy_check_mark:  |
-| Summoning | :heavy_check_mark: | :heavy_check_mark: |
-| Invasions | :heavy_check_mark: | :heavy_check_mark: |
-| Auto-Summoning (Convenants) | :heavy_check_mark: | :heavy_check_mark: |
-| Mirror Knight | n/a | :heavy_check_mark: |
-| Matchmaking | :heavy_check_mark: | :heavy_check_mark: |
-| Leaderboards | :heavy_check_mark: | :heavy_check_mark: |
-| Bell Ringing | :heavy_check_mark: | n/a |
-| Quick Matches (Arenas) | :heavy_check_mark: | :heavy_check_mark: |
-| Telemetry/Misc | :heavy_check_mark: | :heavy_check_mark:  |
-| Ticket Authentication | :heavy_check_mark: | :heavy_check_mark: |
-| Master Server Support | :heavy_check_mark: | :heavy_check_mark: |
-| Loader Support | :heavy_check_mark: | :heavy_check_mark: |
-| WebUI For Admin | :heavy_check_mark: | :heavy_check_mark: |
-| Sharding Support | :heavy_check_mark: | :heavy_check_mark: |
-| Discord Activity Feed | :heavy_check_mark: |  |
+### Tools, harness and operations
 
-Future roadmap:
+| Document | What it is |
+| --- | --- |
+| [DS2_HARNESS.md](docs/DS2_HARNESS.md) | `ds2os-dev`: the harness that drives two Steam accounts, two game installations and a private server unattended, and records the evidence. |
+| [DS2_INVESTIGATION_TOOLS.md](docs/DS2_INVESTIGATION_TOOLS.md) | How to work on the running game. The slow part was building these, not using them. |
+| [DS2_LIVE_MEMORY_ACCESS.md](docs/DS2_LIVE_MEMORY_ACCESS.md) | Reading and writing the game's memory from Linux while it runs under Proton, with no injection and no rebuild. |
+| [DS2_SERVER_DEPLOY.md](docs/DS2_SERVER_DEPLOY.md) | Running the server on a small shared Linux host that is already doing something else which must not go down. |
+| [DS2_TO_VALIDATE.md](docs/DS2_TO_VALIDATE.md) | The standing list of what has **not** been tested. Kept honest on purpose. |
+| [docs/README.md](docs/README.md) | The documentation index. |
 
-- Support for various mod-settings per server (eg. allow servers to remove summon limit)
-- Better Anticheat (potentially we could do some more harsh checks than FROM does).
+### Research notes — static reading of `DarkSoulsII.exe`
 
-# Will this ban my account on the retail server?
-DSOS uses its own save files, as long as you don't copy ds3os saves back to your retail saves you should be fine.
+Each of these is a read-only Ghidra session written up, with `[read]` and `[inferred]` marked line by line. Nothing in them was run against a live game.
 
-# FAQ
-# How do I switch between hosting Dark Souls 3 and Dark Souls 2?
-After running the server once a file will be created at Saved/default/config.json. You can change the GameType parameter from DarkSouls2 and DarkSouls3 to change what game the server hosts.
+| Document | What it is |
+| --- | --- |
+| [warp-reasons.md](docs/research/warp-reasons.md) | Every warp reason the game has, and which of them actually ends a multiplayer session. |
+| [warp-teardown-order.md](docs/research/warp-teardown-order.md) | The 32-state teardown machine behind a warp, and why the vanilla order is notify, wait, then release. |
+| [phantom-map-border.md](docs/research/phantom-map-border.md) | What the game does with a phantom that crosses a map border, and what group travel can borrow from it. |
+| [rejoin-in-place.md](docs/research/rejoin-in-place.md) | Whether the join's world load can be run again inside a live session, without leaving it. |
+| [alternative-travel.md](docs/research/alternative-travel.md) | Group travel by another route entirely, built from what the game already does in a live session. |
+| [moving-the-session.md](docs/research/moving-the-session.md) | Can a live session be moved to another map? Four patches would be needed, and one already existed. |
+| [session-map-rebind.md](docs/research/session-map-rebind.md) | Moving the enemy sync to another map so the session's map can finally be released. |
+| [releasing-the-session-map.md](docs/research/releasing-the-session-map.md) | Ten parallel readings synthesised into one ordered plan, with its risks ranked. The densest file here. |
+| [object-table-lifecycle.md](docs/research/object-table-lifecycle.md) | The per-map network object table: what it is, who owns it, and everything that points into it. |
+| [enemy-table-races.md](docs/research/enemy-table-races.md) | How the enemy generator table is built and freed, its readiness test, and four ways a create is lost silently. |
+| [target-manager-cap.md](docs/research/target-manager-cap.md) | The 2048-entry TargetManager cap: can it be raised, and would raising it help? |
+| [streaming-budget.md](docs/research/streaming-budget.md) | The map streaming budget, and why a third loaded map quietly stays at state 0. |
+| [net-map-id-inventory.md](docs/research/net-map-id-inventory.md) | A sweep of 3,976 net functions for every place a map id is produced or consumed, ranked by hazard. |
+| [remote-copy-and-the-map.md](docs/research/remote-copy-and-the-map.md) | Everything that ties the other player's copy to the map underneath it. |
+| [respawn-and-the-map.md](docs/research/respawn-and-the-map.md) | Whether respawning and bonfires need their map loaded at all. They do not. |
+| [map-model-fault.md](docs/research/map-model-fault.md) | A crash on `MapModelComponent + 0xc8` in a live, intact object — one word written by somebody else. |
+| [risk-4-six-readings.md](docs/research/risk-4-six-readings.md) | Six readings of that crash: what each one closed, what survived, and the stale-pointer mechanism that fits. |
 
-## Why aren't my save files appearing?
-DSOS uses its own saves to avoid any issues with retail game saves. If you want to transfer your retail saves to DSOS, click the settings (cog) icon at the bottom of the loader and press the copy retail saves button.
+## Status
 
-We don't provide an automation option to copy ds3os saves back to retail saves for safety. If you ~really~ want to do this you can find the folder the saves are stored in and rename the .ds3os files to .sl2.
+The seamless co-op work is **paused, not finished**. A session survives death, a guest joins with no ritual, world state is shared, and two players travel between bonfires together — all measured, with the evidence recorded. Releasing the session's map mid-travel is seven of nine steps in. `DS2_TO_VALIDATE.md` says what has not been tested, including the honest note that three or more players is untestable on one machine.
 
-## Can I run the server via docker?
-Yes, there are 2 docker containers currently published for DSOS, these are automatically updated each time a new release is made:
+## Licence and credit
 
-timleonarduk/ds3os - This is the main server and the one you almost certainly want.
-timleonarduk/ds3os-master - This is for the master server, unless you are making a fork of ds3os, you probably don't need this.
-
-If you want a quick one-liner to run the server, you can use this. Note that it mounts the Saved folder to the host filesystem at /opt/ds3os/Saved, making it easier to modify the configuration files. Access /opt/ds3os/Saved to view and modify the configuration files.
-
-`sudo mkdir -p /opt/ds3os/Saved && sudo chown 1000:1000 /opt/ds3os/Saved && sudo docker run -d -m 2G --restart always --net host --mount type=bind,source=/opt/ds3os/Saved,target=/opt/ds3os/Saved timleonarduk/ds3os:latest`
-
-## I launch the game but its unable to connect?
-There are a few different causes of this, the simplest one is to make sure you're running as admin, the launcher needs to patch the games memory to get it to connect to the new server, this requires admin privileges.
-
-If the server is being hosted by yourself and the above doesn't solve your issue, try these steps:
-
-1. Ensure these ports are forwarded on your router, both for tcp and udp: 50000, 50010, 50050, 50020 
-
-2. Ensure you have allowed the server access through the windows defender firewall, you can set rules here: Start Bar -> Windows Administrative Tools -> Windows Defender Firewall with Advanced Security -> Inbound/Output Rules
-
-3. Its possible you don't have the configuration for the server setup correctly. After running the server once make sure to open the configuration file (Saved/config.json) and make sure its setup correctly (it will attempt to autoconfigure itself, but may get incorrect values if you have multiple network adapters). The most critical settings to get correct are ServerHostname and ServerPrivateHostname, these should be set to your WAN IP (the one you get from sites like https://whatismyip.com), and your LAN IP (the one you get from running ipconfig) respectively. If you are using LAN emulation software (eg. hamachi) you will need to set these to the appropriate hamachi IP.
-
-## What do all the properties in the config file mean?
-The settings are all documented in the source code in this file, in future I'll write some more detailed documentation.
-
-https://github.com/TLeonardUK/ds3os/blob/main/Source/Server/Config/RuntimeConfig.h
-
-# How do I build it?
-Currently the project uses visual studio 2022 and C++17 for compilation.
-
-We use cmake for generating project files. You can either use the cmake frontend to generate the project files, or you can use one of the generate_* shell scripts inside the Tools folder.
-
-Once generated the project files are stored in the intermediate folder, at this point you can just open them and build the project.
-
-## Using nix
-
-```sh
-# to build a package
-nix build github:TLeonardUK/ds3os
-# to run it directly
-nix run github:TLeonardUK/ds3os
-# to run master-server
-nix run github:TLonardUK/ds3os#master-server
-```
-
-The nix version stores the configs in `${XDG_CONFIG_HOME:-$HOME/.config}/ds3os`
-
-# Whats in the repository?
-```
-/
-├── Protobuf/              Contains the protobuf definitions used by the server's network traffic. Compiling them is done via the bat file in Tools/
-├── Resources/             General resources used for building and packaging - icons/readmes/etc.
-├── Source/                All source code for the project.
-│   ├── Injector/          This is the DLL that gets injected into the game to provide DS3OS's functionality.
-│   ├── Loader/            Simple winforms app that loads DS3 such that it will connect to a custom server.S3 such that it will connect to a custom server.
-│   ├── MasterServer/      NodeJS source code for a simple API server for advertising and listing active servers.
-│   ├── Server/            Source code for the main server.
-│   ├── Server.DarkSouls3/ Source code thats special to dark souls 3 support.
-│   ├── Server.DarkSouls2/ Source code thats special to dark souls 2 support.
-│   ├── Shared/            Source code that is shared between the server and injector projects.
-│   └── ThirdParty/        Source code for any third-party libraries used.
-│   └── WebUI/             Contains the static resources used to assemble the management web page for the server.
-├── Tools/                 Various cheat engine tables, bat files and alike used for analysis.
-```
-
-# How can I help?
-Check our the issues page, or send me a message for suggestions on what can be done.
-
-Right now there are a few server calls we either have stubbed out or returning dummy information, implementing
-them properly, or finding out the format of the data they need to return would be worth while.
-
-There are also a lot of protobuf fields that are still unknown and use constant values when sent from the 
-server, determining what they represent would be a good improvement.
-
-# Credit
-A lot of the information needed to produce this implementation has been figured out by the community. 
-Especially the members of the ?ServerName? souls modding discord.
-
-The following 3 repositories have provided a lot of information used in this implementation:
-
-https://github.com/garyttierney/ds3-open-re
-
-https://github.com/Jellybaby34/DkS3-Server-Emulator-Rust-Edition
-
-https://github.com/AmirBohd/ModEngine2
-
-Graphics and icons provided by:
-
-Campfire icon made by ultimatearm from www.flaticon.com
-
-Various UI icons made by Mark James from http://www.famfamfam.com/lab/icons/silk/
+MIT, as [ds3os](https://github.com/TLeonardUK/ds3os) is, and the upstream copyright notices are kept. Please support FromSoftware by buying their games.
