@@ -2873,6 +2873,21 @@ void DS2_Backread::CancelUnload()
 #endif
 }
 
+int32_t DS2_Backread::Releasing()
+{
+#ifdef _WIN32
+    std::scoped_lock Lock(s_added_mutex);
+    for (int32_t i = 0; i < 0x40; ++i)
+    {
+        if (s_added[i].Releasing)
+        {
+            return i;
+        }
+    }
+#endif
+    return -1;
+}
+
 int32_t DS2_Backread::Unloading()
 {
 #ifdef _WIN32

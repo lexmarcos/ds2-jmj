@@ -116,6 +116,13 @@ namespace DS2_Backread
     bool Unloaded(int32_t Index);
     // The index being taken down, -1 when none.
     int32_t Unloading();
+
+    /// The index of a map going down through BeginLetGo, or -1. Unloading()
+    /// only ever names the budget's victim, so a map let go for any other
+    /// reason - a keep expiring, an explicit request, the session ending -
+    /// was invisible to anything watching Unloading(), and the lighting
+    /// sweep is one of those.
+    int32_t Releasing();
     void CancelUnload();
 
     // The loaded map with the highest target cost that is none of these and

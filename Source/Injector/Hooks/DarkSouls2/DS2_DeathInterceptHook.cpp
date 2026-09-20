@@ -933,7 +933,15 @@ namespace
 
     void SweepLighting(uint8_t* Chr)
     {
-        const int32_t Going = DS2_Backread::Unloading();
+        // Two sources, because there are two ways a map goes. Unloading() is
+        // only ever the budget's chosen victim; a map let go for any other
+        // reason - a keep expiring, an explicit request, the session ending,
+        // and in time the session's own map - goes through BeginLetGo and was
+        // invisible here. Those releases got no sweep at all, and the lighting
+        // entry a character still holds is what the other player's copy dies
+        // of (M8 6b, step 4).
+        const int32_t Unloading = DS2_Backread::Unloading();
+        const int32_t Going = Unloading >= 0 ? Unloading : DS2_Backread::Releasing();
         const ULONGLONG Now = GetTickCount64();
         if (Going != s_lighting_index || Now - s_lighting_read > 200)
         {
@@ -969,7 +977,9 @@ namespace
         }
         if (s_lighting_cleared++ < 40)
         {
-            Append(StringFormat("%s  lighting: character %p still held map [%d]'s lighting; cleared\n", Clock().c_str(), (void*)Chr, Going));
+            Append(StringFormat("%s  lighting: character %p still held map [%d]'s lighting (%s); cleared\n",
+                Clock().c_str(), (void*)Chr, Going,
+                Unloading >= 0 ? "orcamento" : "soltura"));
         }
     }
 
